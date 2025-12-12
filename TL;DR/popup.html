@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Smart Reading Assistant</title>
+  <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <div class="popup-root">
+      <header class="top">
+  <div class="logo"><img src="" id="sra-logo-img" alt="TL;DR logo"></div>
+        <div class="title">Reading Assistant</div>
+        <label class="switch">
+          <input id="assistantToggle" type="checkbox" checked>
+          <span class="slider"></span>
+        </label>
+      </header>
+
+      <section class="features">
+        <label><input id="eyeToggle" type="checkbox" checked> Eye-Tracking Summaries</label>
+        <label><input id="selToggle" type="checkbox" checked> Selection TL;DR</label>
+        <label><input id="notesToggle" type="checkbox"> Notes Dashboard (open)</label>
+      </section>
+
+      <section class="backend">
+        <label>Backend URL</label>
+        <input id="backendUrl" type="text" placeholder="http://localhost:3000/api/summarize">
+      </section>
+
+      <footer>
+        <button id="upgradeBtn" class="upgrade">Upgrade • Premium</button>
+        <div class="small">Lightweight MVP • Desktop Chrome</div>
+      </footer>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+  </html>
