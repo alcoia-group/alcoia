@@ -52,5 +52,3 @@ The backend listens on `http://localhost:3000` by default.
 
 - `server/index.js` — set `OPENAI_API_KEY` environment variable.
 - `src/popup/popup.js` — backend URL defaults can be changed.
-
-If you want, I can add (next steps): a notes dashboard UI, PDF.js bundling and improved paragraph segmentation, calibration UI for eye-tracking, or tests around the backend.
