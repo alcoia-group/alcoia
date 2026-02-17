@@ -256,7 +256,7 @@ MIT License
 - Gaze-to-command interface  
 - Predictive viewport summaries  
 - Hybrid local/cloud inference  
-- Study memory graph  
+- Study memory graph  <3
 - Adaptive reading modes  
 
 ---
