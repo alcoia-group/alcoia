@@ -1,4 +1,4 @@
-# 🧠 TL;DR — Cognitive-Aware AI Reading Assistant And Content Summarizer
+# ![TL;DR Logo](TL;DR/assets/tldr.png)    TL;DR — Cognitive-Aware AI Reading Assistant And Content Summarizer
 
 > An AI + gaze-driven adaptive reading and coding companion.
 
