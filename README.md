@@ -1,4 +1,4 @@
-# <img src="TL;DR/assets/tldr.png" width="10%" />    TL;DR — Cognitive-Aware AI Reading Assistant And Content Summarizer
+# <img src="TL;DR/assets/tldr.png" width="5%" />    TL;DR — Cognitive-Aware AI Reading Assistant And Content Summarizer
 
 > An AI + gaze-driven adaptive reading and coding companion.
 
