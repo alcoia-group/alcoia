@@ -200,7 +200,8 @@ cd TL-DR
 ## Phase 1
 - [x] Reverse Explanation Mode  
 - [x] Basic Focus Tunneling  
-- [x] Code/Text Detection  
+- [x] Code/Text Detection
+- [ ] Gaze Tracker Implementation (WebGazer.js)
 - [ ] Local Gaze Classification  
 
 ## Phase 2
