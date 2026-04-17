@@ -2,7 +2,7 @@
  
 > An AI + gaze-driven adaptive reading and coding companion. 
   
----
+--- 
 
 ## 🚀 Overview
 
