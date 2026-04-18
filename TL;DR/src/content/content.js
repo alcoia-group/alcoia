@@ -13,6 +13,20 @@
   Expects vendor libraries to be present under `src/libs/*` for pdf.js and jszip.
 */
 
+document.addEventListener('click', (e) => {
+  if (window.webgazer) {
+    try {
+      webgazer.recordScreenPosition(e.clientX, e.clientY, 'click');
+    } catch (err) {}
+  }
+});
+
+window.addEventListener("message", (e) => {
+  if (e.data) {
+    console.log("📩 MESSAGE:", e.data);
+  }
+});
+
 (async function () {
   const BACKEND_DEFAULT = 'http://localhost:3000/api/summarize';
   const DWELL_THRESHOLD_MS = 1500;
@@ -301,6 +315,7 @@
   let currentKey = null; let startAt = 0; let consecutiveNull = 0;
 
   async function onGaze(data) {
+    console.log("👁️ REAL GAZE:", data);
     if (!eyeTrackingEnabled) return;
     if (!data) { consecutiveNull++; if (consecutiveNull < gazeState.dropoutFrames) return; currentKey = null; startAt = 0; return; }
     consecutiveNull = 0;
@@ -334,6 +349,7 @@
           s.onload = function(){
             try {
               if (typeof webgazer !== 'undefined'){
+              webgazer.clearData();
                 webgazer.setRegression('ridge').setGazeListener(function(d){
                   try { window.postMessage({ source: 'sra-webgazer', gaze: d }, '*'); } catch(e){}
                 }).begin();
@@ -359,11 +375,9 @@
         } catch(e) { console.warn('webgazer bootstrap failed', e); }
       })();`;
 
-      const script = document.createElement('script');
-      script.textContent = bootstrap;
-      (document.head || document.documentElement).appendChild(script);
-      // Remove injected node to keep DOM clean
-      script.parentNode && script.parentNode.removeChild(script);
+const script = document.createElement('script');
+script.src = chrome.runtime.getURL('src/content/webgazer-bootstrap.js');
+(document.head || document.documentElement).appendChild(script);
 
       // State tracking: did the page report camera readiness?
       let cameraReady = false;
@@ -379,7 +393,7 @@
       }, 4000);
 
       // Listen for forwarded gaze messages from the page and camera-ready notifications
-      window.addEventListener('message', (event) => {
+      window.addEventListener('message', async (event) => {
         if (event.source !== window) return;
         const d = event.data;
         if (!d) return;
@@ -388,10 +402,29 @@
           return;
         }
         if (d.source === 'sra-control' && d.type === 'cameraReady') {
-          cameraReady = true;
-          clearTimeout(cameraReadyTimer);
-          console.log('Webgazer reported cameraReady');
-        }
+  cameraReady = true;
+  clearTimeout(cameraReadyTimer);
+  console.log('Webgazer reported cameraReady');
+
+  // 🔴 ADD THIS BLOCK
+  try {
+    console.log('Starting calibration...');
+    setTimeout(async () => {
+  try {
+    const cal = await gazeUtils.runCalibrationSequence();
+    if (cal) await gazeUtils.setCalibration(cal);
+  } catch (e) {
+    console.warn('Calibration failed', e);
+  }
+}, 800);
+    if (cal) {
+      await gazeUtils.setCalibration(cal);
+      console.log('Calibration complete');
+    }
+  } catch (e) {
+    console.warn('Calibration failed', e);
+  }
+}
       }, false);
     } catch (e) { console.warn('Tracker start failed', e); }
   }
