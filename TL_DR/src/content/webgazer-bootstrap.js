@@ -1,8 +1,6 @@
 // webgazer-bootstrap.js — Runs in PAGE context (not extension isolated world)
-// Receives webgazer bundle URL via data-webgazer-url attribute (CSP-safe, no inline JS)
-// Tries clmtrackr first (bundled, no external model downloads)
-// Falls back to default tracker if unavailable
-// Only fires cameraReady after .begin() resolves — not on script load
+// Handles all webgazer calls from page context since content script is isolated world.
+// Receives URL via data-webgazer-url attribute (CSP-safe).
 
 (() => {
   if (window.__sra_webgazer_bootstrap_loaded) return;
@@ -12,87 +10,114 @@
   const wgUrl    = scriptEl && scriptEl.dataset && scriptEl.dataset.webgazerUrl;
 
   if (!wgUrl) {
-    console.warn('[TL;DR] webgazer-bootstrap: missing data-webgazer-url attribute.');
+    console.warn('[TL;DR] bootstrap: missing data-webgazer-url');
     return;
   }
 
-  const s  = document.createElement('script');
-  s.src    = wgUrl;
+  const s = document.createElement('script');
+  s.src   = wgUrl;
 
   s.onload = function () {
     if (typeof webgazer === 'undefined') {
-      console.warn('[TL;DR] webgazer loaded but window.webgazer is not defined.');
-      window.postMessage({ source: 'sra-control', type: 'cameraError', error: 'webgazer not defined' }, '*');
+      console.warn('[TL;DR] webgazer not defined after load');
+      window.postMessage({ source: 'sra-control', type: 'cameraError', error: 'not defined' }, '*');
       return;
     }
 
-    // Try clmtrackr first — it is fully bundled in webgazer.min.js and does NOT
-    // fetch any models from external URLs (no tfhub.dev, no CSP issues).
-    // TFFaceMesh (the default) downloads 3 neural net models from tfhub.dev on
-    // every page load, which is blocked by strict CSPs on sites like Wikipedia.
+    // Use clmtrackr — fully bundled, no external model downloads (no tfhub.dev CSP issues)
+    // TFFaceMesh (default) downloads 3 neural nets from tfhub.dev which strict CSPs block.
     try {
       if (typeof webgazer.setTracker === 'function') {
         webgazer.setTracker('clmtrackr');
-        console.log('[TL;DR] Using clmtrackr (bundled, no external models)');
+        console.log('[TL;DR] tracker: clmtrackr');
       }
-    } catch (trackerErr) {
-      console.warn('[TL;DR] clmtrackr not available, using default tracker:', trackerErr.message);
+    } catch (e) {
+      console.warn('[TL;DR] clmtrackr unavailable:', e.message);
     }
 
-    // Set up gaze listener before .begin()
+    // Ridge regression is the best option for online learning from click data
+    try { webgazer.setRegression('ridge'); } catch (e) {}
+
+    // Gaze listener — forward to content script via postMessage
     try {
-      webgazer.setRegression('ridge');
       webgazer.setGazeListener(function (data) {
         try { window.postMessage({ source: 'sra-webgazer', gaze: data }, '*'); } catch (e) {}
       });
-    } catch (setupErr) {
-      console.warn('[TL;DR] webgazer setup error:', setupErr.message);
-    }
+    } catch (e) {}
 
-    // Hide all built-in UI overlays
-    const hideUI = () => {
-      try { webgazer.showPredictionPoints(false);  } catch (e) {}
-      try { webgazer.showVideo(false);              } catch (e) {}
-      try { webgazer.showFaceOverlay(false);        } catch (e) {}
-      try { webgazer.showFaceFeedbackBox(false);    } catch (e) {}
-    };
+    // Hide all built-in UI (we draw our own prediction dot when debug is on)
+    function hideUI() {
+      try { webgazer.showPredictionPoints(false); } catch (e) {}
+      try { webgazer.showVideo(false);             } catch (e) {}
+      try { webgazer.showFaceOverlay(false);       } catch (e) {}
+      try { webgazer.showFaceFeedbackBox(false);   } catch (e) {}
+    }
     hideUI();
 
-    // .begin() returns a Promise. We only signal cameraReady when it resolves.
-    // This is the correct moment — camera stream is open and tracking has started.
-    const beginResult = webgazer.begin();
-    const beginPromise = (beginResult && typeof beginResult.then === 'function')
-      ? beginResult
-      : Promise.resolve();
+    // begin() returns a Promise — only fire cameraReady when it resolves
+    // (camera stream is actually open at this point, not just when the JS loaded)
+    const p = webgazer.begin();
+    const beginPromise = (p && typeof p.then === 'function') ? p : Promise.resolve();
 
     beginPromise
       .then(function () {
-        hideUI(); // call again — some builds re-show after begin()
-        console.log('[TL;DR] webgazer.begin() resolved — camera ready');
+        hideUI();
+        console.log('[TL;DR] webgazer.begin() resolved — camera open');
         window.postMessage({ source: 'sra-control', type: 'cameraReady' }, '*');
       })
       .catch(function (err) {
-        const msg = (err && err.message) ? err.message : String(err);
+        const msg = err?.message || String(err);
         console.warn('[TL;DR] webgazer.begin() failed:', msg);
         window.postMessage({ source: 'sra-control', type: 'cameraError', error: msg }, '*');
       });
   };
 
   s.onerror = function () {
-    console.warn('[TL;DR] Failed to load webgazer bundle from:', wgUrl);
-    window.postMessage({ source: 'sra-control', type: 'cameraError', error: 'script load failed' }, '*');
+    console.warn('[TL;DR] Failed to load webgazer from:', wgUrl);
+    window.postMessage({ source: 'sra-control', type: 'cameraError', error: 'load failed' }, '*');
   };
 
-  // Forward debug prediction-point toggle from content script
+  // ── Message bridge ─────────────────────────────────────────────────────────
+  // Handles messages from gaze-utils.js (content script isolated world)
+  // so it can call webgazer methods that only exist in page context.
   window.addEventListener('message', function (ev) {
-    try {
-      if (ev.source === window && ev.data &&
-          ev.data.source === 'sra-control' &&
-          ev.data.type   === 'setPredictionPoints' &&
-          typeof webgazer !== 'undefined') {
-        webgazer.showPredictionPoints(!!ev.data.enabled);
+    if (!ev.data || ev.source !== window) return;
+    const d = ev.data;
+
+    // Calibration: record a click at a known screen position (trains the model)
+    if (d.source === 'sra-cal-record' && typeof d.x === 'number') {
+      try {
+        webgazer.recordScreenPosition(d.x, d.y, 'click');
+      } catch (e) {}
+      return;
+    }
+
+    // Calibration: get current prediction for offset calculation
+    if (d.source === 'sra-cal-predict' && d.sra_pred_id) {
+      try {
+        const pred = webgazer.getCurrentPrediction ? webgazer.getCurrentPrediction() : null;
+        window.postMessage({ source: 'sra-cal-prediction', sra_pred_id: d.sra_pred_id, prediction: pred }, '*');
+      } catch (e) {
+        window.postMessage({ source: 'sra-cal-prediction', sra_pred_id: d.sra_pred_id, prediction: null }, '*');
       }
-    } catch (e) {}
+      return;
+    }
+
+    // Calibration: ping to check if webgazer is available
+    if (d.source === 'sra-cal-ping' && d.sra_ping_id) {
+      window.postMessage({
+        source:     'sra-cal-pong',
+        sra_ping_id: d.sra_ping_id,
+        available:  typeof webgazer !== 'undefined',
+      }, '*');
+      return;
+    }
+
+    // Debug toggle: show/hide prediction dot
+    if (d.source === 'sra-control' && d.type === 'setPredictionPoints') {
+      try { webgazer.showPredictionPoints(!!d.enabled); } catch (e) {}
+      return;
+    }
   }, false);
 
   (document.head || document.documentElement).appendChild(s);

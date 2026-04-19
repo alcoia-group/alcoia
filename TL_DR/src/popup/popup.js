@@ -203,3 +203,27 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
 });
+
+  // ── Logo: set via chrome.runtime.getURL as a reliable fallback ─────────
+  try {
+    const logoImg = document.getElementById('sra-logo-img');
+    if (logoImg) logoImg.src = chrome.runtime.getURL('assets/tldr.png');
+  } catch (e) {}
+
+  // ── Demo test buttons: force a cognitive state trigger ──────────────────
+  const testConfusedBtn   = document.getElementById('testConfusedBtn');
+  const testOverloadedBtn = document.getElementById('testOverloadedBtn');
+
+  function simulateState(state) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs?.[0]) return;
+      chrome.tabs.sendMessage(tabs[0].id, { type: 'simulateState', state }, (resp) => {
+        if (chrome.runtime.lastError) {
+          alert('No content script on this page. Navigate to a page with text first.');
+        }
+      });
+    });
+  }
+
+  testConfusedBtn   && testConfusedBtn.addEventListener('click',   () => simulateState('confused'));
+  testOverloadedBtn && testOverloadedBtn.addEventListener('click',  () => simulateState('overloaded'));
