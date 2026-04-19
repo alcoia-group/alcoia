@@ -1,20 +1,238 @@
-:root{--bg:#FAFAF7;--text:#333333;--accent:#1A7E5D;--accent2:#3A82F7;--gold:#C8A54B}
-/* Modern frosted glass popup */
-.sra-popup{position:absolute;max-width:460px;background:linear-gradient(180deg, rgba(255,255,255,0.84), rgba(250,250,250,0.72));color:var(--text);font-family:'Merriweather',Georgia,serif;font-size:15px;line-height:1.5;border-radius:18px;padding:14px;box-shadow:0 12px 40px rgba(15,20,30,0.12);backdrop-filter:blur(14px) saturate(1.05);border:1px solid rgba(255,255,255,0.6);z-index:2147483647;opacity:0;transform:scale(0.98) translateY(6px);transition:opacity 220ms ease,transform 220ms cubic-bezier(.2,.9,.3,1)}
-.sra-popup.show{opacity:1;transform:none}
-.sra-popup .sra-popup-body{max-height:260px;overflow:auto;padding:4px}
-.sra-actions{display:flex;gap:10px;margin-top:12px}
-.sra-close{position:absolute;right:10px;top:8px;width:30px;height:30px;border-radius:8px;border:none;background:transparent;color:rgba(0,0,0,0.6);font-size:16px;line-height:28px;cursor:pointer}
-.sra-close:hover{background:rgba(0,0,0,0.04)}
-.sra-btn{padding:9px 12px;border-radius:12px;border:none;font-family:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
-.sra-pin{position:absolute;right:46px;top:8px;width:30px;height:30px;border-radius:8px;border:none;background:transparent;color:rgba(0,0,0,0.6);font-size:16px;cursor:pointer}
-.sra-pin.active{color:var(--accent);background:rgba(26,126,93,0.08)}
-.sra-btn-primary{background:var(--accent);color:white;box-shadow:0 6px 14px rgba(26,126,93,0.12)}
-.sra-btn-secondary{background:#F5F1E6;color:var(--accent);border:1px solid rgba(26,126,93,0.06)}
-.sra-btn-secondary:hover{background:#efe6cc}
-.sra-calibration{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483646}
-.sra-cal-point{position:absolute;width:22px;height:22px;background:var(--accent);border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 10px 24px rgba(0,0,0,0.12)}
-.sra-pptx-overlay{pointer-events:none}
+/* ── TL;DR — Overlay CSS ─────────────────────────────────────────────────────
+   Theme: warm beige + dark green + book serif
+   Popup is position:fixed so it's always in the viewport regardless of scroll
+────────────────────────────────────────────────────────────────────────────── */
 
-/* small utilities */
-.sra-popup-body p{margin:0 0 8px}
+:root {
+  --tldr-bg:       #FAFAF7;
+  --tldr-surface:  rgba(255,255,255,0.82);
+  --tldr-border:   rgba(26,126,93,0.14);
+  --tldr-text:     #2c2c2a;
+  --tldr-muted:    #7a7a72;
+  --tldr-accent:   #1A7E5D;
+  --tldr-accent2:  #0f5c42;
+  --tldr-gold:     #C8A54B;
+  --tldr-serif:    'Merriweather', 'Georgia', 'Times New Roman', serif;
+  --tldr-radius:   14px;
+}
+
+/* ── Paragraph highlight — triggered by gaze or selection ── */
+.sra-para-highlight {
+  outline: 2px solid rgba(26,126,93,0.5) !important;
+  outline-offset: 5px !important;
+  border-radius: 3px !important;
+  background: rgba(26,126,93,0.05) !important;
+  transition: outline 0.35s ease, background 0.35s ease !important;
+}
+
+/* ── Zoning-out nudge pulse ── */
+@keyframes sra-nudge-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(26,126,93,0.45); }
+  60%  { box-shadow: 0 0 0 12px rgba(26,126,93,0); }
+  100% { box-shadow: 0 0 0 0   rgba(26,126,93,0); }
+}
+.sra-nudge-highlight {
+  animation: sra-nudge-pulse 1.4s ease-out 2 !important;
+}
+
+/* ── Floating popup ──────────────────────────────────────────────────────── */
+.sra-popup {
+  position: fixed !important;      /* FIXED — always in viewport, scroll irrelevant */
+  max-width: 400px;
+  min-width: 260px;
+  background: var(--tldr-surface);
+  color: var(--tldr-text);
+  font-family: var(--tldr-serif);
+  font-size: 14px;
+  line-height: 1.7;
+  border-radius: var(--tldr-radius);
+  padding: 16px;
+  box-shadow:
+    0 0 0 1px var(--tldr-border),
+    0 4px 8px rgba(0,0,0,0.07),
+    0 16px 40px rgba(0,0,0,0.11);
+  backdrop-filter: blur(16px) saturate(1.1);
+  z-index: 2147483647;
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+  transition: opacity 200ms ease, transform 200ms cubic-bezier(.2,.9,.3,1);
+}
+
+.sra-popup.show {
+  opacity: 1;
+  transform: none;
+}
+
+/* ── State badge ── */
+.sra-state-badge {
+  display: inline-block;
+  font-family: var(--tldr-serif);
+  font-size: 11px;
+  font-style: italic;
+  color: var(--tldr-accent);
+  margin-bottom: 8px;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(26,126,93,0.2);
+  width: 100%;
+}
+.sra-state-confused   .sra-state-badge { color: #a06000; border-color: rgba(160,96,0,0.2); }
+.sra-state-overloaded .sra-state-badge { color: #8b2000; border-color: rgba(139,32,0,0.2); }
+.sra-state-zoning_out .sra-state-badge { color: #5a3e8a; border-color: rgba(90,62,138,0.2); }
+
+/* ── Popup body ── */
+.sra-popup-body {
+  max-height: 200px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(26,126,93,0.2) transparent;
+}
+.sra-popup-body::-webkit-scrollbar { width: 4px; }
+.sra-popup-body::-webkit-scrollbar-thumb {
+  background: rgba(26,126,93,0.2);
+  border-radius: 2px;
+}
+.sra-popup-body p,
+.sra-popup-body div { margin-bottom: 4px; }
+
+/* ── Divider ── */
+.sra-popup-divider {
+  height: 1px;
+  background: var(--tldr-border);
+  margin: 11px 0 9px;
+}
+
+/* ── Action buttons ── */
+.sra-actions {
+  display: flex;
+  gap: 7px;
+}
+.sra-btn {
+  padding: 7px 13px;
+  border-radius: 9px;
+  border: none;
+  font-family: var(--tldr-serif);
+  font-size: 12px;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.12s;
+  flex: 1;
+}
+.sra-btn:hover:not(:disabled) { opacity: 0.85; transform: translateY(-1px); }
+.sra-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.sra-btn-primary  { background: var(--tldr-accent); color: white; }
+.sra-btn-secondary {
+  background: rgba(26,126,93,0.07);
+  color: var(--tldr-accent2);
+  border: 1px solid var(--tldr-border);
+}
+
+/* ── Control buttons (close / pin) ── */
+.sra-controls {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  display: flex;
+  gap: 2px;
+}
+.sra-ctrl-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--tldr-muted);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.sra-ctrl-btn:hover { background: rgba(26,126,93,0.08); color: var(--tldr-accent); }
+.sra-ctrl-btn.active { color: var(--tldr-accent); }
+
+/* ── Error state ── */
+.sra-error {
+  color: #8b2000;
+  font-style: italic;
+  font-size: 13px;
+}
+
+/* ── Calibration overlay ── */
+.sra-cal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20,28,22,0.88);
+  z-index: 2147483646;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.25s;
+  backdrop-filter: blur(3px);
+}
+.sra-cal-overlay.visible { opacity: 1; }
+
+.sra-cal-panel {
+  background: #FAFAF7;
+  border: 1px solid rgba(26,126,93,0.15);
+  border-radius: 16px;
+  padding: 24px;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-family: 'Merriweather', Georgia, serif;
+}
+.sra-cal-top    { display: flex; align-items: center; gap: 10px; }
+.sra-cal-steps  { display: flex; gap: 5px; }
+.sra-cal-step   {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: rgba(26,126,93,0.18);
+  transition: background 0.2s;
+}
+.sra-cal-step.active { background: var(--tldr-accent, #1A7E5D); }
+.sra-cal-progress {
+  flex: 1; height: 3px;
+  background: rgba(26,126,93,0.15);
+  border-radius: 2px; overflow: hidden;
+}
+.sra-cal-fill {
+  height: 100%;
+  background: #1A7E5D;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.sra-cal-retry {
+  font-size: 11px;
+  font-family: Georgia, serif;
+  color: #1A7E5D;
+  background: none;
+  border: 1px solid rgba(26,126,93,0.3);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.sra-cal-target-area {
+  position: relative;
+  height: 160px;
+  background: rgba(26,126,93,0.03);
+  border-radius: 10px;
+  border: 1px solid rgba(26,126,93,0.1);
+  overflow: hidden;
+}
+.sra-cal-target {
+  position: absolute;
+  width: 16px; height: 16px;
+  background: #1A7E5D;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 4px rgba(26,126,93,0.2);
+  transition: left 0.4s cubic-bezier(.4,0,.2,1), top 0.4s cubic-bezier(.4,0,.2,1);
+}
+.sra-cal-hint {
+  font-size: 11px;
+  color: #7a7a72;
+  text-align: center;
+  font-style: italic;
+}
