@@ -469,6 +469,28 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
       catch (e) { sendResponse({status:'error',error:String(e)}); }
       return true;
     }
+    if (msg.type === 'simulateState') {
+      // Demo/test: force-trigger a cognitive state action regardless of gaze data
+      const state = msg.state;
+      lastCogState = state;
+      lastActionAt = 0; // reset cooldown so it fires immediately
+      const action = COGNITIVE_STATE_ACTIONS[state];
+      if (action === 'explain' || action === 'simplify') {
+        // Use the element at centre of viewport as target paragraph
+        const cx = window.innerWidth  / 2;
+        const cy = window.innerHeight / 2;
+        findParagraphAt(cx, cy).then(para => {
+          if (para) { currentParagraph = para; triggerAIForParagraph(para, state); }
+          else _warn('No paragraph found at viewport centre for simulate');
+        });
+      } else if (action === 'nudge') {
+        const el = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
+        showNudge(el); if (el) highlightElement(el, 3000);
+      }
+      sendResponse({ status: 'ok', state });
+      return true;
+    }
+
     if (msg.type === 'getState') {
       sendResponse({ state: lastCogState, cameraReady: cameraIsReady });
       return;
