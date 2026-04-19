@@ -6,129 +6,6 @@
 // Input: feature object with keys: avg_fixation_ms, fixation_std, regression_rate, saccade_length, saccade_std, gaze_drift_px, scroll_delta_px, velocity_mean, line_reread_count
 // Output: { label: string, confidence: float }
 
-export function classifyGazeState(f) {
-  // f = feature object, all numeric
-  // Returns { label, confidence }
-  if (f.scroll_delta_px <= 15.3766) {
-    if (f.line_reread_count <= 1.4249) {
-      if (f.velocity_mean <= 189.4888) {
-        return { label: 'zoning_out', confidence: 1.000 };
-      } else {
-        return { label: 'focused', confidence: 0.750 };
-      }
-    } else {
-      if (f.line_reread_count <= 4.8021) {
-        if (f.scroll_delta_px <= 5.4282) {
-          if (f.fixation_std <= 146.3801) {
-            if (f.regression_rate <= 0.4701) {
-              if (f.saccade_std <= 13.2391) {
-                return { label: 'confused', confidence: 0.696 };
-              } else {
-                if (f.velocity_mean <= 127.0392) {
-                  return { label: 'confused', confidence: 0.850 };
-                } else {
-                  return { label: 'confused', confidence: 1.000 };
-                }
-              }
-            } else {
-              if (f.avg_fixation_ms <= 506.0146) {
-                return { label: 'confused', confidence: 0.688 };
-              } else {
-                return { label: 'overloaded', confidence: 0.800 };
-              }
-            }
-          } else {
-            if (f.velocity_mean <= 151.6927) {
-              if (f.regression_rate <= 0.3664) {
-                if (f.gaze_drift_px <= 21.1638) {
-                  return { label: 'overloaded', confidence: 0.692 };
-                } else {
-                  return { label: 'confused', confidence: 0.667 };
-                }
-              } else {
-                if (f.scroll_delta_px <= 0.1473) {
-                  return { label: 'overloaded', confidence: 0.583 };
-                } else {
-                  return { label: 'overloaded', confidence: 0.976 };
-                }
-              }
-            } else {
-              if (f.gaze_drift_px <= 19.4216) {
-                return { label: 'overloaded', confidence: 0.667 };
-              } else {
-                return { label: 'confused', confidence: 0.933 };
-              }
-            }
-          }
-        } else {
-          if (f.fixation_std <= 190.7857) {
-            if (f.avg_fixation_ms <= 374.5428) {
-              return { label: 'confused', confidence: 0.857 };
-            } else {
-              return { label: 'confused', confidence: 1.000 };
-            }
-          } else {
-            return { label: 'confused', confidence: 0.750 };
-          }
-        }
-      } else {
-        if (f.saccade_length <= 55.6993) {
-          if (f.gaze_drift_px <= 27.5661) {
-            if (f.velocity_mean <= 165.7430) {
-              if (f.fixation_std <= 125.2399) {
-                if (f.gaze_drift_px <= 19.7085) {
-                  return { label: 'overloaded', confidence: 1.000 };
-                } else {
-                  return { label: 'overloaded', confidence: 0.750 };
-                }
-              } else {
-                return { label: 'overloaded', confidence: 1.000 };
-              }
-            } else {
-              return { label: 'overloaded', confidence: 0.647 };
-            }
-          } else {
-            if (f.avg_fixation_ms <= 552.8671) {
-              return { label: 'confused', confidence: 0.667 };
-            } else {
-              return { label: 'overloaded', confidence: 0.750 };
-            }
-          }
-        } else {
-          return { label: 'confused', confidence: 0.667 };
-        }
-      }
-    }
-  } else {
-    if (f.avg_fixation_ms <= 158.2757) {
-      if (f.line_reread_count <= 0.7024) {
-        if (f.saccade_length <= 114.7416) {
-          return { label: 'skimming', confidence: 0.750 };
-        } else {
-          return { label: 'skimming', confidence: 1.000 };
-        }
-      } else {
-        return { label: 'focused', confidence: 0.846 };
-      }
-    } else {
-      if (f.gaze_drift_px <= 25.2010) {
-        if (f.saccade_length <= 55.2781) {
-          return { label: 'focused', confidence: 0.667 };
-        } else {
-          if (f.avg_fixation_ms <= 167.9328) {
-            return { label: 'focused', confidence: 0.917 };
-          } else {
-            return { label: 'focused', confidence: 1.000 };
-          }
-        }
-      } else {
-        return { label: 'skimming', confidence: 0.500 };
-      }
-    }
-  }
-  return { label: 'focused', confidence: 0.5 };
-}
-
 // Feature key reference (what each field means):
 // avg_fixation_ms   — mean fixation duration in ms over last 2-3 seconds
 // fixation_std      — standard deviation of fixation durations (stability)
@@ -140,18 +17,106 @@ export function classifyGazeState(f) {
 // velocity_mean     — mean gaze speed in px/sec
 // line_reread_count — number of times gaze returned to a line it already passed
 
-export const COGNITIVE_STATE_ACTIONS = {
-  focused:    'none',          // user is reading fine — don't interrupt
-  skimming:   'none',          // user is deliberately skimming
-  confused:   'explain',       // trigger AI reverse-explanation popup
-  zoning_out: 'nudge',         // gentle focus prompt (highlight current line)
-  overloaded: 'simplify',      // break content into simpler chunks
-};
+// classifier.js - Decision Tree
+// Trained 1600 samples | Test acc: 0.915 | Webcam-optimised thresholds
 
-export const STATE_LABELS = {
-  focused:    'Focused',
-  skimming:   'Skimming',
-  confused:   'Confused',
-  zoning_out: 'Zoning Out',
-  overloaded: 'Overloaded',
+export function classifyGazeState(f) {
+  if (f.scroll_delta_px <= 16.1272) {
+    if (f.line_reread_count <= 0.9984) {
+      if (f.avg_fixation_ms <= 411.3088) {
+        return { label: 'focused', confidence: 1.000 };
+      } else {
+        return { label: 'zoning_out', confidence: 1.000 };
+      }
+    } else {
+      if (f.line_reread_count <= 4.4636) {
+        if (f.avg_fixation_ms <= 806.1335) {
+          if (f.saccade_length <= 50.8934) {
+            if (f.scroll_delta_px <= 5.6578) {
+              if (f.line_reread_count <= 1.9895) {
+                return { label: 'confused', confidence: 0.950 };
+              } else {
+                return { label: 'overloaded', confidence: 0.708 };
+              }
+            } else {
+              if (f.line_reread_count <= 3.2848) {
+                return { label: 'confused', confidence: 0.932 };
+              } else {
+                return { label: 'confused', confidence: 0.720 };
+              }
+            }
+          } else {
+            if (f.saccade_length <= 84.5508) {
+              if (f.velocity_mean <= 125.6461) {
+                return { label: 'confused', confidence: 0.800 };
+              } else {
+                return { label: 'confused', confidence: 0.973 };
+              }
+            } else {
+              return { label: 'confused', confidence: 0.500 };
+            }
+          }
+        } else {
+          return { label: 'zoning_out', confidence: 1.000 };
+        }
+      } else {
+        if (f.saccade_length <= 60.3914) {
+          if (f.saccade_std <= 24.1571) {
+            if (f.avg_fixation_ms <= 304.1107) {
+              return { label: 'overloaded', confidence: 0.786 };
+            } else {
+              if (f.fixation_std <= 111.5951) {
+                return { label: 'overloaded', confidence: 0.944 };
+              } else {
+                return { label: 'overloaded', confidence: 1.000 };
+              }
+            }
+          } else {
+            return { label: 'overloaded', confidence: 0.611 };
+          }
+        } else {
+          return { label: 'confused', confidence: 0.571 };
+        }
+      }
+    }
+  } else {
+    if (f.avg_fixation_ms <= 151.2495) {
+      if (f.line_reread_count <= 0.7558) {
+        if (f.saccade_length <= 130.3223) {
+          return { label: 'skimming', confidence: 0.667 };
+        } else {
+          return { label: 'skimming', confidence: 1.000 };
+        }
+      } else {
+        return { label: 'focused', confidence: 0.941 };
+      }
+    } else {
+      if (f.velocity_mean <= 453.0251) {
+        if (f.regression_rate <= 0.1991) {
+          if (f.avg_fixation_ms <= 162.7423) {
+            return { label: 'focused', confidence: 0.929 };
+          } else {
+            if (f.scroll_delta_px <= 20.7035) {
+              return { label: 'focused', confidence: 0.929 };
+            } else {
+              return { label: 'focused', confidence: 1.000 };
+            }
+          }
+        } else {
+          return { label: 'confused', confidence: 0.647 };
+        }
+      } else {
+        return { label: 'skimming', confidence: 0.857 };
+      }
+    }
+  }
+  return { label: 'focused', confidence: 0.5 };
+}
+
+export const COGNITIVE_STATE_ACTIONS = {
+  focused:    'none',
+  skimming:   'none',
+  confused:   'explain',
+  zoning_out: 'nudge',
+  overloaded: 'simplify',
 };

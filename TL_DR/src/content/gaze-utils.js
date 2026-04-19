@@ -1,68 +1,58 @@
 /* gaze-utils.js
-   Responsibilities:
-   - Normalize incoming gaze data to client (viewport) coordinates
-   - Apply calibration offsets stored in chrome.storage
-   - Exponential smoothing (EMA)
-   - Dropout handling configuration
-   - Velocity checking to reject spikes
+   - Normalize gaze data to client coords
+   - Exponential smoothing (EMA)  
+   - Velocity spike rejection
+   - Click-based calibration (the CORRECT way to train WebGazer)
+
+   IMPORTANT — Why click-based calibration:
+   WebGazer uses ridge regression to map face/eye features → screen position.
+   It learns from labelled examples: "when my face looked like THIS, I was looking at X,Y".
+   Those examples come from webgazer.recordScreenPosition(x, y, 'click').
+   Passively sampling getCurrentPrediction() just measures the current error —
+   it does NOT train the model. Without click training data, WebGazer guesses.
 */
 
 let _state = null;
 
 export function createGazeState(opts = {}) {
   const state = {
-    smoothingAlpha: typeof opts.smoothingAlpha === 'number' ? opts.smoothingAlpha : 0.18,
-    dropoutFrames: typeof opts.dropoutFrames === 'number' ? opts.dropoutFrames : 3,
-    velocityThreshold: typeof opts.velocityThreshold === 'number' ? opts.velocityThreshold : 1200, // pixels/sec
+    smoothingAlpha:    typeof opts.smoothingAlpha    === 'number' ? opts.smoothingAlpha    : 0.12,
+    dropoutFrames:     typeof opts.dropoutFrames     === 'number' ? opts.dropoutFrames     : 4,
+    velocityThreshold: typeof opts.velocityThreshold === 'number' ? opts.velocityThreshold : 1000,
     last: { x: null, y: null, t: null },
-    ema: { x: null, y: null }
-    ,
-    // live calibration offsets applied to smoothed gaze points
-    calibration: { dx: 0, dy: 0 }
+    ema:  { x: null, y: null },
+    calibration: { dx: 0, dy: 0 },
   };
   _state = state;
-  // asynchronously load stored calibration into state so normalizeAndSmooth can read synchronously
-  getCalibration().then((c) => {
-    try { if (c && typeof c.dx === 'number' && typeof c.dy === 'number') state.calibration = c; }
-    catch (e) { /* ignore */ }
-  }).catch(()=>{});
+  getCalibration().then(c => {
+    try { if (c && typeof c.dx === 'number') state.calibration = c; } catch (e) {}
+  }).catch(() => {});
   return state;
 }
 
-// load calibration offsets from storage (dx, dy)
 export async function getCalibration() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get({ sra_calibration: { dx: 0, dy: 0 } }, (res) => resolve(res.sra_calibration || { dx: 0, dy: 0 }));
+  return new Promise(resolve => {
+    chrome.storage.local.get({ sra_calibration: { dx: 0, dy: 0 } },
+      res => resolve(res.sra_calibration || { dx: 0, dy: 0 }));
   });
 }
 
 export async function setCalibration(offset) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     chrome.storage.local.set({ sra_calibration: offset }, () => {
-      // update in-memory state if present
       try { if (_state) _state.calibration = offset || { dx: 0, dy: 0 }; } catch (e) {}
       resolve();
     });
   });
 }
 
-// Normalize raw webgazer data object to client coords
-// webgazer returns x/y in window coordinates for most builds; we detect and convert robustly.
+// Normalize raw webgazer {x,y} to client (viewport) coords
 export function normalizeRawToClient(raw) {
   if (!raw) return null;
-  // webgazer historically returns { x, y } in page coords or client coords depending on version.
-  // Heuristic: if x is larger than window.innerWidth by >100, treat as pageX and subtract scrollX
   let x = raw.x, y = raw.y;
   if (typeof x !== 'number' || typeof y !== 'number') return null;
-  // If coordinates look like page coords (bigger than viewport), convert
   if (x > window.innerWidth + 100 || y > window.innerHeight + 100) {
-    x = x - window.scrollX; y = y - window.scrollY;
-  }
-  // apply devicePixelRatio correction if values seem scaled
-  const dpr = window.devicePixelRatio || 1;
-  if (dpr && Math.abs(Math.round(dpr) - dpr) > 0.001 && dpr !== 1) {
-    // only adjust if coordinates appear multiplied
-    x = x / dpr; y = y / dpr;
+    x -= window.scrollX; y -= window.scrollY;
   }
   return { x: Math.round(x), y: Math.round(y) };
 }
@@ -70,142 +60,211 @@ export function normalizeRawToClient(raw) {
 export function normalizeAndSmooth(raw, state) {
   const client = normalizeRawToClient(raw);
   if (!client) return null;
-  // apply calibration offset from in-memory state (loaded asynchronously at createGazeState)
   const cal = (state && state.calibration) ? state.calibration : { dx: 0, dy: 0 };
-  // smoothing (EMA)
-  if (state.ema.x === null) { state.ema.x = client.x; state.ema.y = client.y; state.last.t = performance.now(); state.last.x = client.x; state.last.y = client.y; return { x: client.x + cal.dx, y: client.y + cal.dy }; }
+  if (state.ema.x === null) {
+    state.ema.x = client.x; state.ema.y = client.y;
+    state.last  = { x: client.x, y: client.y, t: performance.now() };
+    return { x: client.x + cal.dx, y: client.y + cal.dy };
+  }
   state.ema.x = (1 - state.smoothingAlpha) * state.ema.x + state.smoothingAlpha * client.x;
   state.ema.y = (1 - state.smoothingAlpha) * state.ema.y + state.smoothingAlpha * client.y;
-  state.last.t = performance.now(); state.last.x = state.ema.x; state.last.y = state.ema.y;
+  state.last  = { x: state.ema.x, y: state.ema.y, t: performance.now() };
   return { x: state.ema.x + cal.dx, y: state.ema.y + cal.dy };
 }
 
 export function checkVelocity(state, point) {
-  if (!state || !state.last || state.last.t === null) { state.last = { x: point.x, y: point.y, t: performance.now() }; return true; }
+  if (!state?.last?.t) { state.last = { x: point.x, y: point.y, t: performance.now() }; return true; }
   const now = performance.now();
-  const dt = Math.max(1, now - (state.last.t || now));
-  const dx = point.x - (state.last.x || point.x); const dy = point.y - (state.last.y || point.y);
-  const speed = Math.sqrt(dx*dx + dy*dy) / (dt / 1000); // px/sec
+  const dt  = Math.max(1, now - state.last.t);
+  const dx  = point.x - state.last.x;
+  const dy  = point.y - state.last.y;
+  const spd = Math.sqrt(dx*dx + dy*dy) / (dt / 1000);
   state.last = { x: point.x, y: point.y, t: now };
-  if (speed > state.velocityThreshold) return false;
-  return true;
+  return spd <= state.velocityThreshold;
 }
 
-// small helper to run a calibration flow: show N points and compute average offset
-export async function runCalibrationSequence(points = [{x:0.1,y:0.1},{x:0.9,y:0.1},{x:0.5,y:0.5},{x:0.1,y:0.9},{x:0.9,y:0.9}]) {
+// ── CLICK-BASED CALIBRATION ───────────────────────────────────────────────────
+//
+// The user sees a dot, clicks it, we call webgazer.recordScreenPosition().
+// That gives WebGazer a (face features → known screen position) training example.
+// After enough clicks, the ridge regression model improves significantly.
+//
+// 9 points in a 3×3 grid = good spatial coverage.
+// Each point is clicked TWICE (two passes) for stability.
+//
+export async function runCalibrationSequence() {
   return new Promise(async (resolve) => {
-    // if webgazer isn't present, return zero offsets
-    if (typeof webgazer === 'undefined' || !webgazer.getCurrentPrediction) {
-      const zero = { dx: 0, dy: 0 };
-      await setCalibration(zero);
-      return resolve(zero);
+
+    // Check webgazer is available in page context via postMessage bridge
+    const wgAvailable = await new Promise(res => {
+      const id = Math.random().toString(36).slice(2);
+      const handler = (ev) => {
+        if (ev.source !== window || !ev.data || ev.data.sra_ping_id !== id || ev.data.source !== 'sra-cal-pong') return;
+        window.removeEventListener('message', handler);
+        res(ev.data.available);
+      };
+      window.addEventListener('message', handler);
+      window.postMessage({ source: 'sra-cal-ping', sra_ping_id: id }, '*');
+      setTimeout(() => { window.removeEventListener('message', handler); res(false); }, 800);
+    });
+
+    if (!wgAvailable) {
+      console.warn('[TL;DR] WebGazer not available for calibration — skipping');
+      resolve({ dx: 0, dy: 0 });
+      return;
     }
 
-    const overlay = document.createElement('div'); overlay.className = 'sra-cal-overlay';
+    // 9-point 3×3 grid (normalised 0–1)
+    const GRID = [
+      [0.1, 0.1], [0.5, 0.1], [0.9, 0.1],
+      [0.1, 0.5], [0.5, 0.5], [0.9, 0.5],
+      [0.1, 0.9], [0.5, 0.9], [0.9, 0.9],
+    ];
+    // Two passes for better accuracy
+    const POINTS = [...GRID, ...GRID];
+    const TOTAL  = POINTS.length;
+
+    // ── Build overlay ──────────────────────────────────────────────────────
+    const overlay = document.createElement('div');
+    overlay.className = 'sra-cal-overlay';
     overlay.innerHTML = `
       <div class="sra-cal-panel">
         <div class="sra-cal-top">
-          <div class="sra-cal-steps" aria-hidden="true"></div>
-          <div class="sra-cal-progress"><div class="sra-cal-fill" style="width:0%"></div></div>
-          <button class="sra-cal-retry">Retry</button>
+          <div class="sra-cal-steps" id="sra-cal-steps"></div>
+          <div class="sra-cal-progress"><div class="sra-cal-fill" id="sra-cal-fill" style="width:0%"></div></div>
+          <button class="sra-cal-retry" id="sra-cal-retry">Restart</button>
         </div>
-        <div class="sra-cal-target-area"><div class="sra-cal-target" style="left:0;top:0"></div></div>
-      </div>
-    `;
+        <p style="font-size:12px;color:#7a7a72;font-style:italic;text-align:center;margin:0">
+          Click each green dot as it appears. Two passes for accuracy.
+        </p>
+        <div class="sra-cal-target-area" id="sra-cal-area">
+          <div class="sra-cal-target" id="sra-cal-target" style="left:50%;top:50%"></div>
+        </div>
+        <p class="sra-cal-hint" id="sra-cal-hint">Click the dot — <span id="sra-cal-counter">0</span> / ${TOTAL}</p>
+      </div>`;
     document.body.appendChild(overlay);
-    // fade in
-    requestAnimationFrame(()=> overlay.classList.add('visible'));
+    requestAnimationFrame(() => overlay.classList.add('visible'));
 
-    const panel = overlay.querySelector('.sra-cal-panel');
-    const target = overlay.querySelector('.sra-cal-target');
-    const fill = overlay.querySelector('.sra-cal-fill');
-    const stepsEl = overlay.querySelector('.sra-cal-steps');
-    const retryBtn = overlay.querySelector('.sra-cal-retry');
+    const fill    = overlay.querySelector('#sra-cal-fill');
+    const target  = overlay.querySelector('#sra-cal-target');
+    const area    = overlay.querySelector('#sra-cal-area');
+    const hint    = overlay.querySelector('#sra-cal-hint');
+    const counter = overlay.querySelector('#sra-cal-counter');
+    const stepsEl = overlay.querySelector('#sra-cal-steps');
+    const retry   = overlay.querySelector('#sra-cal-retry');
 
-    // render step indicators
+    // Step dots
     stepsEl.innerHTML = '';
-    for (let k=0;k<points.length;k++) { const e = document.createElement('div'); e.className = 'sra-cal-step'; stepsEl.appendChild(e); }
+    for (let i = 0; i < TOTAL; i++) {
+      const d = document.createElement('div');
+      d.className = 'sra-cal-step';
+      stepsEl.appendChild(d);
+    }
     const stepNodes = Array.from(stepsEl.children);
 
-    let results = [];
-    let idx = 0;
-    let cancelled = false;
+    let idx = 0, cancelled = false;
+    const predictions = [];
 
-    retryBtn.addEventListener('click', () => {
-      // restart
-      results = []; idx = 0; stepNodes.forEach(n=>n.classList.remove('active'));
-      fill.style.width = '0%';
-      moveTo(points[0]);
-      runStep();
-    });
-
-    function moveTo(p) {
-      const left = (p.x * 100) + '%'; const top = (p.y * 100) + '%';
-      target.style.left = left; target.style.top = top; // CSS handles smooth transition
+    function moveDotTo(px, py) {
+      // px, py are 0–1 normalised within the target-area div
+      target.style.left = (px * 100) + '%';
+      target.style.top  = (py * 100) + '%';
     }
 
-    async function collectSamplesForPoint(nSamples = 12, timeoutMs = 1400) {
-      return new Promise((res) => {
-        const samples = [];
-        let elapsed = 0; const interval = 100; const maxTicks = Math.ceil(timeoutMs / interval);
-        let ticks = 0;
-        const t = setInterval(() => {
-          try {
-            const d = webgazer.getCurrentPrediction && webgazer.getCurrentPrediction();
-            if (d) { const norm = normalizeRawToClient(d); if (norm) samples.push(norm); }
-          } catch (e) {}
-          ticks++; elapsed += interval;
-          if (samples.length >= nSamples || ticks >= maxTicks) { clearInterval(t); const avg = samples.reduce((acc,s)=>({x:acc.x+s.x,y:acc.y+s.y}),{x:0,y:0}); if (samples.length) { avg.x/=samples.length; avg.y/=samples.length; } res(avg); }
-        }, interval);
-      });
+    function updateProgress() {
+      fill.style.width = ((idx / TOTAL) * 100) + '%';
+      counter.textContent = idx;
+      stepNodes.forEach((n, i) => n.classList.toggle('active', i === idx));
     }
 
-    async function runStep() {
-      if (cancelled) return;
-      const p = points[idx];
-      // move target
-      moveTo(p);
-      // mark active step
-      stepNodes.forEach((n,i)=> n.classList.toggle('active', i===idx));
-      // collect samples
-      const avg = await collectSamplesForPoint(12, 1400);
-      results.push(avg);
+    function showPoint() {
+      if (cancelled || idx >= TOTAL) return;
+      const [px, py] = POINTS[idx];
+      moveDotTo(px, py);
+      updateProgress();
+      // Pulse animation to draw eye
+      target.style.transform = 'translate(-50%,-50%) scale(1.4)';
+      setTimeout(() => { target.style.transform = 'translate(-50%,-50%) scale(1)'; }, 200);
+    }
+
+    // Click handler on the target area
+    area.addEventListener('click', async (e) => {
+      if (cancelled || idx >= TOTAL) return;
+
+      const areaRect = area.getBoundingClientRect();
+      const [px, py] = POINTS[idx];
+
+      // Actual screen coordinates of the dot centre
+      const dotScreenX = areaRect.left + px * areaRect.width;
+      const dotScreenY = areaRect.top  + py * areaRect.height;
+
+      // Record this click as a training example for WebGazer
+      window.postMessage({
+        source:  'sra-cal-record',
+        x:       dotScreenX,
+        y:       dotScreenY,
+      }, '*');
+
+      // Collect a prediction sample for offset computation
+      window.postMessage({ source: 'sra-cal-sample', sra_sample_id: idx }, '*');
+
       idx++;
-      // update progress fill
-      const pct = Math.round((idx / points.length) * 100);
-      fill.style.width = pct + '%';
-      if (idx < points.length) {
-        // move to next after short pause
-        setTimeout(runStep, 300);
+      updateProgress();
+
+      if (idx >= TOTAL) {
+        finish();
       } else {
-        // finished
-        overlay.classList.remove('visible');
-        // allow fade out
-        setTimeout(async () => {
-          try { overlay.remove(); } catch (e) {}
-          // compute offsets
-          let dx = 0, dy = 0, count = 0;
-          for (let j=0;j<results.length;j++){
-            const r = results[j]; const t = points[j]; const tx = t.x * window.innerWidth; const ty = t.y * window.innerHeight;
-            if (r && r.x) { dx += (tx - r.x); dy += (ty - r.y); count++; }
-          }
-          dx = dx / Math.max(1, count); dy = dy / Math.max(1, count);
-          const offset = { dx, dy };
-          await setCalibration(offset);
-          resolve(offset);
-        }, 260);
-      }
-    }
-
-    // start
-    moveTo(points[0]);
-    setTimeout(runStep, 400);
-
-    // allow cancellation if the overlay is clicked outside
-    overlay.addEventListener('click', (ev) => {
-      if (ev.target === overlay) {
-        cancelled = true; overlay.classList.remove('visible'); setTimeout(()=>{ try{ overlay.remove(); }catch(e){}; resolve({dx:0,dy:0}); }, 220);
+        setTimeout(showPoint, 350);
       }
     });
+
+    async function finish() {
+      overlay.classList.remove('visible');
+      setTimeout(async () => {
+        try { overlay.remove(); } catch (e) {}
+
+        // Ask page context for the current prediction at centre to compute residual offset
+        const centreX = window.innerWidth  / 2;
+        const centreY = window.innerHeight / 2;
+        const offset  = await new Promise(res => {
+          const id = Math.random().toString(36).slice(2);
+          const h  = (ev) => {
+            if (ev.source !== window || !ev.data || ev.data.sra_pred_id !== id || ev.data.source !== 'sra-cal-prediction') return;
+            window.removeEventListener('message', h);
+            const pred = ev.data.prediction;
+            if (pred && typeof pred.x === 'number') {
+              res({ dx: Math.round(centreX - pred.x), dy: Math.round(centreY - pred.y) });
+            } else {
+              res({ dx: 0, dy: 0 });
+            }
+          };
+          window.addEventListener('message', h);
+          window.postMessage({ source: 'sra-cal-predict', sra_pred_id: id }, '*');
+          setTimeout(() => { window.removeEventListener('message', h); res({ dx: 0, dy: 0 }); }, 1000);
+        });
+
+        await setCalibration(offset);
+        console.log('[TL;DR] Calibration complete. Offset:', offset);
+        resolve(offset);
+      }, 280);
+    }
+
+    retry.addEventListener('click', () => {
+      idx = 0; predictions.length = 0;
+      stepNodes.forEach(n => n.classList.remove('active'));
+      fill.style.width = '0%';
+      counter.textContent = '0';
+      showPoint();
+    });
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        cancelled = true;
+        overlay.classList.remove('visible');
+        setTimeout(() => { try { overlay.remove(); } catch(e){} resolve({ dx: 0, dy: 0 }); }, 250);
+      }
+    });
+
+    showPoint();
   });
 }
