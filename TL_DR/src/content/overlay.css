@@ -1,0 +1,27 @@
+/* Overlay & popup styles for content overlays (modern, light) */
+:root{--bg:#FAFAF7;--text:#333333;--accent:#1A7E5D;--accent2:#3A82F7;--gold:#C8A54B}
+.sra-popup{position:absolute;max-width:420px;background:rgba(250,250,250,0.85);color:var(--text);font-family:'Merriweather',Georgia,serif;font-size:15px;line-height:1.5;border-radius:12px;padding:12px;box-shadow:0 8px 28px rgba(16,24,32,0.12);backdrop-filter:blur(8px) saturate(1.1);border:1px solid rgba(255,255,255,0.6);z-index:2147483647;opacity:0;transform:translateY(6px);transition:opacity 200ms ease,transform 200ms ease}
+.sra-popup.show{opacity:1;transform:none}
+.sra-popup .sra-popup-body{max-height:240px;overflow:auto}
+.sra-actions{display:flex;gap:8px;margin-top:10px}
+.sra-btn{padding:8px 10px;border-radius:10px;border:none;font-family:inherit;cursor:pointer}
+.sra-btn-primary{background:var(--accent);color:white}
+.sra-btn-secondary{background:var(--accent2);color:white}
+.sra-calibration .sra-cal-point{position:absolute;width:18px;height:18px;background:var(--accent);border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 6px 14px rgba(0,0,0,0.15)}
+.sra-pptx-overlay{pointer-events:none}
+
+/* Calibration overlay */
+.sra-cal-overlay{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.18);backdrop-filter:blur(6px) saturate(1.05);opacity:0;transition:opacity 220ms ease}
+.sra-cal-overlay.visible{opacity:1}
+.sra-cal-panel{width:86%;max-width:720px;background:rgba(250,250,250,0.78);border-radius:14px;padding:12px 14px;box-shadow:0 10px 40px rgba(10,10,10,0.12);border:1px solid rgba(255,255,255,0.6);}
+.sra-cal-top{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.sra-cal-progress{flex:1;height:10px;background:rgba(0,0,0,0.06);border-radius:8px;overflow:hidden}
+.sra-cal-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));width:0%;transition:width 280ms ease}
+.sra-cal-steps{display:flex;gap:6px;margin-right:6px}
+.sra-cal-step{width:10px;height:10px;border-radius:50%;background:rgba(0,0,0,0.08)}
+.sra-cal-step.active{background:var(--accent)}
+.sra-cal-retry{padding:8px 10px;border-radius:8px;border:none;background:#fff;box-shadow:0 6px 16px rgba(0,0,0,0.06);cursor:pointer}
+.sra-cal-target-area{position:relative;height:360px;border-radius:10px;background:linear-gradient(180deg, rgba(255,255,255,0.6), rgba(255,255,255,0.4));overflow:hidden}
+.sra-cal-target{position:absolute;width:24px;height:24px;border-radius:50%;background:var(--accent);box-shadow:0 8px 20px rgba(0,0,0,0.18);transform:translate(-50%,-50%);transition:left 420ms cubic-bezier(.2,.9,.2,1),top 420ms cubic-bezier(.2,.9,.2,1),transform 220ms ease}
+.sra-cal-target::after{content:'';position:absolute;left:50%;top:50%;width:8px;height:8px;border-radius:50%;transform:translate(-50%,-50%);background:rgba(255,255,255,0.9)}
+

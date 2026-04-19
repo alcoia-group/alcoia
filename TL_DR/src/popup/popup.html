@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>TL;DR - Smart Reading Assistant</title>
+    <link rel="stylesheet" href="../styles/popup.css">
+  </head>
+  <body>
+    <div class="popup-root">
+      <header class="top">
+  <div class="logo"><img src="" id="sra-logo-img" alt="TL;DR logo"></div>
+        <div class="title">TL;DR</div>
+        <label class="switch">
+          <input id="assistantToggle" type="checkbox" checked>
+          <span class="slider"></span>
+        </label>
+      </header>
+
+      <section class="features">
+        <label><input id="eyeToggle" type="checkbox" checked> Eye-Tracking Summaries</label>
+        <div id="eyeTrackingStatus" style="font-size:12px; color:#666; margin-top:4px; margin-left:24px; display:none;">
+          <span id="statusText">Camera: off</span>
+        </div>
+        <label><input id="selToggle" type="checkbox" checked> Selection TL;DR</label>
+        <label><input id="notesToggle" type="checkbox"> Notes Dashboard (open)</label>
+      </section>
+
+      <section class="backend">
+        <label>Backend URL</label>
+        <input id="backendUrl" type="text" placeholder="http://localhost:3000/api/summarize">
+      </section>
+
+      <section class="behavior">
+        <label><input id="autohideToggle" type="checkbox"> Auto-hide summaries</label>
+        <label>Timeout (seconds) <input id="autohideTimeout" type="number" min="3" max="120" value="12" style="width:72px;margin-left:8px"></label>
+        <label><input id="pinDefaultToggle" type="checkbox"> Pin summaries by default</label>
+        <label><input id="debugTogglePopup" type="checkbox"> Debug mode (show prediction points)</label>
+      </section>
+
+      <section class="tools">
+        <button id="calibrateBtn" class="tool">Calibrate Eye Tracker</button>
+        <button id="troubleshootBtn" class="tool">Troubleshoot Camera</button>
+      </section>
+
+      <footer>
+        <div class="premium-row"><button id="upgradeBtn" class="upgrade">Upgrade • Premium</button><span class="small">Manage subscription</span></div>
+        <div class="brand-footer">
+          <p class="cj">CJ_</p>
+        </div>
+      </footer>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+  </html>

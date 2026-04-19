@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "TL;DR",
+  "description": "Eye-tracking powered summaries for web pages and PDFs to ease reading.",
+  "version": "0.1.0",
+  "permissions": [
+    "storage",
+    "scripting",
+    "activeTab",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "assets/tldr.png",
+      "48": "assets/tldr.png",
+      "128": "assets/tldr.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/content.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/libs/**",
+        "src/styles/**",
+        "src/popup/**",
+        "src/content/**",
+        "assets/**"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "icons": {
+    "16": "assets/tldr.png",
+    "48": "assets/tldr.png",
+    "128": "assets/tldr.png"
+  }
+}
