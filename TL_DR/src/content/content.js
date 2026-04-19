@@ -1,58 +1,65 @@
 /*
   content.js — TL;DR Extension Core
-  Orchestrates: WebGazer → Feature Extraction → Classifier → AI Popup
-  
-  Pipeline:
-    gaze point → gaze-features.js (windowed stats)
-                → classifier.js  (decision tree → cognitive state)
-                  → 'confused' or 'overloaded' → fetchSummary → popup
-                  → 'zoning_out' → focus nudge
-                  → 'focused'/'skimming' → no action
+  Guard at the very top prevents the SyntaxError when injected twice.
 */
 
-// Internal debug logger — only logs TL;DR events, not every page message
-const log = (...a) => console.log('[TL;DR]', ...a);
-const warn = (...a) => console.warn('[TL;DR]', ...a);
+// ── Double-injection guard ─────────────────────────────────────────────────
+if (window.__sra_content_loaded) {
+  // Already running — just restart the tracker if needed
+  if (window.__sra_restart_tracker) window.__sra_restart_tracker();
+} else {
+  window.__sra_content_loaded = true;
+  __sra_main();
+}
+
+function __sra_main() {
+
+const _log  = (...a) => console.log('[TL;DR]', ...a);
+const _warn = (...a) => console.warn('[TL;DR]', ...a);
 
 (async function () {
-  // ── Constants ───────────────────────────────────────────────────────────────
-  const BACKEND_DEFAULT = 'http://localhost:3000/api/summarize';
+
+  // ── Constants ──────────────────────────────────────────────────────────
+  const BACKEND_DEFAULT     = 'http://localhost:3000/api/summarize';
   const MIN_SELECTION_CHARS = 15;
-  const CLASSIFY_INTERVAL_MS = 2500;   // how often to run classifier
-  const POPUP_ID = 'sra-floating-popup';
+  const CLASSIFY_INTERVAL   = 2500;
+  const ACTION_COOLDOWN     = 8000;
+  const POPUP_ID            = 'sra-floating-popup';
+  const POPUP_MARGIN        = 14;
 
-  // ── Runtime state ────────────────────────────────────────────────────────────
-  let backendUrl = BACKEND_DEFAULT;
+  // ── Runtime state ──────────────────────────────────────────────────────
+  let backendUrl         = BACKEND_DEFAULT;
   let eyeTrackingEnabled = true;
-  let selectionEnabled = true;
-  let autohideEnabled = false;
+  let selectionEnabled   = true;
+  let highlightEnabled   = true;
+  let autohideEnabled    = false;
   let autohideTimeoutSec = 12;
-  let pinDefault = false;
-  let debugEnabled = false;
-  let lastCognitiveState = 'focused';
-  let lastActionAt = 0;          // throttle: don't trigger more often than every 8s
-  const ACTION_COOLDOWN_MS = 8000;
+  let pinDefault         = false;
+  let debugEnabled       = false;
+  let lastCogState       = 'focused';
+  let lastActionAt       = 0;
+  let classifyTimer      = null;
+  let currentParagraph   = null;
+  let lastHighlighted    = null;
+  let pdfHandler         = null;
+  let pptxHandler        = null;
+  let cameraIsReady      = false;
 
-  let pdfHandler = null;
-  let pptxHandler = null;
+  // Expose restart hook for the double-injection guard above
+  window.__sra_restart_tracker = () => { window.__sra_tracker_started = false; startTracker(); };
 
-  // ── Module loader ─────────────────────────────────────────────────────────────
-  const loadModule = async (path) => {
-    const url = chrome.runtime.getURL(path);
-    return await import(url);
-  };
+  // ── Module loader ──────────────────────────────────────────────────────
+  const loadModule = (p) => import(chrome.runtime.getURL(p));
 
-  // ── Inject shared CSS ─────────────────────────────────────────────────────────
-  const injectCss = (p) => {
-    if (document.querySelector(`link[href*="${p}"]`)) return;
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = chrome.runtime.getURL(p);
-    document.head.appendChild(link);
-  };
-  injectCss('src/styles/overlay.css');
+  // ── Inject overlay CSS ─────────────────────────────────────────────────
+  if (!document.querySelector('[data-sra-css]')) {
+    const l = document.createElement('link');
+    l.rel = 'stylesheet'; l.dataset.sraCss = '1';
+    l.href = chrome.runtime.getURL('src/styles/overlay.css');
+    document.head.appendChild(l);
+  }
 
-  // ── Load helper modules ────────────────────────────────────────────────────────
+  // ── Load modules ───────────────────────────────────────────────────────
   const gazeUtils    = await loadModule('src/content/gaze-utils.js');
   const overlayUtils = await loadModule('src/content/overlay-utils.js');
   const featModule   = await loadModule('src/content/gaze-features.js');
@@ -61,377 +68,313 @@ const warn = (...a) => console.warn('[TL;DR]', ...a);
   const featureExtractor = featModule.createFeatureExtractor({ windowMs: 2500, minPoints: 15 });
   const { classifyGazeState, COGNITIVE_STATE_ACTIONS } = classModule;
 
-  // ── Load settings ────────────────────────────────────────────────────────────
-  chrome.storage.local.get(
-    { sra_backend_url: BACKEND_DEFAULT, sra_eye: true, sra_selection: true,
-      sra_autohide: false, sra_autohide_timeout: 12, sra_pin_default: false, sra_debug: false },
-    (res) => {
-      backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
-      eyeTrackingEnabled = res.sra_eye !== false;
-      selectionEnabled   = res.sra_selection !== false;
-      autohideEnabled    = !!res.sra_autohide;
-      autohideTimeoutSec = res.sra_autohide_timeout || 12;
-      pinDefault         = !!res.sra_pin_default;
-      debugEnabled       = !!res.sra_debug;
-    }
-  );
-
-  // ── Utility helpers ───────────────────────────────────────────────────────────
-  function escapeHtml(s = '') {
-    return s.replace(/[&<>"']/g, c =>
-      ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
-  }
-
-  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-
-  // ── AI fetch ──────────────────────────────────────────────────────────────────
-  async function fetchSummary(text, mode = 'tldr') {
-    try {
-      const resp = await fetch(backendUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, mode }),
-      });
-      const j = await resp.json();
-      return j.summary || j.result || 'No summary returned.';
-    } catch (e) {
-      warn('AI fetch failed — is the backend running? (cd server && node index.js)', e.message);
-      return '⚠️ Could not reach AI backend. Make sure `node server/index.js` is running.';
-    }
-  }
-
-  // ── Popup system ──────────────────────────────────────────────────────────────
-  function createPopupRoot() {
-    let node = document.getElementById(POPUP_ID);
-    if (node) return node;
-    node = document.createElement('div');
-    node.id = POPUP_ID;
-    node.className = 'sra-popup';
-    node.style.display = 'none';
-    node.style.position = 'absolute';
-    document.body.appendChild(node);
-    return node;
-  }
-
-  function setPin(root, pinned) {
-    if (!root) return;
-    if (pinned) {
-      const r = root.getBoundingClientRect();
-      root.style.position = 'fixed';
-      root.style.left = Math.round(r.left) + 'px';
-      root.style.top  = Math.round(r.top)  + 'px';
-      root.dataset.pinned = 'true';
-      chrome.storage.local.set({ sra_pinned_popup: { pinned: true, left: Math.round(r.left), top: Math.round(r.top) } });
-    } else {
-      delete root.dataset.pinned;
-      root.style.position = '';
-      root.style.left = '';
-      root.style.top  = '';
-      chrome.storage.local.remove('sra_pinned_popup');
-    }
-  }
-
-  function applySavedPin(root) {
-    chrome.storage.local.get(['sra_pinned_popup'], (res) => {
-      const cfg = res && res.sra_pinned_popup;
-      if (!cfg || !cfg.pinned) return;
-      const vw = window.innerWidth, vh = window.innerHeight;
-      const w = root.offsetWidth || 200, h = root.offsetHeight || 100;
-      root.style.position = 'fixed';
-      root.style.left = clamp(cfg.left || 8, 8, vw - w - 8) + 'px';
-      root.style.top  = clamp(cfg.top  || 8, 8, vh - h - 8) + 'px';
-      root.dataset.pinned = 'true';
-      const pb = root.querySelector('.sra-pin');
-      if (pb) pb.classList.add('active');
-    });
-  }
-
-  if (!window.__sra_pinned_resize_handler_installed) {
-    window.__sra_pinned_resize_handler_installed = true;
-    window.addEventListener('resize', () => {
-      const root = document.getElementById(POPUP_ID);
-      if (root && root.dataset && root.dataset.pinned === 'true') applySavedPin(root);
-    });
-  }
-
-  function renderPopup(x, y, html, meta = {}) {
-    const root = createPopupRoot();
-    const prevPinned = root.dataset && root.dataset.pinned === 'true';
-
-    // Build content with a badge showing what triggered this
-    const badge = meta.trigger
-      ? `<span class="sra-state-badge sra-state-${meta.trigger}">${meta.triggerLabel || meta.trigger}</span>`
-      : '';
-
-    root.innerHTML = `<div class="sra-popup-body">${badge}${html}</div>`;
-
-    // Close button
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'sra-close';
-    closeBtn.setAttribute('aria-label', 'Close');
-    closeBtn.innerHTML = '&#10005;';
-    closeBtn.onclick = () => overlayUtils.hidePopup(root);
-    root.appendChild(closeBtn);
-
-    // Pin button
-    const pinBtn = document.createElement('button');
-    pinBtn.className = 'sra-pin';
-    pinBtn.setAttribute('aria-label', 'Pin');
-    pinBtn.innerHTML = '📌';
-    if (prevPinned || pinDefault) { root.dataset.pinned = 'true'; pinBtn.classList.add('active'); }
-    pinBtn.onclick = () => {
-      const pinned = root.dataset && root.dataset.pinned === 'true';
-      setPin(root, !pinned);
-      pinBtn.classList.toggle('active', !pinned);
-    };
-    root.appendChild(pinBtn);
-
-    // Action buttons
-    const actions = document.createElement('div');
-    actions.className = 'sra-actions';
-
-    const explainBtn = document.createElement('button');
-    explainBtn.className = 'sra-btn sra-btn-primary';
-    explainBtn.textContent = 'Explain More';
-    explainBtn.onclick = async () => {
-      explainBtn.disabled = true;
-      explainBtn.textContent = 'Thinking…';
-      const s = await fetchSummary(meta.text || '', 'explain_more');
-      root.querySelector('.sra-popup-body').innerHTML = badge + escapeHtml(s);
-      explainBtn.textContent = 'Explain More';
-      explainBtn.disabled = false;
-    };
-
-    const noteBtn = document.createElement('button');
-    noteBtn.className = 'sra-btn sra-btn-secondary';
-    noteBtn.textContent = 'Save Note';
-    noteBtn.onclick = () => {
-      chrome.runtime.sendMessage({ action: 'saveNote', note: { text: meta.text || '', meta } });
-      noteBtn.textContent = 'Saved ✓';
-      noteBtn.disabled = true;
-    };
-
-    actions.appendChild(explainBtn);
-    actions.appendChild(noteBtn);
-    root.appendChild(actions);
-
-    overlayUtils.placePopup(root, { x, y, avoidSelection: true });
-
-    try { applySavedPin(root); } catch (e) {}
-    try { if (pinDefault && !prevPinned) setPin(root, true); } catch (e) {}
-
-    // Auto-hide
-    clearTimeout(root._hideT);
-    if (!root.dataset || root.dataset.pinned !== 'true') {
-      if (autohideEnabled) {
-        root._hideT = setTimeout(() => overlayUtils.hidePopup(root), Math.max(3, autohideTimeoutSec) * 1000);
-      }
-    }
-
-    if (!window.__sra_popup_key_handler_installed) {
-      window.__sra_popup_key_handler_installed = true;
-      document.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Escape') {
-          const r = document.getElementById(POPUP_ID);
-          if (r && r.dataset && r.dataset.pinned === 'true') return;
-          overlayUtils.hidePopup(r);
-        }
-      });
-    }
-  }
-
-  // ── Focus nudge (for zoning-out state) ──────────────────────────────────────
-  function showFocusNudge(currentEl) {
-    const existing = document.getElementById('sra-focus-nudge');
-    if (existing) existing.remove();
-    if (!currentEl) return;
-    currentEl.style.outline = '2px solid rgba(99,102,241,0.6)';
-    currentEl.style.borderRadius = '3px';
-    setTimeout(() => {
-      try { currentEl.style.outline = ''; currentEl.style.borderRadius = ''; } catch (e) {}
-    }, 3000);
-  }
-
-  // ── Selection TL;DR ──────────────────────────────────────────────────────────
-  document.addEventListener('mouseup', async (ev) => {
-    if (!selectionEnabled) return;
-
-    let selected = '';
-    if (pdfHandler  && pdfHandler.extractSelectedText)  selected = await pdfHandler.extractSelectedText();
-    if (!selected && pptxHandler && pptxHandler.extractSelectedText) selected = await pptxHandler.extractSelectedText();
-    if (!selected) selected = (window.getSelection && window.getSelection().toString().trim()) || '';
-    if (!selected || selected.length < MIN_SELECTION_CHARS) return;
-
-    // Code vs text detection
-    function isLikelyCode(str) {
-      const codeKw = /\b(function|var|let|const|if|else|for|while|return|class|def|import|public|static|void|=>|async|await|#include)\b/;
-      const braces = (str.match(/[{};]/g) || []).length;
-      const kwHits = (str.match(codeKw) || []).length;
-      let inCode = false;
-      try {
-        const sel = window.getSelection();
-        if (sel && sel.rangeCount > 0) {
-          let node = sel.anchorNode;
-          while (node) {
-            if (node.nodeType === 1 && (node.nodeName === 'PRE' || node.nodeName === 'CODE')) { inCode = true; break; }
-            node = node.parentNode;
-          }
-        }
-      } catch (e) {}
-      return inCode || braces > 2 || kwHits > 1;
-    }
-
-    const mode = isLikelyCode(selected) ? 'explain_code' : 'tldr';
-    const sum  = await fetchSummary(selected, mode);
-
-    try {
-      const sel = window.getSelection();
-      if (sel && sel.rangeCount > 0) {
-        const rect = sel.getRangeAt(0).getBoundingClientRect();
-        if (rect && (rect.width || rect.height)) {
-          renderPopup(Math.min(window.innerWidth - 24, rect.right + 8), Math.max(8, rect.top),
-            `<div>${escapeHtml(sum)}</div>`, { text: selected, source: 'selection', mode });
-          return;
-        }
-      }
-    } catch (e) {}
-    renderPopup(ev.clientX + 12, ev.clientY + 12, `<div>${escapeHtml(sum)}</div>`,
-      { text: selected, source: 'selection', mode });
+  // ── Load settings ──────────────────────────────────────────────────────
+  chrome.storage.local.get({
+    sra_backend_url: BACKEND_DEFAULT, sra_eye: true, sra_selection: true,
+    sra_highlight_para: true, sra_autohide: false, sra_autohide_timeout: 12,
+    sra_pin_default: false, sra_debug: false,
+  }, (res) => {
+    backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
+    eyeTrackingEnabled = res.sra_eye !== false;
+    selectionEnabled   = res.sra_selection !== false;
+    highlightEnabled   = res.sra_highlight_para !== false;
+    autohideEnabled    = !!res.sra_autohide;
+    autohideTimeoutSec = res.sra_autohide_timeout || 12;
+    pinDefault         = !!res.sra_pin_default;
+    debugEnabled       = !!res.sra_debug;
   });
 
-  // ── Paragraph finder ─────────────────────────────────────────────────────────
-  async function findParagraphAt(clientX, clientY) {
-    if (pdfHandler  && pdfHandler.findParagraphAt)  { const p = await pdfHandler.findParagraphAt(clientX, clientY);  if (p) return { type: 'pdf',  data: p }; }
-    if (pptxHandler && pptxHandler.findParagraphAt) { const p = await pptxHandler.findParagraphAt(clientX, clientY); if (p) return { type: 'pptx', data: p }; }
-    const el = document.elementFromPoint(clientX, clientY);
-    if (!el) return null;
-    const block = overlayUtils.getBlockAncestor(el) || el;
-    return { type: 'dom', data: block };
+  // ── Utilities ──────────────────────────────────────────────────────────
+  const esc   = (s = '') => s.replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  // ── Paragraph highlight ────────────────────────────────────────────────
+  function highlightElement(el, ms = 5000) {
+    if (!highlightEnabled || !el || el === document.body || el === document.documentElement) return;
+    clearHighlight();
+    el.classList.add('sra-para-highlight');
+    lastHighlighted = el;
+    setTimeout(clearHighlight, ms);
+  }
+  function clearHighlight() {
+    if (lastHighlighted) { lastHighlighted.classList.remove('sra-para-highlight'); lastHighlighted = null; }
   }
 
-  async function triggerAIForParagraph(paragraphInfo, triggerReason) {
-    if (!paragraphInfo) return;
-    let text = '';
-    if (paragraphInfo.type === 'dom') text = (paragraphInfo.data && (paragraphInfo.data.innerText || paragraphInfo.data.textContent)) || '';
-    else if (paragraphInfo.type === 'pdf')  text = await pdfHandler.getParagraphText(paragraphInfo.data);
-    else if (paragraphInfo.type === 'pptx') text = await pptxHandler.getParagraphText(paragraphInfo.data);
-    if (!text || text.trim().length < 25) return;
+  // ── AI fetch ───────────────────────────────────────────────────────────
+  async function fetchSummary(text, mode = 'tldr') {
+    try {
+      const url = backendUrl || BACKEND_DEFAULT;
+      _log(`Fetching ${url} mode=${mode} len=${text.length}`);
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.slice(0, 3500), mode }),
+      });
+      if (!resp.ok) { _warn(`Server ${resp.status}`); return null; }
+      const j = await resp.json();
+      return j.summary || j.result || null;
+    } catch (e) {
+      _warn('fetchSummary failed:', e.message);
+      return null;
+    }
+  }
 
-    // Choose AI mode based on cognitive state
-    const mode = triggerReason === 'overloaded' ? 'simplify' :
-                 triggerReason === 'confused'   ? 'explain_more' : 'tldr';
-    const summary = await fetchSummary(text, mode);
+  // ── Popup positioning ──────────────────────────────────────────────────
+  function clampToViewport(root, anchorRect) {
+    root.style.visibility = 'hidden';
+    root.style.display    = 'block';
+    const pw = root.offsetWidth  || 360;
+    const ph = root.offsetHeight || 150;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const m  = POPUP_MARGIN;
+    const a  = anchorRect || { left: vw/2-100, right: vw/2+100, top: vh/2-30, bottom: vh/2+30 };
 
-    let clientRect = { left: 60, top: 60, right: 200, bottom: 140 };
-    if (paragraphInfo.type === 'dom') clientRect = paragraphInfo.data.getBoundingClientRect();
-    else if (paragraphInfo.data && paragraphInfo.data.rect) clientRect = paragraphInfo.data.rect;
+    let left, top;
+    if      (a.right  + m + pw <= vw - m) { left = a.right  + m;     top = clamp(a.top,    m, vh - ph - m); }
+    else if (a.left   - m - pw >= m)       { left = a.left   - m - pw; top = clamp(a.top,    m, vh - ph - m); }
+    else if (a.bottom + m + ph <= vh - m)  { left = clamp(a.left, m, vw - pw - m); top = a.bottom + m; }
+    else if (a.top    - m - ph >= m)       { left = clamp(a.left, m, vw - pw - m); top = a.top    - m - ph; }
+    else                                   { left = vw - pw - m;  top = m; }
 
-    renderPopup(
-      Math.max(8, clientRect.right + 8),
-      Math.max(8, clientRect.top),
-      `<div>${escapeHtml(summary)}</div>`,
-      {
-        text,
-        source: 'gaze',
-        trigger: triggerReason,
-        triggerLabel: { confused: '🤔 Confused', overloaded: '🧠 Overloaded', zoning_out: '💤 Zoning Out' }[triggerReason] || triggerReason,
+    root.style.left       = clamp(left, m, vw - pw - m) + 'px';
+    root.style.top        = clamp(top,  m, vh - ph - m) + 'px';
+    root.style.position   = 'fixed';
+    root.style.visibility = '';
+  }
+
+  // ── Render popup ───────────────────────────────────────────────────────
+  function renderPopup(anchorRect, html, meta = {}) {
+    let root = document.getElementById(POPUP_ID);
+    if (!root) {
+      root = document.createElement('div');
+      root.id = POPUP_ID; root.className = 'sra-popup';
+      document.body.appendChild(root);
+    }
+    root.classList.remove('show');
+    root.style.display = 'none';
+    delete root.dataset.pinned;
+
+    const badge = meta.trigger
+      ? `<div class="sra-state-badge">${esc(meta.triggerLabel || meta.trigger)}</div>`
+      : meta.source === 'selection'
+        ? `<div class="sra-state-badge">selected text</div>`
+        : '';
+
+    root.innerHTML = `
+      <div class="sra-controls">
+        <button class="sra-ctrl-btn" id="sra-pin-btn" title="Pin">📌</button>
+        <button class="sra-ctrl-btn" id="sra-close-btn" title="Close">✕</button>
+      </div>
+      <div class="sra-popup-body">${badge}${html}</div>
+      <div class="sra-popup-divider"></div>
+      <div class="sra-actions">
+        <button class="sra-btn sra-btn-primary"  id="sra-explain-btn">Explain More</button>
+        <button class="sra-btn sra-btn-secondary" id="sra-note-btn">Save Note</button>
+      </div>`;
+
+    root.querySelector('#sra-close-btn').onclick = hidePopup;
+
+    const pinBtn = root.querySelector('#sra-pin-btn');
+    if (pinDefault) { root.dataset.pinned = 'true'; pinBtn.classList.add('active'); }
+    pinBtn.onclick = () => {
+      const p = root.dataset.pinned === 'true';
+      root.dataset.pinned = (!p).toString();
+      pinBtn.classList.toggle('active', !p);
+    };
+
+    const explainBtn = root.querySelector('#sra-explain-btn');
+    explainBtn.onclick = async () => {
+      explainBtn.disabled = true; explainBtn.textContent = 'Thinking…';
+      const s = await fetchSummary(meta.text || '', 'explain_more');
+      const body = root.querySelector('.sra-popup-body');
+      if (body && s) body.innerHTML = badge + `<div>${esc(s)}</div>`;
+      explainBtn.textContent = 'Explain More'; explainBtn.disabled = false;
+    };
+
+    const noteBtn = root.querySelector('#sra-note-btn');
+    noteBtn.onclick = () => {
+      chrome.runtime.sendMessage({ action: 'saveNote', note: { text: meta.text || '', meta } });
+      noteBtn.textContent = 'Saved ✓'; noteBtn.disabled = true;
+    };
+
+    clampToViewport(root, anchorRect);
+    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
+    clearTimeout(root._hideT);
+    if (autohideEnabled && root.dataset.pinned !== 'true')
+      root._hideT = setTimeout(hidePopup, Math.max(3, autohideTimeoutSec) * 1000);
+  }
+
+  function hidePopup() {
+    const root = document.getElementById(POPUP_ID);
+    if (!root || root.dataset.pinned === 'true') return;
+    root.classList.remove('show');
+    setTimeout(() => { if (root) root.style.display = 'none'; }, 220);
+  }
+
+  if (!window.__sra_esc_installed) {
+    window.__sra_esc_installed = true;
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePopup(); });
+  }
+
+  // ── Focus nudge ────────────────────────────────────────────────────────
+  function showNudge(el) {
+    if (!el) return;
+    el.classList.add('sra-nudge-highlight');
+    setTimeout(() => el.classList.remove('sra-nudge-highlight'), 3500);
+  }
+
+  // ── Code detection ─────────────────────────────────────────────────────
+  function isLikelyCode(str) {
+    const kw = /\b(function|var|let|const|if|else|for|while|return|class|def|import|public|static|=>|async|await)\b/;
+    let inCode = false;
+    try {
+      let node = window.getSelection()?.anchorNode;
+      while (node) {
+        if (node.nodeType === 1 && (node.nodeName === 'PRE' || node.nodeName === 'CODE')) { inCode = true; break; }
+        node = node.parentNode;
       }
-    );
+    } catch (e) {}
+    return inCode || (str.match(/[{};]/g)||[]).length > 2 || (str.match(kw)||[]).length > 1;
   }
 
-  // ── Gaze state smoothing ────────────────────────────────────────────────────
-  const gazeState = gazeUtils.createGazeState({ smoothingAlpha: 0.18, dropoutFrames: 3, velocityThreshold: 1200 });
-  let consecutiveNull = 0;
-  let lastGazePt = null;
-  let classifyTimer = null;
-  let currentParagraph = null;
+  // ── Selection TL;DR ────────────────────────────────────────────────────
+  document.addEventListener('mouseup', async (ev) => {
+    if (!selectionEnabled) return;
+    let selected = '';
+    try { selected = window.getSelection()?.toString().trim() || ''; } catch (e) {}
+    if (!selected || selected.length < MIN_SELECTION_CHARS) return;
+
+    // Highlight source element
+    try {
+      const sel = window.getSelection();
+      if (sel?.anchorNode) {
+        const el = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+        highlightElement(overlayUtils.getBlockAncestor(el) || el, 5000);
+      }
+    } catch (e) {}
+
+    // Anchor rect
+    let anchorRect = null;
+    try {
+      const sel = window.getSelection();
+      if (sel?.rangeCount > 0) {
+        const r = sel.getRangeAt(0).getBoundingClientRect();
+        if (r.width || r.height) anchorRect = r;
+      }
+    } catch (e) {}
+    if (!anchorRect) anchorRect = { left: ev.clientX, right: ev.clientX+8, top: ev.clientY, bottom: ev.clientY+8 };
+
+    const mode    = isLikelyCode(selected) ? 'explain_code' : 'tldr';
+    const summary = await fetchSummary(selected, mode);
+
+    if (!summary) {
+      renderPopup(anchorRect,
+        `<div class="sra-error">Could not reach the AI backend.<br>
+         Is the server running? Run:<br>
+         <code style="font-size:11px;font-family:monospace">cd server &amp;&amp; node index.js</code></div>`,
+        { text: selected, source: 'selection', mode });
+      return;
+    }
+    renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text: selected, source: 'selection', mode });
+  });
+
+  // ── Paragraph finder ───────────────────────────────────────────────────
+  async function findParagraphAt(cx, cy) {
+    if (pdfHandler?.findParagraphAt)  { const p = await pdfHandler.findParagraphAt(cx,cy);  if(p) return {type:'pdf', data:p}; }
+    if (pptxHandler?.findParagraphAt) { const p = await pptxHandler.findParagraphAt(cx,cy); if(p) return {type:'pptx',data:p}; }
+    const el = document.elementFromPoint(cx, cy);
+    if (!el) return null;
+    return { type: 'dom', data: overlayUtils.getBlockAncestor(el) || el };
+  }
+
+  // ── Gaze-triggered AI ──────────────────────────────────────────────────
+  async function triggerAIForParagraph(paraInfo, reason) {
+    if (!paraInfo) return;
+    let text = '', el = null;
+    if (paraInfo.type === 'dom') { el = paraInfo.data; text = (el?.innerText || el?.textContent || '').trim(); }
+    else if (paraInfo.type === 'pdf')  text = await pdfHandler.getParagraphText(paraInfo.data);
+    else if (paraInfo.type === 'pptx') text = await pptxHandler.getParagraphText(paraInfo.data);
+    if (!text || text.length < 25) return;
+
+    const mode = reason === 'overloaded' ? 'simplify' : reason === 'confused' ? 'explain_more' : 'tldr';
+    const triggerLabel = { confused:'— confused', overloaded:'— overloaded', zoning_out:'— zoning out' }[reason] || reason;
+
+    if (el) highlightElement(el, 6000);
+    let anchorRect = null;
+    try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
+
+    const summary = await fetchSummary(text, mode);
+    if (!summary) return;
+    renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source:'gaze', trigger:reason, triggerLabel });
+  }
+
+  // ── Gaze processing ────────────────────────────────────────────────────
+  const gazeState = gazeUtils.createGazeState({ smoothingAlpha:0.18, dropoutFrames:3, velocityThreshold:1200 });
+  let consecutiveNull = 0, lastGazePt = null;
 
   async function onGaze(data) {
     if (!eyeTrackingEnabled) return;
-    if (!data) {
-      consecutiveNull++;
-      if (consecutiveNull >= gazeState.dropoutFrames) { lastGazePt = null; }
-      return;
-    }
+    if (!data) { consecutiveNull++; if (consecutiveNull >= gazeState.dropoutFrames) lastGazePt = null; return; }
     consecutiveNull = 0;
-
     const pt = gazeUtils.normalizeAndSmooth(data, gazeState);
     if (!pt) return;
-    pt.x = clamp(pt.x, 0, window.innerWidth - 1);
+    pt.x = clamp(pt.x, 0, window.innerWidth  - 1);
     pt.y = clamp(pt.y, 0, window.innerHeight - 1);
     if (!gazeUtils.checkVelocity(gazeState, pt)) return;
-
     lastGazePt = pt;
     featureExtractor.addPoint(pt);
-
-    // Keep track of the paragraph under gaze for the action handler
-    try {
-      const found = await findParagraphAt(pt.x, pt.y);
-      if (found) currentParagraph = found;
-    } catch (e) {}
+    try { const f = await findParagraphAt(pt.x, pt.y); if (f) currentParagraph = f; } catch (e) {}
   }
 
-  // ── Periodic classification ────────────────────────────────────────────────
+  // ── Classification loop ────────────────────────────────────────────────
   function startClassificationLoop() {
-    if (classifyTimer) return;
+    if (classifyTimer) clearInterval(classifyTimer);
+    _log('Classification loop started');
     classifyTimer = setInterval(async () => {
       if (!eyeTrackingEnabled || !lastGazePt) return;
-
       const features = featureExtractor.computeFeatures();
       if (!features) return;
-
       const { label, confidence } = classifyGazeState(features);
-      lastCognitiveState = label;
-
-      if (debugEnabled) {
-        log(`State: ${label} (${(confidence * 100).toFixed(0)}%)`, features);
-      }
-
+      lastCogState = label;
+      // Store so popup can read it
+      chrome.storage.local.set({ sra_current_state: label });
+      if (debugEnabled) _log(`State: ${label} (${(confidence*100).toFixed(0)}%)`);
       const action = COGNITIVE_STATE_ACTIONS[label];
-      const now = Date.now();
-      if (action === 'none' || (now - lastActionAt) < ACTION_COOLDOWN_MS) return;
-
+      const now    = Date.now();
+      if (action === 'none' || now - lastActionAt < ACTION_COOLDOWN) return;
       lastActionAt = now;
-
-      if (action === 'explain' || action === 'simplify') {
-        await triggerAIForParagraph(currentParagraph, label);
-      } else if (action === 'nudge') {
-        showFocusNudge(currentParagraph && currentParagraph.type === 'dom' ? currentParagraph.data : null);
-      }
-    }, CLASSIFY_INTERVAL_MS);
+      if (action === 'explain' || action === 'simplify') await triggerAIForParagraph(currentParagraph, label);
+      else if (action === 'nudge') { const el = currentParagraph?.type==='dom'?currentParagraph.data:null; showNudge(el); if(el) highlightElement(el,3000); }
+    }, CLASSIFY_INTERVAL);
   }
 
-  // ── WebGazer bootstrap (CSP-safe: no inline scripts) ─────────────────────────
+  // ── WebGazer bootstrap ─────────────────────────────────────────────────
+  // CSP-safe: URL passed via data attribute, no inline scripts
   async function startTracker() {
     if (window.__sra_tracker_started) return;
     window.__sra_tracker_started = true;
 
     try {
-      const webgazerUrl = chrome.runtime.getURL('src/libs/webgazer.min.js');
+      const script = document.createElement('script');
+      script.dataset.webgazerUrl = chrome.runtime.getURL('src/libs/webgazer.min.js');
+      script.src = chrome.runtime.getURL('src/content/webgazer-bootstrap.js');
+      (document.head || document.documentElement).appendChild(script);
 
-      // Pass URL via data attribute — avoids any inline JS (CSP-safe)
-      const bootstrapScript = document.createElement('script');
-      bootstrapScript.dataset.webgazerUrl = webgazerUrl;
-      bootstrapScript.src = chrome.runtime.getURL('src/content/webgazer-bootstrap.js');
-      (document.head || document.documentElement).appendChild(bootstrapScript);
+      // Fallback injection if bootstrap doesn't fire cameraReady or cameraError within 8s
+      let gotSignal = false;
+      const fallback = setTimeout(() => {
+        if (gotSignal) return;
+        _warn('No signal from WebGazer after 8s — trying background injection…');
+        chrome.runtime.sendMessage({ action: 'injectWebgazerBootstrap' }, r => {
+          if (chrome.runtime.lastError) _warn(chrome.runtime.lastError.message);
+        });
+      }, 8000);
 
-      // Fallback: if bootstrap doesn't report ready within 5s, ask background
-      let cameraReady = false;
-      const fallbackTimer = setTimeout(() => {
-        if (cameraReady) return;
-        warn('No cameraReady signal — requesting privileged injection via background...');
-        try {
-          chrome.runtime.sendMessage({ action: 'injectWebgazerBootstrap' }, (resp) => {
-            if (chrome.runtime.lastError) warn('Privileged injection error:', chrome.runtime.lastError.message);
-            else log('Privileged injection response:', resp);
-          });
-        } catch (e) { warn('Could not send injectWebgazerBootstrap:', e); }
-      }, 5000);
-
-      // Forward gaze events + control messages
-      window.addEventListener('message', async (event) => {
-        if (event.source !== window || !event.data) return;
-        const d = event.data;
+      window.addEventListener('message', async (ev) => {
+        if (ev.source !== window || !ev.data) return;
+        const d = ev.data;
 
         if (d.source === 'sra-webgazer') {
           try { if (d.gaze) onGaze(d.gaze); } catch (e) {}
@@ -439,114 +382,103 @@ const warn = (...a) => console.warn('[TL;DR]', ...a);
         }
 
         if (d.source === 'sra-control' && d.type === 'cameraReady') {
-          cameraReady = true;
-          clearTimeout(fallbackTimer);
-          log('WebGazer ready ✓');
+          gotSignal = true;
+          clearTimeout(fallback);
+          cameraIsReady = true;
+          chrome.storage.local.set({ sra_camera_ready: true });
+          _log('WebGazer camera ready ✓');
 
-          // Calibration after camera settles
           setTimeout(async () => {
             try {
               const cal = await gazeUtils.runCalibrationSequence();
-              if (cal) {
-                await gazeUtils.setCalibration(cal);
-                log('Calibration complete:', cal);
-              }
-              startClassificationLoop();
+              if (cal) await gazeUtils.setCalibration(cal);
+              _log('Calibration complete:', cal);
             } catch (e) {
-              warn('Calibration failed (non-fatal):', e);
-              startClassificationLoop(); // still start classifier even if calibration fails
+              _warn('Calibration failed (non-fatal):', e.message);
             }
+            startClassificationLoop();
           }, 800);
         }
-      }, false);
 
-    } catch (e) { warn('startTracker failed:', e); }
+        if (d.source === 'sra-control' && d.type === 'cameraError') {
+          gotSignal = true;
+          clearTimeout(fallback);
+          chrome.storage.local.set({ sra_camera_ready: false, sra_camera_error: d.error || 'unknown' });
+          _warn('WebGazer error:', d.error);
+          // Still start classification loop — it'll run without gaze data (no action will fire since lastGazePt stays null)
+        }
+      }, false);
+    } catch (e) { _warn('startTracker failed:', e); }
   }
 
-  // ── Click recording (improves WebGazer's model) ───────────────────────────────
-  document.addEventListener('click', (e) => {
-    try {
-      if (window.webgazer) webgazer.recordScreenPosition(e.clientX, e.clientY, 'click');
-    } catch (e) {}
+  document.addEventListener('click', e => {
+    try { if (window.webgazer) webgazer.recordScreenPosition(e.clientX, e.clientY, 'click'); } catch (e) {}
   });
 
-  // ── PDF / PPTX handlers ───────────────────────────────────────────────────────
+  // ── PDF/PPTX handlers ─────────────────────────────────────────────────
   async function detectAndInitHandlers() {
     const url = window.location.href;
-    const hasPdfEmbed = !!document.querySelector('embed[type="application/pdf"], iframe[src$=".pdf"], object[type="application/pdf"]');
-    if (hasPdfEmbed || /\.pdf($|[?#])/i.test(url)) {
-      try { const mod = await loadModule('src/content/pdf-handler.js'); pdfHandler = await mod.initPDFHandler({ backendUrl, fetchSummary, renderPopup }); } catch (e) { warn('PDF handler failed:', e); }
+    if (/\.pdf($|[?#])/i.test(url) || document.querySelector('embed[type="application/pdf"]')) {
+      try { const m = await loadModule('src/content/pdf-handler.js'); pdfHandler = await m.initPDFHandler({backendUrl,fetchSummary,renderPopup}); } catch(e) {_warn('PDF:',e);}
     }
-    if (/\.pptx($|[?#])/i.test(url) || !!document.querySelector('a[href$=".pptx"]')) {
-      try { const mod = await loadModule('src/content/pptx-handler.js'); pptxHandler = await mod.initPPTXHandler({ backendUrl, fetchSummary, renderPopup }); } catch (e) { warn('PPTX handler failed:', e); }
+    if (/\.pptx($|[?#])/i.test(url) || document.querySelector('a[href$=".pptx"]')) {
+      try { const m = await loadModule('src/content/pptx-handler.js'); pptxHandler = await m.initPPTXHandler({backendUrl,fetchSummary,renderPopup}); } catch(e) {_warn('PPTX:',e);}
     }
   }
 
-  // ── Extension API (popup → content) ─────────────────────────────────────────
+  // ── Public API ─────────────────────────────────────────────────────────
   window.sra = window.sra || {};
   window.sra.runCalibration = async () => {
-    try {
-      const cal = await gazeUtils.runCalibrationSequence();
-      if (cal) await gazeUtils.setCalibration(cal);
-      return cal;
-    } catch (e) { warn('Calibration failed:', e); return null; }
+    const cal = await gazeUtils.runCalibrationSequence();
+    if (cal) await gazeUtils.setCalibration(cal);
+    return cal;
   };
-  window.sra.getState = () => lastCognitiveState;
+  window.sra.getState = () => lastCogState;
+  window.sra.isCameraReady = () => cameraIsReady;
 
-  chrome.runtime.onMessage.addListener(async (msg, sender, sendResponse) => {
-    if (!msg || !msg.type) return;
+  // ── Message listener ───────────────────────────────────────────────────
+  chrome.runtime.onMessage.addListener(async (msg, _, sendResponse) => {
+    if (!msg?.type) return;
 
     if (msg.type === 'settings') {
-      if (typeof msg.eye      !== 'undefined') eyeTrackingEnabled = !!msg.eye;
-      if (typeof msg.selection !== 'undefined') selectionEnabled   = !!msg.selection;
-      if (msg.backendUrl)                        backendUrl          = msg.backendUrl;
-      if (typeof msg.autohide !== 'undefined') autohideEnabled     = !!msg.autohide;
-      if (typeof msg.autohideTimeout !== 'undefined') autohideTimeoutSec = Number(msg.autohideTimeout) || 12;
-      if (typeof msg.pinDefault !== 'undefined') pinDefault          = !!msg.pinDefault;
-      if (typeof msg.debug    !== 'undefined') debugEnabled         = !!msg.debug;
-      try { window.postMessage({ source: 'sra-control', type: 'setPredictionPoints', enabled: !!debugEnabled }, '*'); } catch (e) {}
-      sendResponse({ status: 'ok' });
-      return;
+      if (msg.eye           !== undefined) eyeTrackingEnabled = !!msg.eye;
+      if (msg.selection     !== undefined) selectionEnabled   = !!msg.selection;
+      if (msg.highlightPara !== undefined) highlightEnabled   = !!msg.highlightPara;
+      if (msg.autohide      !== undefined) autohideEnabled    = !!msg.autohide;
+      if (msg.autohideTimeout !== undefined) autohideTimeoutSec = Number(msg.autohideTimeout) || 12;
+      if (msg.pinDefault    !== undefined) pinDefault         = !!msg.pinDefault;
+      if (msg.debug         !== undefined) debugEnabled       = !!msg.debug;
+      if (msg.backendUrl)                  backendUrl         = msg.backendUrl;
+      try { window.postMessage({ source:'sra-control', type:'setPredictionPoints', enabled:!!debugEnabled },'*'); } catch(e){}
+      sendResponse({ status: 'ok' }); return;
     }
-
     if (msg.type === 'runCalibration') {
       (async () => {
-        try {
-          const cal = await gazeUtils.runCalibrationSequence();
-          if (cal) await gazeUtils.setCalibration(cal);
-          sendResponse({ status: 'ok', calibration: cal });
-        } catch (e) { sendResponse({ status: 'error', error: String(e) }); }
-      })();
-      return true;
+        try { const cal = await gazeUtils.runCalibrationSequence(); if(cal) await gazeUtils.setCalibration(cal); sendResponse({status:'ok',calibration:cal}); }
+        catch (e) { sendResponse({status:'error',error:String(e)}); }
+      })(); return true;
     }
-
     if (msg.type === 'debugToggle') {
       debugEnabled = !!msg.enabled;
-      try { window.postMessage({ source: 'sra-control', type: 'setPredictionPoints', enabled: debugEnabled }, '*'); } catch (e) {}
-      sendResponse({ status: 'ok' });
-      return true;
+      try { window.postMessage({source:'sra-control',type:'setPredictionPoints',enabled:debugEnabled},'*'); } catch(e){}
+      sendResponse({ status:'ok' }); return true;
     }
-
     if (msg.type === 'startCamera') {
-      try {
-        window.__sra_tracker_started = false; // allow restart
-        await startTracker();
-        window.postMessage({ source: 'sra-control', type: 'setPredictionPoints', enabled: true }, '*');
-        sendResponse({ status: 'ok' });
-      } catch (e) { sendResponse({ status: 'error', error: String(e) }); }
+      window.__sra_tracker_started = false;
+      try { await startTracker(); sendResponse({status:'ok'}); }
+      catch (e) { sendResponse({status:'error',error:String(e)}); }
       return true;
     }
-
     if (msg.type === 'getState') {
-      sendResponse({ state: lastCognitiveState });
+      sendResponse({ state: lastCogState, cameraReady: cameraIsReady });
       return;
     }
   });
 
-  // ── Boot ──────────────────────────────────────────────────────────────────────
+  // ── Boot ───────────────────────────────────────────────────────────────
   await detectAndInitHandlers();
   await startTracker();
-
-  log('Content script loaded ✓');
+  _log('Content script loaded ✓');
 
 })();
+} // end __sra_main

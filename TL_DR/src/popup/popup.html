@@ -1,55 +1,341 @@
 <!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>TL;DR - Smart Reading Assistant</title>
-    <link rel="stylesheet" href="../styles/popup.css">
-  </head>
-  <body>
-    <div class="popup-root">
-      <header class="top">
-  <div class="logo"><img src="" id="sra-logo-img" alt="TL;DR logo"></div>
-        <div class="title">TL;DR</div>
-        <label class="switch">
-          <input id="assistantToggle" type="checkbox" checked>
-          <span class="slider"></span>
-        </label>
-      </header>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>TL;DR</title>
+  <link href="https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-      <section class="features">
-        <label><input id="eyeToggle" type="checkbox" checked> Eye-Tracking Summaries</label>
-        <div id="eyeTrackingStatus" style="font-size:12px; color:#666; margin-top:4px; margin-left:24px; display:none;">
-          <span id="statusText">Camera: off</span>
-        </div>
-        <label><input id="selToggle" type="checkbox" checked> Selection TL;DR</label>
-        <label><input id="notesToggle" type="checkbox"> Notes Dashboard (open)</label>
-      </section>
+    :root {
+      --bg:      #FAFAF7;
+      --surface: rgba(255,255,255,0.7);
+      --border:  rgba(26,126,93,0.12);
+      --text:    #2c2c2a;
+      --muted:   #7a7a72;
+      --accent:  #1A7E5D;
+      --accent2: #0f5c42;
+      --gold:    #C8A54B;
+      --serif:   'Merriweather', 'Georgia', serif;
+    }
 
-      <section class="backend">
-        <label>Backend URL</label>
-        <input id="backendUrl" type="text" placeholder="http://localhost:3000/api/summarize">
-      </section>
+    body {
+      width: 310px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--serif);
+      font-size: 13px;
+      line-height: 1.6;
+    }
 
-      <section class="behavior">
-        <label><input id="autohideToggle" type="checkbox"> Auto-hide summaries</label>
-        <label>Timeout (seconds) <input id="autohideTimeout" type="number" min="3" max="120" value="12" style="width:72px;margin-left:8px"></label>
-        <label><input id="pinDefaultToggle" type="checkbox"> Pin summaries by default</label>
-        <label><input id="debugTogglePopup" type="checkbox"> Debug mode (show prediction points)</label>
-      </section>
+    /* ── Header ── */
+    .header {
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo-row { display: flex; align-items: center; gap: 10px; }
+    .logo-mark {
+      width: 30px; height: 30px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      color: white;
+      font-size: 12px;
+      font-weight: 700;
+      font-style: italic;
+      letter-spacing: -0.5px;
+    }
+    .logo-text { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; }
+    .logo-sub  { font-size: 10px; color: var(--muted); font-weight: 300; font-style: italic; }
 
-      <section class="tools">
-        <button id="calibrateBtn" class="tool">Calibrate Eye Tracker</button>
-        <button id="troubleshootBtn" class="tool">Troubleshoot Camera</button>
-      </section>
+    /* master pill */
+    .pill { position: relative; width: 38px; height: 22px; }
+    .pill input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .pill-track {
+      position: absolute; inset: 0;
+      background: #d8d8d0;
+      border-radius: 11px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .pill input:checked + .pill-track { background: var(--accent); }
+    .pill-track::after {
+      content: '';
+      position: absolute;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: white;
+      top: 3px; left: 3px;
+      transition: transform 0.18s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+    }
+    .pill input:checked + .pill-track::after { transform: translateX(16px); }
 
-      <footer>
-        <div class="premium-row"><button id="upgradeBtn" class="upgrade">Upgrade • Premium</button><span class="small">Manage subscription</span></div>
-        <div class="brand-footer">
-          <p class="cj">CJ_</p>
-        </div>
-      </footer>
+    /* ── Status bar ── */
+    .status-bar {
+      margin: 10px 14px;
+      padding: 8px 11px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .status-left { display: flex; align-items: center; gap: 7px; }
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #c0bdb4;
+      transition: background 0.3s;
+    }
+    .status-dot.active  { background: var(--accent); box-shadow: 0 0 5px rgba(26,126,93,0.5); }
+    .status-dot.loading { background: var(--gold); animation: blink 1.1s ease infinite; }
+    .status-dot.error   { background: #c0392b; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+    .status-text { font-size: 11px; color: var(--muted); font-style: italic; }
+    .state-badge {
+      font-size: 10px;
+      font-style: italic;
+      color: var(--accent2);
+      background: rgba(26,126,93,0.08);
+      padding: 2px 8px;
+      border-radius: 5px;
+      border: 1px solid rgba(26,126,93,0.15);
+    }
+
+    /* ── Section ── */
+    .section {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-label {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 1.3px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 7px;
+    }
+
+    /* ── Toggle row ── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 2px;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: background 0.12s;
+    }
+    .toggle-row:hover { background: rgba(26,126,93,0.04); }
+    .toggle-info   { display: flex; flex-direction: column; gap: 1px; }
+    .toggle-name   { font-size: 13px; }
+    .toggle-desc   { font-size: 11px; color: var(--muted); font-style: italic; }
+
+    /* ── State chips ── */
+    .state-chips {
+      display: flex; flex-wrap: wrap; gap: 5px; padding: 3px 0;
+    }
+    .chip {
+      font-size: 10px;
+      font-style: italic;
+      padding: 2px 8px;
+      border-radius: 5px;
+      border: 1px solid rgba(26,126,93,0.15);
+      color: var(--muted);
+      background: transparent;
+      transition: all 0.2s;
+    }
+    .chip.active-focused    { color: #1A7E5D; border-color: #1A7E5D; background: rgba(26,126,93,0.08); }
+    .chip.active-skimming   { color: #2563a8; border-color: #2563a8; background: rgba(37,99,168,0.07); }
+    .chip.active-confused   { color: #a06000; border-color: #a06000; background: rgba(160,96,0,0.07); }
+    .chip.active-zoning_out { color: #5a3e8a; border-color: #5a3e8a; background: rgba(90,62,138,0.07); }
+    .chip.active-overloaded { color: #8b2000; border-color: #8b2000; background: rgba(139,32,0,0.07); }
+
+    /* ── Input ── */
+    .field-row { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }
+    .field-label { font-size: 11px; color: var(--muted); font-style: italic; }
+    .field-input {
+      background: white;
+      border: 1px solid rgba(26,126,93,0.18);
+      border-radius: 8px;
+      padding: 7px 10px;
+      color: var(--text);
+      font-family: var(--serif);
+      font-size: 11px;
+      outline: none;
+    }
+    .field-input:focus { border-color: var(--accent); }
+    .field-row-inline {
+      display: flex; align-items: center;
+      justify-content: space-between;
+      padding: 4px 0;
+    }
+    .field-input-sm {
+      width: 60px;
+      background: white;
+      border: 1px solid rgba(26,126,93,0.18);
+      border-radius: 7px;
+      padding: 5px 8px;
+      color: var(--text);
+      font-family: var(--serif);
+      font-size: 11px;
+      outline: none;
+      text-align: right;
+    }
+
+    /* ── Buttons ── */
+    .btn-row { display: flex; flex-direction: column; gap: 6px; }
+    .btn {
+      display: flex; align-items: center; justify-content: center; gap: 7px;
+      padding: 9px 14px; border-radius: 9px; border: none;
+      cursor: pointer; font-family: var(--serif); font-size: 12px;
+      transition: opacity 0.15s, transform 0.12s;
+    }
+    .btn:hover:not(:disabled) { opacity: 0.85; transform: translateY(-1px); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
+    .btn-primary  { background: var(--accent); color: white; }
+    .btn-ghost {
+      background: rgba(26,126,93,0.07);
+      color: var(--accent2);
+      border: 1px solid rgba(26,126,93,0.18);
+    }
+    .btn-ghost:hover { background: rgba(26,126,93,0.12); }
+
+    /* ── Footer ── */
+    .footer {
+      padding: 10px 16px 13px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .footer-brand { font-size: 11px; font-style: italic; color: var(--muted); }
+    .footer-brand span { color: var(--accent); font-weight: 700; }
+    .upgrade-link {
+      font-size: 11px; font-style: italic;
+      color: var(--gold); background: none; border: none;
+      cursor: pointer; font-family: var(--serif); padding: 0;
+    }
+    .upgrade-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo-row">
+      <div class="logo-mark">TL</div>
+      <div>
+        <div class="logo-text">TL;DR</div>
+        <div class="logo-sub">Cognitive Reading Assistant</div>
+      </div>
     </div>
-    <script src="popup.js"></script>
-  </body>
-  </html>
+    <label class="pill">
+      <input type="checkbox" id="assistantToggle" checked>
+      <span class="pill-track"></span>
+    </label>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-left">
+      <div class="status-dot" id="cameraDot"></div>
+      <span class="status-text" id="cameraStatus">camera off</span>
+    </div>
+    <span class="state-badge" id="cogStateChip">—</span>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Features</div>
+
+    <label class="toggle-row" for="eyeToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Eye Tracking</span>
+        <span class="toggle-desc">Gaze-triggered AI summaries</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="eyeToggle" checked><span class="pill-track"></span></label>
+    </label>
+
+    <label class="toggle-row" for="selToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Highlight Summaries</span>
+        <span class="toggle-desc">AI popup when you select text</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="selToggle" checked><span class="pill-track"></span></label>
+    </label>
+
+    <label class="toggle-row" for="highlightToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Paragraph Highlighting</span>
+        <span class="toggle-desc">Outline the source paragraph</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="highlightToggle" checked><span class="pill-track"></span></label>
+    </label>
+
+    <label class="toggle-row" for="autohideToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Auto-hide Popups</span>
+        <span class="toggle-desc">Dismiss summaries after timeout</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="autohideToggle"><span class="pill-track"></span></label>
+    </label>
+
+    <label class="toggle-row" for="pinDefaultToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Pin by Default</span>
+        <span class="toggle-desc">Keep summaries open until closed</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="pinDefaultToggle"><span class="pill-track"></span></label>
+    </label>
+
+    <label class="toggle-row" for="debugTogglePopup">
+      <div class="toggle-info">
+        <span class="toggle-name">Debug Mode</span>
+        <span class="toggle-desc">Show gaze prediction dots</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="debugTogglePopup"><span class="pill-track"></span></label>
+    </label>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Cognitive State</div>
+    <div class="state-chips">
+      <span class="chip" id="chip-focused">focused</span>
+      <span class="chip" id="chip-skimming">skimming</span>
+      <span class="chip" id="chip-confused">confused</span>
+      <span class="chip" id="chip-zoning_out">zoning out</span>
+      <span class="chip" id="chip-overloaded">overloaded</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">AI Backend</div>
+    <div class="field-row">
+      <span class="field-label">Endpoint URL</span>
+      <input class="field-input" id="backendUrl" type="text"
+             placeholder="http://localhost:3000/api/summarize">
+    </div>
+    <div class="field-row-inline" id="timeoutRow" style="display:none">
+      <span class="field-label">Auto-hide after (seconds)</span>
+      <input class="field-input-sm" id="autohideTimeout" type="number" min="3" max="120" value="12">
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Camera</div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="startCameraBtn">Start Camera</button>
+      <button class="btn btn-ghost"   id="calibrateBtn">Calibrate Eye Tracker</button>
+      <button class="btn btn-ghost"   id="troubleshootBtn">Camera Permissions</button>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span class="footer-brand">by <span>CJ_</span></span>
+    <button class="upgrade-link" id="upgradeBtn">Upgrade to Premium →</button>
+  </div>
+
+<script src="popup.js"></script>
+</body>
+</html>
