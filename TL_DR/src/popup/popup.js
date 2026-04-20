@@ -202,6 +202,13 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/upgrade.html') });
   });
 
+
+  // ── Notes button ──────────────────────────────────────────────────────
+  const notesBtn = document.getElementById('notesBtn');
+  notesBtn && notesBtn.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/notes.html') });
+  });
+
 });
 
   // ── Logo: set via chrome.runtime.getURL as a reliable fallback ─────────
