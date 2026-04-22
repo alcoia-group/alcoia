@@ -3,7 +3,7 @@
 > An AI + gaze-driven adaptive reading and coding companion. 
   
 --- 
-
+ 
 ## 🚀 Overview
 
 **TL;DR** is a browser extension that enhances comprehension by analyzing reading patterns (via eye tracking) and dynamically adapting explanations, focus, and study flow in real time.
