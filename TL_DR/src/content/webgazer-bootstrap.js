@@ -45,7 +45,7 @@
       });
     } catch (e) {}
 
-    // Hide all built-in UI (we draw our own prediction dot when debug is on)
+  
     function hideUI() {
       try { webgazer.showPredictionPoints(false); } catch (e) {}
       try { webgazer.showVideo(false);             } catch (e) {}
@@ -56,8 +56,7 @@
 
     try { webgazer.clearData(); } catch(e) {}
 
-    // begin() returns a Promise — only fire cameraReady when it resolves
-    // (camera stream is actually open at this point, not just when the JS loaded)
+
     const p = webgazer.begin();
     const beginPromise = (p && typeof p.then === 'function') ? p : Promise.resolve();
 
