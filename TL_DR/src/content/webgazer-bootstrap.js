@@ -54,6 +54,8 @@
     }
     hideUI();
 
+    try { webgazer.clearData(); } catch(e) {}
+
     // begin() returns a Promise — only fire cameraReady when it resolves
     // (camera stream is actually open at this point, not just when the JS loaded)
     const p = webgazer.begin();

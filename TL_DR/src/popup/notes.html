@@ -7,248 +7,131 @@
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
 :root {
-  --bg:      #FAFAF7;
-  --surface: #FFFFFF;
-  --border:  rgba(26,126,93,0.14);
-  --text:    #2c2c2a;
-  --muted:   #7a7a72;
-  --accent:  #1A7E5D;
-  --accent2: #0f5c42;
-  --gold:    #C8A54B;
-  --serif:   'Merriweather', Georgia, serif;
-  --danger:  #c0392b;
+  --bg:#FAFAF7; --surface:#FFFFFF; --border:rgba(26,126,93,0.14);
+  --text:#2c2c2a; --muted:#7a7a72; --accent:#1A7E5D; --accent2:#0f5c42;
+  --gold:#C8A54B; --serif:'Merriweather',Georgia,serif; --danger:#c0392b;
 }
+body { background:var(--bg); color:var(--text); font-family:var(--serif); min-height:100vh; }
 
-body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--serif);
-  min-height: 100vh;
-}
-
-/* ── Header ── */
 .header {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 18px 32px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  background:var(--surface); border-bottom:1px solid var(--border);
+  padding:18px 32px; display:flex; align-items:center;
+  justify-content:space-between; position:sticky; top:0; z-index:10;
 }
-.header-left { display: flex; align-items: center; gap: 14px; }
-.logo-img { width: 32px; height: 32px; border-radius: 8px; }
-.logo-text { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
-.logo-sub  { font-size: 12px; color: var(--muted); font-style: italic; }
-.header-right { display: flex; align-items: center; gap: 10px; }
+.header-left { display:flex; align-items:center; gap:14px; }
+.logo-img { width:32px; height:32px; border-radius:8px; }
+.logo-text { font-size:20px; font-weight:700; letter-spacing:-0.3px; }
+.logo-sub  { font-size:12px; color:var(--muted); font-style:italic; }
+.header-right { display:flex; align-items:center; gap:10px; }
+
 .btn {
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: none;
-  cursor: pointer;
-  font-family: var(--serif);
-  font-size: 13px;
-  transition: opacity 0.15s, transform 0.12s;
+  padding:8px 16px; border-radius:8px; border:none; cursor:pointer;
+  font-family:var(--serif); font-size:13px; transition:opacity 0.15s,transform 0.12s;
 }
-.btn:hover { opacity: 0.85; transform: translateY(-1px); }
-.btn-primary   { background: var(--accent); color: white; }
-.btn-ghost     { background: transparent; color: var(--muted); border: 1px solid var(--border); }
-.btn-danger    { background: transparent; color: var(--danger); border: 1px solid rgba(192,57,43,0.2); }
-.btn-danger:hover { background: rgba(192,57,43,0.06); }
+.btn:hover { opacity:0.85; transform:translateY(-1px); }
+.btn-primary   { background:var(--accent); color:white; }
+.btn-ghost     { background:transparent; color:var(--muted); border:1px solid var(--border); }
+.btn-danger    { background:transparent; color:var(--danger); border:1px solid rgba(192,57,43,0.2); }
+.btn-danger:hover { background:rgba(192,57,43,0.06); }
 
-/* ── Layout ── */
-.container { max-width: 860px; margin: 0 auto; padding: 32px 24px; }
+.container { max-width:860px; margin:0 auto; padding:32px 24px; }
 
-/* ── Stats bar ── */
 .stats-bar {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  margin-bottom: 28px;
-  padding: 14px 20px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  display:flex; align-items:center; gap:24px; margin-bottom:28px;
+  padding:14px 20px; background:var(--surface);
+  border:1px solid var(--border); border-radius:12px;
 }
-.stat { display: flex; flex-direction: column; gap: 2px; }
-.stat-value { font-size: 22px; font-weight: 700; color: var(--accent); }
-.stat-label { font-size: 11px; color: var(--muted); font-style: italic; }
-.stats-divider { width: 1px; height: 36px; background: var(--border); }
-.search-wrap { flex: 1; }
+.stat { display:flex; flex-direction:column; gap:2px; }
+.stat-value { font-size:22px; font-weight:700; color:var(--accent); }
+.stat-label { font-size:11px; color:var(--muted); font-style:italic; }
+.stats-divider { width:1px; height:36px; background:var(--border); }
+.search-wrap { flex:1; }
 .search-input {
-  width: 100%;
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  font-family: var(--serif);
-  font-size: 13px;
-  color: var(--text);
-  outline: none;
+  width:100%; padding:8px 14px; border-radius:8px;
+  border:1px solid var(--border); background:var(--bg);
+  font-family:var(--serif); font-size:13px; color:var(--text); outline:none;
 }
-.search-input:focus { border-color: var(--accent); }
+.search-input:focus { border-color:var(--accent); }
 
-/* ── Filter tabs ── */
-.filter-row {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 20px;
-  flex-wrap: wrap;
-}
+.filter-row { display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap; }
 .filter-tab {
-  padding: 5px 14px;
-  border-radius: 20px;
-  border: 1px solid var(--border);
-  background: transparent;
-  font-family: var(--serif);
-  font-size: 12px;
-  font-style: italic;
-  color: var(--muted);
-  cursor: pointer;
-  transition: all 0.15s;
+  padding:5px 14px; border-radius:20px; border:1px solid var(--border);
+  background:transparent; font-family:var(--serif); font-size:12px;
+  font-style:italic; color:var(--muted); cursor:pointer; transition:all 0.15s;
 }
-.filter-tab:hover  { border-color: var(--accent); color: var(--accent); }
-.filter-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+.filter-tab:hover  { border-color:var(--accent); color:var(--accent); }
+.filter-tab.active { background:var(--accent); color:white; border-color:var(--accent); }
 
-/* ── Empty state ── */
-.empty {
-  text-align: center;
-  padding: 80px 20px;
-  color: var(--muted);
-}
-.empty-icon { font-size: 48px; margin-bottom: 16px; }
-.empty-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; color: var(--text); }
-.empty-sub   { font-size: 14px; font-style: italic; }
+.empty { text-align:center; padding:80px 20px; color:var(--muted); }
+.empty-icon  { font-size:48px; margin-bottom:16px; }
+.empty-title { font-size:18px; font-weight:700; margin-bottom:8px; color:var(--text); }
+.empty-sub   { font-size:14px; font-style:italic; }
 
-/* ── Note cards ── */
-.notes-grid { display: flex; flex-direction: column; gap: 14px; }
+.notes-grid { display:flex; flex-direction:column; gap:14px; }
 
 .note-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px 20px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-  position: relative;
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:12px; padding:18px 20px; transition:border-color 0.15s,box-shadow 0.15s;
+  position:relative;
 }
-.note-card:hover { border-color: rgba(26,126,93,0.3); box-shadow: 0 2px 12px rgba(26,126,93,0.07); }
-
-.note-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-.note-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.note-card:hover { border-color:rgba(26,126,93,0.3); box-shadow:0 2px 12px rgba(26,126,93,0.07); }
+.note-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.note-meta   { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 
 .note-badge {
-  font-size: 10px;
-  font-style: italic;
-  padding: 2px 8px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  color: var(--accent);
-  background: rgba(26,126,93,0.06);
+  font-size:10px; font-style:italic; padding:2px 8px; border-radius:4px;
+  border:1px solid var(--border); color:var(--accent); background:rgba(26,126,93,0.06);
 }
-.note-badge.selection   { color: #2563a8; border-color: rgba(37,99,168,0.2); background: rgba(37,99,168,0.06); }
-.note-badge.confused    { color: #a06000; border-color: rgba(160,96,0,0.2);  background: rgba(160,96,0,0.06); }
-.note-badge.overloaded  { color: #8b2000; border-color: rgba(139,32,0,0.2);  background: rgba(139,32,0,0.06); }
-.note-badge.explain_code { color: #5a3e8a; border-color: rgba(90,62,138,0.2); background: rgba(90,62,138,0.06); }
+.note-badge.selection    { color:#2563a8; border-color:rgba(37,99,168,0.2);  background:rgba(37,99,168,0.06); }
+.note-badge.confused     { color:#a06000; border-color:rgba(160,96,0,0.2);   background:rgba(160,96,0,0.06); }
+.note-badge.overloaded   { color:#8b2000; border-color:rgba(139,32,0,0.2);   background:rgba(139,32,0,0.06); }
+.note-badge.explain_code { color:#5a3e8a; border-color:rgba(90,62,138,0.2);  background:rgba(90,62,138,0.06); }
 
-.note-date { font-size: 11px; color: var(--muted); font-style: italic; }
-.note-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
-.note-card:hover .note-actions { opacity: 1; }
+.note-date { font-size:11px; color:var(--muted); font-style:italic; }
+.note-actions { display:flex; gap:4px; opacity:0; transition:opacity 0.15s; }
+.note-card:hover .note-actions { opacity:1; }
 .note-action-btn {
-  width: 28px; height: 28px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 13px;
-  transition: all 0.12s;
+  width:28px; height:28px; border-radius:6px; border:1px solid var(--border);
+  background:transparent; color:var(--muted); cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  font-size:13px; transition:all 0.12s;
 }
-.note-action-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(26,126,93,0.05); }
-.note-action-btn.delete:hover { border-color: var(--danger); color: var(--danger); background: rgba(192,57,43,0.05); }
+.note-action-btn:hover       { border-color:var(--accent); color:var(--accent); background:rgba(26,126,93,0.05); }
+.note-action-btn.delete:hover { border-color:var(--danger); color:var(--danger); background:rgba(192,57,43,0.05); }
 
 .note-text {
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--text);
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
+  font-size:14px; line-height:1.7; color:var(--text);
+  overflow:hidden; display:-webkit-box;
+  -webkit-line-clamp:4; -webkit-box-orient:vertical;
 }
-.note-text.expanded { -webkit-line-clamp: unset; }
-.note-text blockquote {
-  border-left: 3px solid var(--accent);
-  padding-left: 12px;
-  color: var(--muted);
-  font-style: italic;
-  margin: 8px 0;
-}
-
+.note-text.expanded { -webkit-line-clamp:unset; }
 .note-expand-btn {
-  background: none;
-  border: none;
-  color: var(--accent);
-  font-family: var(--serif);
-  font-size: 12px;
-  font-style: italic;
-  cursor: pointer;
-  margin-top: 6px;
-  padding: 0;
+  background:none; border:none; color:var(--accent);
+  font-family:var(--serif); font-size:12px; font-style:italic;
+  cursor:pointer; margin-top:6px; padding:0;
 }
-
 .note-source {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--muted);
-  font-style: italic;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin-top:10px; padding-top:10px; border-top:1px solid var(--border);
+  font-size:11px; color:var(--muted); font-style:italic;
 }
-.note-source a { color: var(--accent); text-decoration: none; }
-.note-source a:hover { text-decoration: underline; }
 
-/* ── Toast notification ── */
 .toast {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  background: var(--text);
-  color: white;
-  padding: 10px 18px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-style: italic;
-  z-index: 100;
-  opacity: 0;
-  transform: translateY(8px);
-  transition: opacity 0.2s, transform 0.2s;
-  pointer-events: none;
+  position:fixed; bottom:24px; right:24px; background:var(--text);
+  color:white; padding:10px 18px; border-radius:8px;
+  font-size:13px; font-style:italic; z-index:100;
+  opacity:0; transform:translateY(8px);
+  transition:opacity 0.2s,transform 0.2s; pointer-events:none;
 }
-.toast.show { opacity: 1; transform: none; }
-
-/* ── Loading ── */
-.loading { text-align: center; padding: 60px; color: var(--muted); font-style: italic; }
+.toast.show { opacity:1; transform:none; }
+.loading { text-align:center; padding:60px; color:var(--muted); font-style:italic; }
 </style>
 </head>
 <body>
 
 <header class="header">
   <div class="header-left">
-    <img id="sra-logo-img" class="logo-img" src="../../assets/tldr.png" alt="TL;DR" width="60" height="60">
+    <img id="logo-img" class="logo-img" src="../assets/tldr.png" alt="TL;DR">
     <div>
       <div class="logo-text">TL;DR</div>
       <div class="logo-sub">My Saved Notes</div>
@@ -257,7 +140,7 @@ body {
   <div class="header-right">
     <button class="btn btn-ghost" id="exportBtn">Export JSON</button>
     <button class="btn btn-danger" id="clearAllBtn">Clear All</button>
-    <button class="btn btn-primary" onclick="window.close()">Done</button>
+    <button class="btn btn-primary" id="doneBtn">Done</button>
   </div>
 </header>
 
@@ -274,8 +157,7 @@ body {
     </div>
     <div class="stats-divider"></div>
     <div class="search-wrap">
-      <input class="search-input" id="searchInput" type="text"
-        placeholder="Search notes...">
+      <input class="search-input" id="searchInput" type="text" placeholder="Search notes...">
     </div>
   </div>
 
@@ -293,217 +175,6 @@ body {
 
 <div class="toast" id="toast"></div>
 
-<script>
-// Fix logo for extension context
-try {
-  document.getElementById('logo-img').src = chrome.runtime.getURL('assets/tldr.png');
-} catch(e) {}
-
-let allNotes = [];
-let activeFilter = 'all';
-let searchQuery = '';
-
-// ── Load notes ────────────────────────────────────────────────────────────
-function loadNotes() {
-  chrome.storage.local.get({ sra_notes: [] }, (res) => {
-    allNotes = res.sra_notes || [];
-    renderAll();
-  });
-}
-
-// ── Render ────────────────────────────────────────────────────────────────
-function renderAll() {
-  const today = new Date().toDateString();
-  document.getElementById('totalCount').textContent = allNotes.length;
-  document.getElementById('todayCount').textContent =
-    allNotes.filter(n => new Date(n.id).toDateString() === today).length;
-
-  let filtered = [...allNotes];
-
-  // Filter by source/mode
-  if (activeFilter !== 'all') {
-    filtered = filtered.filter(n => {
-      const src  = n.meta?.source || '';
-      const mode = n.meta?.mode   || '';
-      if (activeFilter === 'selection') return src === 'selection' && mode !== 'explain_code';
-      if (activeFilter === 'gaze')      return src === 'gaze';
-      if (activeFilter === 'explain_code') return mode === 'explain_code';
-      return true;
-    });
-  }
-
-  // Search filter
-  if (searchQuery.trim()) {
-    const q = searchQuery.toLowerCase();
-    filtered = filtered.filter(n =>
-      (n.text || '').toLowerCase().includes(q)
-    );
-  }
-
-  const container = document.getElementById('notesContainer');
-
-  if (filtered.length === 0) {
-    container.innerHTML = `
-      <div class="empty">
-        <div class="empty-icon">${allNotes.length === 0 ? '📖' : '🔍'}</div>
-        <div class="empty-title">${allNotes.length === 0 ? 'No notes yet' : 'No results'}</div>
-        <div class="empty-sub">${allNotes.length === 0
-          ? 'Select text on any page and click "Save Note" in the popup.'
-          : 'Try a different search or filter.'
-        }</div>
-      </div>`;
-    return;
-  }
-
-  container.innerHTML = '';
-  const grid = document.createElement('div');
-  grid.className = 'notes-grid';
-
-  filtered.forEach((note, i) => {
-    const card = buildCard(note, i);
-    grid.appendChild(card);
-  });
-
-  container.appendChild(grid);
-}
-
-function buildCard(note, idx) {
-  const card = document.createElement('div');
-  card.className = 'note-card';
-
-  const src     = note.meta?.source || 'selection';
-  const mode    = note.meta?.mode   || 'tldr';
-  const trigger = note.meta?.trigger || '';
-
-  const badgeClass = trigger || mode;
-  const badgeText  = {
-    selection:    'selected text',
-    gaze:         'eye-triggered',
-    explain_code: 'code',
-    confused:     'confused',
-    overloaded:   'overloaded',
-    tldr:         'tldr',
-    explain_more: 'explanation',
-    simplify:     'simplified',
-  }[badgeClass] || badgeClass;
-
-  const date = new Date(note.id);
-  const dateStr = isNaN(date) ? '' : date.toLocaleDateString(undefined, {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-  });
-
-  const text = (note.text || '').trim();
-  const isLong = text.length > 300;
-
-  card.innerHTML = `
-    <div class="note-header">
-      <div class="note-meta">
-        <span class="note-badge ${badgeClass}">${badgeText}</span>
-        <span class="note-date">${dateStr}</span>
-      </div>
-      <div class="note-actions">
-        <button class="note-action-btn" title="Copy text" data-action="copy">⧉</button>
-        <button class="note-action-btn delete" title="Delete note" data-action="delete">✕</button>
-      </div>
-    </div>
-    <div class="note-text" id="nt-${note.id}">${escapeHtml(text)}</div>
-    ${isLong ? `<button class="note-expand-btn" data-id="${note.id}">Read more</button>` : ''}
-    ${window.location.href ? `<div class="note-source">Saved from this session</div>` : ''}`;
-
-  // Copy button
-  card.querySelector('[data-action="copy"]').addEventListener('click', () => {
-    navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'));
-  });
-
-  // Delete button
-  card.querySelector('[data-action="delete"]').addEventListener('click', () => {
-    deleteNote(note.id);
-  });
-
-  // Expand button
-  const expandBtn = card.querySelector('.note-expand-btn');
-  if (expandBtn) {
-    expandBtn.addEventListener('click', () => {
-      const textEl = card.querySelector('.note-text');
-      const isExpanded = textEl.classList.toggle('expanded');
-      expandBtn.textContent = isExpanded ? 'Show less' : 'Read more';
-    });
-  }
-
-  return card;
-}
-
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, c =>
-    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
-}
-
-// ── Actions ───────────────────────────────────────────────────────────────
-function deleteNote(id) {
-  allNotes = allNotes.filter(n => n.id !== id);
-  chrome.storage.local.set({ sra_notes: allNotes }, () => {
-    renderAll();
-    showToast('Note deleted');
-  });
-}
-
-document.getElementById('clearAllBtn').addEventListener('click', () => {
-  if (!confirm('Delete all saved notes? This cannot be undone.')) return;
-  chrome.storage.local.set({ sra_notes: [] }, () => {
-    allNotes = [];
-    renderAll();
-    showToast('All notes cleared');
-  });
-});
-
-document.getElementById('exportBtn').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify(allNotes, null, 2)], { type: 'application/json' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href = url;
-  a.download = `tldr-notes-${new Date().toISOString().slice(0,10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-  showToast('Notes exported');
-});
-
-// ── Filters ───────────────────────────────────────────────────────────────
-document.getElementById('filterRow').addEventListener('click', (e) => {
-  const tab = e.target.closest('.filter-tab');
-  if (!tab) return;
-  document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
-  tab.classList.add('active');
-  activeFilter = tab.dataset.filter;
-  renderAll();
-});
-
-// ── Search ────────────────────────────────────────────────────────────────
-let searchTimer;
-document.getElementById('searchInput').addEventListener('input', (e) => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    searchQuery = e.target.value;
-    renderAll();
-  }, 200);
-});
-
-// ── Toast ─────────────────────────────────────────────────────────────────
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2200);
-}
-
-// ── Real-time updates when notes change from another tab ──────────────────
-chrome.storage.onChanged.addListener((changes) => {
-  if (changes.sra_notes) {
-    allNotes = changes.sra_notes.newValue || [];
-    renderAll();
-  }
-});
-
-loadNotes();
-</script>
+<script src="notes.js"></script>
 </body>
 </html>
