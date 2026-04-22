@@ -1,10 +1,10 @@
-# <img src="TL_DR/assets/tldr.png" width="5%" />    TL;DR — Cognitive-Aware AI Reading Assistant And Content Summarizer   
+# <img src="TL_DR/assets/tldr.png" width="5%" />    TL;DR — Cognitive-Aware AI Reading Assistant And Content Summarizer    
       
 > An AI + gaze-driven adaptive reading and coding companion. 
-  
+    
 --- 
-
-## 🚀 Overview
+ 
+## 🚀 Overview 
 
 **TL;DR** is a browser extension that enhances comprehension by analyzing reading patterns (via eye tracking) and dynamically adapting explanations, focus, and study flow in real time.
 
