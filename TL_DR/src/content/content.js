@@ -44,6 +44,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let pdfHandler         = null;
   let pptxHandler        = null;
   let cameraIsReady      = false;
+  let idleBlinkEnabled   = true;
+  let lastGazeReceivedAt = Date.now();  // tracks when we last got a real gaze point
 
   // Expose restart hook for the double-injection guard above
   window.__sra_restart_tracker = () => { window.__sra_tracker_started = false; startTracker(); };
@@ -63,6 +65,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const gazeUtils    = await loadModule('src/content/gaze-utils.js');
   const overlayUtils = await loadModule('src/content/overlay-utils.js');
   const featModule   = await loadModule('src/content/gaze-features.js');
+  const idleModule   = await loadModule('src/content/idle-overlay.js');
+  const { updateIdleState, forceStopIdle } = idleModule;
   const classModule  = await loadModule('src/content/classifier.js');
 
   const featureExtractor = featModule.createFeatureExtractor({ windowMs: 2500, minPoints: 15 });
@@ -72,7 +76,7 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   chrome.storage.local.get({
     sra_backend_url: BACKEND_DEFAULT, sra_eye: true, sra_selection: true,
     sra_highlight_para: true, sra_autohide: false, sra_autohide_timeout: 12,
-    sra_pin_default: false, sra_debug: false,
+    sra_pin_default: false, sra_debug: false, sra_idle_blink: true,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     eyeTrackingEnabled = res.sra_eye !== false;
@@ -324,6 +328,7 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
     pt.y = clamp(pt.y, 0, window.innerHeight - 1);
     if (!gazeUtils.checkVelocity(gazeState, pt)) return;
     lastGazePt = pt;
+    lastGazeReceivedAt = Date.now();
     featureExtractor.addPoint(pt);
     try { const f = await findParagraphAt(pt.x, pt.y); if (f) currentParagraph = f; } catch (e) {}
   }
@@ -341,6 +346,10 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
       // Store so popup can read it
       chrome.storage.local.set({ sra_current_state: label });
       if (debugEnabled) _log(`State: ${label} (${(confidence*100).toFixed(0)}%)`);
+      // Update idle overlay (blinking edges when not looking at screen)
+      if (idleBlinkEnabled) updateIdleState(features, lastGazePt, lastGazeReceivedAt);
+      else forceStopIdle();
+
       const action = COGNITIVE_STATE_ACTIONS[label];
       const now    = Date.now();
       if (action === 'none' || now - lastActionAt < ACTION_COOLDOWN) return;
@@ -441,13 +450,17 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
     if (!msg?.type) return;
 
     if (msg.type === 'settings') {
-      if (msg.eye           !== undefined) eyeTrackingEnabled = !!msg.eye;
+      if (msg.eye           !== undefined) {
+        eyeTrackingEnabled = !!msg.eye;
+        if (!eyeTrackingEnabled) forceStopIdle();
+      }
       if (msg.selection     !== undefined) selectionEnabled   = !!msg.selection;
       if (msg.highlightPara !== undefined) highlightEnabled   = !!msg.highlightPara;
       if (msg.autohide      !== undefined) autohideEnabled    = !!msg.autohide;
       if (msg.autohideTimeout !== undefined) autohideTimeoutSec = Number(msg.autohideTimeout) || 12;
       if (msg.pinDefault    !== undefined) pinDefault         = !!msg.pinDefault;
       if (msg.debug         !== undefined) debugEnabled       = !!msg.debug;
+      if (msg.idleBlink     !== undefined) { idleBlinkEnabled = !!msg.idleBlink; if (!idleBlinkEnabled) forceStopIdle(); }
       if (msg.backendUrl)                  backendUrl         = msg.backendUrl;
       try { window.postMessage({ source:'sra-control', type:'setPredictionPoints', enabled:!!debugEnabled },'*'); } catch(e){}
       sendResponse({ status: 'ok' }); return;
