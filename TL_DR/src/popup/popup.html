@@ -246,12 +246,6 @@
     <span class="state-badge" id="cogStateChip">—</span>
   </div>
 
-     <div class="section" style="padding:8px 14px">
-    <button class="btn btn-ghost" id="notesBtn" style="width:100%;justify-content:center;gap:8px;font-size:12px">
-      View Saved Notes
-    </button>
-  </div>
-
   <div class="section">
     <div class="section-label">Features</div>
 
@@ -302,6 +296,14 @@
       </div>
       <label class="pill"><input type="checkbox" id="debugTogglePopup"><span class="pill-track"></span></label>
     </label>
+
+    <label class="toggle-row" for="idleBlinkToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Idle Edge Pulse</span>
+        <span class="toggle-desc">Blink edges when you look away</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="idleBlinkToggle" checked><span class="pill-track"></span></label>
+    </label>
   </div>
 
   <div class="section">
@@ -347,6 +349,12 @@
         Simulate: Overloaded
       </button>
     </div>
+  </div>
+
+    <div class="section" style="padding:8px 14px">
+    <button class="btn btn-ghost" id="notesBtn" style="width:100%;justify-content:center;gap:8px;font-size:12px">
+      View Saved Notes
+    </button>
   </div>
 
   <div class="footer">

@@ -20,6 +20,28 @@
      (at 30fps over 2.5s = ~75 points, 4 is a low bar — won't discard real data)
 */
 
+/* gaze-features.js — v2 with DBSCAN noise filtering
+   
+   What changed from v1:
+   Every 2.5 seconds, before computing the 9 features, we run a lightweight
+   DBSCAN pass on the raw gaze buffer. Points that are isolated (noise from
+   head movement, frame artifacts, iris detection errors) get discarded.
+   Only the core cluster — your actual gaze positions — feeds into the features.
+
+   Why DBSCAN fits this problem:
+   - Real gaze positions cluster spatially (you're looking at a paragraph)
+   - Noise is scattered outliers far from the cluster
+   - DBSCAN identifies and discards outliers without assuming any shape
+   - It has high noise tolerance — it doesn't need the data to be normally distributed
+   - It handles the case where you're reading across a line (elongated cluster)
+     better than a circle-based filter would
+
+   Parameters chosen for 30fps webcam gaze:
+   - eps: 80px  — two points within 80px are neighbours (one paragraph ~400px wide)
+   - minPts: 4  — need at least 4 nearby points to form a cluster core
+     (at 30fps over 2.5s = ~75 points, 4 is a low bar — won't discard real data)
+*/
+
 // ── Lightweight DBSCAN for 2D gaze points ─────────────────────────────────────
 function dbscan(points, eps, minPts) {
   const n       = points.length;
