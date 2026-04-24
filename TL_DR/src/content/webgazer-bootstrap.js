@@ -1,6 +1,10 @@
-// webgazer-bootstrap.js — Runs in PAGE context (not extension isolated world)
-// Handles all webgazer calls from page context since content script is isolated world.
-// Receives URL via data-webgazer-url attribute (CSP-safe).
+// webgazer-bootstrap.js
+// Runs in PAGE context. URL passed via data-webgazer-url attribute (CSP-safe).
+//
+// Key fix: this version no longer tries setTracker('clmtrackr') because newer
+// webgazer builds removed clmtrackr. Only TFFacemesh is available.
+// TFFacemesh downloads models from tfhub.dev — blocked by strict CSPs (Wikipedia etc).
+// We detect this failure and report a clear, actionable error.
 
 (() => {
   if (window.__sra_webgazer_bootstrap_loaded) return;
@@ -10,90 +14,124 @@
   const wgUrl    = scriptEl && scriptEl.dataset && scriptEl.dataset.webgazerUrl;
 
   if (!wgUrl) {
-    console.warn('[TL;DR] bootstrap: missing data-webgazer-url');
+    console.warn('[TL;DR] bootstrap: missing data-webgazer-url attribute');
     return;
   }
 
-  const s = document.createElement('script');
-  s.src   = wgUrl;
+  // ── Secure context check ────────────────────────────────────────────────
+  // WebGazer requires HTTPS or localhost. HTTP pages will always fail.
+  if (!window.isSecureContext) {
+    const msg = 'WebGazer requires HTTPS or localhost. This page uses plain HTTP — eye tracking cannot start here. Try a different page.';
+    console.warn('[TL;DR]', msg);
+    window.postMessage({ source: 'sra-control', type: 'cameraError', error: msg, code: 'insecure-context' }, '*');
+    return;
+  }
 
-  s.onload = function () {
-    if (typeof webgazer === 'undefined') {
-      console.warn('[TL;DR] webgazer not defined after load');
-      window.postMessage({ source: 'sra-control', type: 'cameraError', error: 'not defined' }, '*');
-      return;
-    }
+  // ── CSP pre-check: can we reach tfhub.dev? ─────────────────────────────
+  // TFFacemesh (the only tracker in newer webgazer builds) downloads models
+  // from tfhub.dev. Sites like Wikipedia, GitHub, and MDN block this domain
+  // in their Content Security Policy. We detect this upfront and show a
+  // clear error instead of letting WebGazer fail with a pile of console noise.
+  const testUrl = 'https://tfhub.dev/favicon.ico';
+  fetch(testUrl, { method: 'HEAD', mode: 'no-cors' })
+    .then(() => {
+      // tfhub.dev is reachable — proceed with loading WebGazer
+      loadWebgazer(wgUrl);
+    })
+    .catch(() => {
+      // tfhub.dev is blocked by CSP on this page
+      const msg = "This page's Content Security Policy blocks tfhub.dev (required for WebGazer's face detector). Eye tracking won't work here. Try using TL;DR on a news article, documentation site, or any page without strict CSP.";
+      console.warn('[TL;DR]', msg);
+      window.postMessage({
+        source: 'sra-control',
+        type:   'cameraError',
+        error:  msg,
+        code:   'csp-blocks-tfhub',
+      }, '*');
+    });
 
-    // Use clmtrackr — fully bundled, no external model downloads (no tfhub.dev CSP issues)
-    // TFFaceMesh (default) downloads 3 neural nets from tfhub.dev which strict CSPs block.
-    try {
-      if (typeof webgazer.setTracker === 'function') {
-        webgazer.setTracker('clmtrackr');
-        console.log('[TL;DR] tracker: clmtrackr');
-      }
-    } catch (e) {
-      console.warn('[TL;DR] clmtrackr unavailable:', e.message);
-    }
+  function loadWebgazer(url) {
+    const s = document.createElement('script');
+    s.src   = url;
 
-    // Ridge regression is the best option for online learning from click data
-    try { webgazer.setRegression('ridge'); } catch (e) {}
-
-    // Gaze listener — forward to content script via postMessage
-    try {
-      webgazer.setGazeListener(function (data) {
-        try { window.postMessage({ source: 'sra-webgazer', gaze: data }, '*'); } catch (e) {}
-      });
-    } catch (e) {}
-
-  
-    function hideUI() {
-      try { webgazer.showPredictionPoints(false); } catch (e) {}
-      try { webgazer.showVideo(false);             } catch (e) {}
-      try { webgazer.showFaceOverlay(false);       } catch (e) {}
-      try { webgazer.showFaceFeedbackBox(false);   } catch (e) {}
-    }
-    hideUI();
-
-    try { webgazer.clearData(); } catch(e) {}
-
-
-    const p = webgazer.begin();
-    const beginPromise = (p && typeof p.then === 'function') ? p : Promise.resolve();
-
-    beginPromise
-      .then(function () {
-        hideUI();
-        console.log('[TL;DR] webgazer.begin() resolved — camera open');
-        window.postMessage({ source: 'sra-control', type: 'cameraReady' }, '*');
-      })
-      .catch(function (err) {
-        const msg = err?.message || String(err);
-        console.warn('[TL;DR] webgazer.begin() failed:', msg);
+    s.onload = function () {
+      if (typeof webgazer === 'undefined') {
+        const msg = 'webgazer loaded but window.webgazer is not defined';
+        console.warn('[TL;DR]', msg);
         window.postMessage({ source: 'sra-control', type: 'cameraError', error: msg }, '*');
+        return;
+      }
+
+      // List available trackers for debugging
+      try {
+        const trackers = webgazer.getTrackerNames ? webgazer.getTrackerNames() : ['TFFacemesh'];
+        console.log('[TL;DR] WebGazer available trackers:', trackers);
+      } catch (e) {}
+
+      // Use TFFacemesh (the only option in newer webgazer builds)
+      // clmtrackr was removed in webgazer v2.1+
+      try { webgazer.setRegression('ridge'); } catch (e) {}
+
+      // Set gaze listener BEFORE begin()
+      try {
+        webgazer.setGazeListener(function (data) {
+          try { window.postMessage({ source: 'sra-webgazer', gaze: data }, '*'); } catch (e) {}
+        });
+      } catch (e) { console.warn('[TL;DR] setGazeListener failed:', e.message); }
+
+      // Hide all built-in UI
+      function hideUI() {
+        try { webgazer.showPredictionPoints(false);  } catch (e) {}
+        try { webgazer.showVideo(false);              } catch (e) {}
+        try { webgazer.showFaceOverlay(false);        } catch (e) {}
+        try { webgazer.showFaceFeedbackBox(false);    } catch (e) {}
+      }
+      hideUI();
+
+      // begin() returns a Promise — only fire cameraReady when resolved
+      let beginResult;
+      try { beginResult = webgazer.begin(); } catch (e) {
+        window.postMessage({ source: 'sra-control', type: 'cameraError', error: e.message }, '*');
+        return;
+      }
+
+      const p = (beginResult && typeof beginResult.then === 'function')
+        ? beginResult : Promise.resolve();
+
+      p.then(function () {
+        hideUI();
+        console.log('[TL;DR] WebGazer camera ready');
+        window.postMessage({ source: 'sra-control', type: 'cameraReady' }, '*');
+      }).catch(function (err) {
+        const msg = err && err.message ? err.message : String(err);
+        // "Failed to fetch" at this stage means tfhub.dev was blocked mid-load
+        const isCsp = msg.includes('fetch') || msg.includes('network');
+        const friendly = isCsp
+          ? "WebGazer's face detection model couldn't load (likely blocked by this page's CSP). Try a different page."
+          : msg;
+        console.warn('[TL;DR] webgazer.begin() failed:', friendly);
+        window.postMessage({ source: 'sra-control', type: 'cameraError', error: friendly }, '*');
       });
-  };
+    };
 
-  s.onerror = function () {
-    console.warn('[TL;DR] Failed to load webgazer from:', wgUrl);
-    window.postMessage({ source: 'sra-control', type: 'cameraError', error: 'load failed' }, '*');
-  };
+    s.onerror = function () {
+      const msg = 'Failed to load webgazer bundle from: ' + url;
+      console.warn('[TL;DR]', msg);
+      window.postMessage({ source: 'sra-control', type: 'cameraError', error: msg }, '*');
+    };
 
-  // ── Message bridge ─────────────────────────────────────────────────────────
-  // Handles messages from gaze-utils.js (content script isolated world)
-  // so it can call webgazer methods that only exist in page context.
+    (document.head || document.documentElement).appendChild(s);
+  }
+
+  // ── Message bridge (page context → calibration calls) ───────────────────
   window.addEventListener('message', function (ev) {
     if (!ev.data || ev.source !== window) return;
     const d = ev.data;
 
-    // Calibration: record a click at a known screen position (trains the model)
     if (d.source === 'sra-cal-record' && typeof d.x === 'number') {
-      try {
-        webgazer.recordScreenPosition(d.x, d.y, 'click');
-      } catch (e) {}
+      try { webgazer.recordScreenPosition(d.x, d.y, 'click'); } catch (e) {}
       return;
     }
-
-    // Calibration: get current prediction for offset calculation
     if (d.source === 'sra-cal-predict' && d.sra_pred_id) {
       try {
         const pred = webgazer.getCurrentPrediction ? webgazer.getCurrentPrediction() : null;
@@ -103,23 +141,16 @@
       }
       return;
     }
-
-    // Calibration: ping to check if webgazer is available
     if (d.source === 'sra-cal-ping' && d.sra_ping_id) {
       window.postMessage({
-        source:     'sra-cal-pong',
-        sra_ping_id: d.sra_ping_id,
-        available:  typeof webgazer !== 'undefined',
+        source: 'sra-cal-pong', sra_ping_id: d.sra_ping_id,
+        available: typeof webgazer !== 'undefined',
       }, '*');
       return;
     }
-
-    // Debug toggle: show/hide prediction dot
     if (d.source === 'sra-control' && d.type === 'setPredictionPoints') {
       try { webgazer.showPredictionPoints(!!d.enabled); } catch (e) {}
-      return;
     }
   }, false);
 
-  (document.head || document.documentElement).appendChild(s);
 })();
