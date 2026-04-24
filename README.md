@@ -1,5 +1,4 @@
-# <img src="TL_DR/assets/tldr.png" width="5%" /> 
-# TL;DR
+# <img src="TL_DR/assets/tldr.png" width="5%" />  TL;DR
 
 TL;DR is a Chrome extension that reads how you read. It uses your webcam to track your eye movements in real time, analyses those movements every 2.5 seconds to determine your cognitive state, and automatically delivers AI-generated assistance — summaries, explanations, or simplifications — for the exact paragraph you are struggling with.
 
