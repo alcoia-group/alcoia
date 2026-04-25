@@ -44,7 +44,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let pdfHandler         = null;
   let pptxHandler        = null;
   let cameraIsReady      = false;
-  let idleBlinkEnabled   = true;
+  let idleBlinkEnabled          = true;
+  let comprehensionCheckEnabled = true;
   let lastGazeReceivedAt = Date.now();  // tracks when we last got a real gaze point
 
   // Expose restart hook for the double-injection guard above
@@ -67,6 +68,14 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const featModule   = await loadModule('src/content/gaze-features.js');
   const idleModule   = await loadModule('src/content/idle-overlay.js');
   const { updateIdleState, forceStopIdle } = idleModule;
+  const compModule  = await loadModule('src/content/comprehension-monitor.js');
+  const comprehensionMonitor = compModule.createComprehensionMonitor({
+    speedRatio:     0.55,
+    minWords:       40,
+    minDifficulty:  40,
+    backtrackWindow:6000,
+    cooldown:       15000,
+  });
   const classModule  = await loadModule('src/content/classifier.js');
 
   const featureExtractor = featModule.createFeatureExtractor({ windowMs: 2500, minPoints: 15 });
@@ -76,7 +85,7 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   chrome.storage.local.get({
     sra_backend_url: BACKEND_DEFAULT, sra_eye: true, sra_selection: true,
     sra_highlight_para: true, sra_autohide: false, sra_autohide_timeout: 12,
-    sra_pin_default: false, sra_debug: false, sra_idle_blink: true,
+    sra_pin_default: false, sra_debug: false, sra_idle_blink: true, sra_comprehension: true,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     eyeTrackingEnabled = res.sra_eye !== false;
@@ -85,7 +94,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
     autohideEnabled    = !!res.sra_autohide;
     autohideTimeoutSec = res.sra_autohide_timeout || 12;
     pinDefault         = !!res.sra_pin_default;
-    debugEnabled       = !!res.sra_debug;
+    debugEnabled              = !!res.sra_debug;
+    comprehensionCheckEnabled = res.sra_comprehension !== false;
   });
 
   // ── Utilities ──────────────────────────────────────────────────────────
@@ -219,7 +229,89 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
 
   if (!window.__sra_esc_installed) {
     window.__sra_esc_installed = true;
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePopup(); });
+
+    document.addEventListener('keydown', async (e) => {
+      // Escape — close popup
+      if (e.key === 'Escape') { hidePopup(); return; }
+
+      // Keyboard shortcuts for simulating cognitive states (no modifier needed on F-keys)
+      // Alt+1 through Alt+5 to avoid clashing with browser or page shortcuts
+      // Alt+1 = confused, Alt+2 = overloaded, Alt+3 = zoning_out, Alt+4 = skimming, Alt+5 = focused
+      if (!e.altKey) return;
+
+      const stateMap = { '1': 'confused', '2': 'overloaded', '3': 'zoning_out', '4': 'skimming', '5': 'focused' };
+      const state = stateMap[e.key];
+      if (!state) return;
+
+      e.preventDefault();
+
+      // Show brief on-screen toast so user knows the shortcut fired
+      showSimulateToast(state);
+
+      // Reset cooldown and trigger
+      lastActionAt = 0;
+      lastCogState = state;
+      chrome.storage.local.set({ sra_current_state: state });
+
+      const action = COGNITIVE_STATE_ACTIONS[state];
+      if (action === 'explain' || action === 'simplify') {
+        const cx = window.innerWidth  / 2;
+        const cy = window.innerHeight / 2;
+        const para = await findParagraphAt(cx, cy);
+        if (para) { currentParagraph = para; await triggerAIForParagraph(para, state); }
+        else _warn('No paragraph found at viewport centre for simulate — scroll to a text area');
+      } else if (action === 'nudge') {
+        const el = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
+        showNudge(el);
+        if (el) highlightElement(el, 3000);
+      }
+    });
+  }
+
+  // ── Simulate toast — small on-screen indicator ─────────────────────────
+  function showSimulateToast(state) {
+    const existing = document.getElementById('sra-sim-toast');
+    if (existing) existing.remove();
+
+    const labels = {
+      confused:   '🤔 Simulating: Confused  (Alt+1)',
+      overloaded: '🧠 Simulating: Overloaded (Alt+2)',
+      zoning_out: '💤 Simulating: Zoning Out (Alt+3)',
+      skimming:   '⚡ Simulating: Skimming   (Alt+4)',
+      focused:    '✅ Simulating: Focused    (Alt+5)',
+    };
+
+    const toast = document.createElement('div');
+    toast.id = 'sra-sim-toast';
+    Object.assign(toast.style, {
+      position:       'fixed',
+      bottom:         '24px',
+      left:           '50%',
+      transform:      'translateX(-50%)',
+      background:     '#1A7E5D',
+      color:          'white',
+      padding:        '9px 20px',
+      borderRadius:   '8px',
+      fontFamily:     'Georgia, serif',
+      fontSize:       '13px',
+      fontStyle:      'italic',
+      zIndex:         '2147483646',
+      opacity:        '0',
+      transition:     'opacity 0.2s ease',
+      pointerEvents:  'none',
+      whiteSpace:     'nowrap',
+      boxShadow:      '0 4px 16px rgba(0,0,0,0.2)',
+    });
+    toast.textContent = labels[state] || state;
+    document.body.appendChild(toast);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => { toast.style.opacity = '1'; });
+    });
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => { try { toast.remove(); } catch(e){} }, 250);
+    }, 1800);
   }
 
   // ── Focus nudge ────────────────────────────────────────────────────────
@@ -330,7 +422,116 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
     lastGazePt = pt;
     lastGazeReceivedAt = Date.now();
     featureExtractor.addPoint(pt);
-    try { const f = await findParagraphAt(pt.x, pt.y); if (f) currentParagraph = f; } catch (e) {}
+    try {
+      const f = await findParagraphAt(pt.x, pt.y);
+      if (f) {
+        // Track paragraph entry for comprehension monitoring
+        if (comprehensionCheckEnabled && f.type === 'dom' && f.data !== (currentParagraph && currentParagraph.data)) {
+          // Leaving previous paragraph — check for speed mismatch
+          const signal = comprehensionMonitor.leaveParagraph();
+          if (signal) handleComprehensionSignal(signal);
+          // Entering new paragraph
+          comprehensionMonitor.enterParagraph(f.data);
+        }
+        currentParagraph = f;
+      }
+    } catch (e) {}
+  }
+
+  // ── Comprehension signal handler ──────────────────────────────────────────
+  async function handleComprehensionSignal(signal) {
+    if (!comprehensionCheckEnabled) return;
+
+    comprehensionMonitor.markOfferShown();
+
+    const el = (signal.type === 'speed_mismatch') ? signal.el
+              : (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
+
+    // Highlight the paragraph gently
+    if (el) highlightElement(el, 4000);
+
+    // Get the text — for backtrack we use the nearest paragraph
+    let text = signal.text || '';
+    if (!text && el) text = (el.innerText || el.textContent || '').trim();
+    if (!text) return;
+
+    // Get anchor rect
+    let anchorRect = null;
+    try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
+
+    // Build an offer popup — gentler than a forced summary
+    // Two buttons: "Summarise this" (fetches AI) or "I understood it" (dismisses)
+    const offerHtml = buildComprehensionOfferHtml(signal);
+
+    const root = getOrCreatePopup();
+    root.classList.remove('show');
+    root.style.display = 'none';
+    delete root.dataset.pinned;
+
+    root.innerHTML = `
+      <div class="sra-controls">
+        <button class="sra-ctrl-btn" id="sra-close-btn" title="Close">&#x2715;</button>
+      </div>
+      <div class="sra-popup-body">${offerHtml}</div>
+      <div class="sra-popup-divider"></div>
+      <div class="sra-actions">
+        <button class="sra-btn sra-btn-primary"   id="sra-comp-summarise">Summarise it</button>
+        <button class="sra-btn sra-btn-secondary"  id="sra-comp-dismiss">I understood it</button>
+      </div>`;
+
+    root.querySelector('#sra-close-btn').onclick = hidePopup;
+    root.querySelector('#sra-comp-dismiss').onclick = hidePopup;
+    root.querySelector('#sra-comp-summarise').onclick = async () => {
+      const btn = root.querySelector('#sra-comp-summarise');
+      btn.disabled = true;
+      btn.textContent = 'Thinking…';
+      const summary = await fetchSummary(text, 'explain_more');
+      if (summary) {
+        const body = root.querySelector('.sra-popup-body');
+        if (body) body.innerHTML = `<div class="sra-state-badge">comprehension assist</div><div>${esc(summary)}</div>`;
+        btn.textContent = 'Summarise it';
+        btn.disabled = false;
+        // Swap dismiss button to "Save Note"
+        const dismiss = root.querySelector('#sra-comp-dismiss');
+        if (dismiss) {
+          dismiss.textContent = 'Save Note';
+          dismiss.onclick = () => {
+            chrome.runtime.sendMessage({ action: 'saveNote', note: { text, meta: { source: 'comprehension', mode: 'explain_more' } } });
+            dismiss.textContent = 'Saved ✓';
+            dismiss.disabled = true;
+          };
+        }
+      }
+    };
+
+    clampToViewport(root, anchorRect);
+    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
+
+    clearTimeout(root._hideT);
+    if (autohideEnabled && root.dataset.pinned !== 'true')
+      root._hideT = setTimeout(hidePopup, Math.max(3, autohideTimeoutSec) * 1000);
+  }
+
+  function buildComprehensionOfferHtml(signal) {
+    if (signal.type === 'speed_mismatch') {
+      const r = signal.readability;
+      const pct = Math.round(signal.ratio * 100);
+      const secActual   = Math.round(signal.elapsed / 1000);
+      const secExpected = Math.round(signal.expected / 1000);
+      return `<div class="sra-state-badge" style="color:#a06000;border-color:rgba(160,96,0,0.3);background:rgba(160,96,0,0.06)">
+        reading pace check</div>
+        <div style="line-height:1.7">That was a <strong>complex paragraph</strong>
+        (readability score ${r.score.toFixed(0)}/100) but you moved through it
+        in ${secActual}s — expected at least ${secExpected}s for text this dense.
+        <br><em style="color:var(--muted)">Want a quick summary?</em></div>`;
+    }
+    if (signal.type === 'backtrack') {
+      return `<div class="sra-state-badge" style="color:#5a3e8a;border-color:rgba(90,62,138,0.3);background:rgba(90,62,138,0.06)">
+        scroll backtrack</div>
+        <div style="line-height:1.7">You scrolled back — looks like something might not have
+        landed clearly.<br><em style="color:var(--muted)">Want a summary of what you just passed?</em></div>`;
+    }
+    return '<div>Want a summary?</div>';
   }
 
   // ── Classification loop ────────────────────────────────────────────────
@@ -420,6 +621,15 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
     } catch (e) { _warn('startTracker failed:', e); }
   }
 
+  // Scroll backtrack detection (user scrolls back to re-read = comprehension signal)
+  window.addEventListener('scroll', () => {
+    if (!comprehensionCheckEnabled) return;
+    try {
+      const signal = comprehensionMonitor.onScroll();
+      if (signal) handleComprehensionSignal(signal);
+    } catch (e) {}
+  }, { passive: true });
+
   document.addEventListener('click', e => {
     try { if (window.webgazer) webgazer.recordScreenPosition(e.clientX, e.clientY, 'click'); } catch (e) {}
   });
@@ -461,6 +671,7 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
       if (msg.pinDefault    !== undefined) pinDefault         = !!msg.pinDefault;
       if (msg.debug         !== undefined) debugEnabled       = !!msg.debug;
       if (msg.idleBlink     !== undefined) { idleBlinkEnabled = !!msg.idleBlink; if (!idleBlinkEnabled) forceStopIdle(); }
+      if (msg.comprehension !== undefined) comprehensionCheckEnabled = !!msg.comprehension;
       if (msg.backendUrl)                  backendUrl         = msg.backendUrl;
       try { window.postMessage({ source:'sra-control', type:'setPredictionPoints', enabled:!!debugEnabled },'*'); } catch(e){}
       sendResponse({ status: 'ok' }); return;

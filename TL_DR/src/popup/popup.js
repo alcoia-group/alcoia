@@ -38,7 +38,8 @@ document.addEventListener('DOMContentLoaded', () => {
     timeoutRow.style.display   = res.sra_autohide ? 'flex' : 'none';
     pinDefaultToggle.checked   = res.sra_pin_default;
     debugTogglePopup.checked   = res.sra_debug;
-    if (idleBlinkToggle) idleBlinkToggle.checked = res.sra_idle_blink !== false;
+    if (idleBlinkToggle)     idleBlinkToggle.checked     = res.sra_idle_blink !== false;
+    if (comprehensionToggle) comprehensionToggle.checked = res.sra_comprehension !== false;
     assistantToggle.checked    = res.sra_enabled !== false;
 
     // Restore camera status from storage
@@ -108,7 +109,8 @@ document.addEventListener('DOMContentLoaded', () => {
       sra_pin_default:      pinDefaultToggle.checked,
       sra_debug:            debugTogglePopup.checked,
       sra_enabled:          assistantToggle.checked,
-      sra_idle_blink:       idleBlinkToggle ? idleBlinkToggle.checked : true,
+      sra_idle_blink:       idleBlinkToggle    ? idleBlinkToggle.checked    : true,
+      sra_comprehension:    comprehensionToggle ? comprehensionToggle.checked : true,
     };
     chrome.storage.local.set(s);
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -134,7 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timeoutRow.style.display = autohideToggle.checked ? 'flex' : 'none';
     saveAndBroadcast();
   });
-  [eyeToggle, selToggle, highlightToggle, pinDefaultToggle, debugTogglePopup, idleBlinkToggle]
+  [eyeToggle, selToggle, highlightToggle, pinDefaultToggle, debugTogglePopup, idleBlinkToggle, comprehensionToggle]
     .filter(Boolean).forEach(el => el.addEventListener('change', saveAndBroadcast));
   backendUrlInput.addEventListener('change', saveAndBroadcast);
   autohideTimeout.addEventListener('change', saveAndBroadcast);
