@@ -70,6 +70,16 @@ function expectedReadingMs(readability) {
 }
 
 // ── Paragraph tracker ──────────────────────────────────────────────────────────
+// Only run FK formula on English pages — it produces meaningless scores otherwise
+function isEnglishPage() {
+  const lang = (
+    document.documentElement.lang ||
+    document.querySelector('meta[http-equiv="content-language"]')?.content ||
+    navigator.language || 'en'
+  ).toLowerCase().slice(0, 2);
+  return lang === 'en' || lang === '';
+}
+
 export function createComprehensionMonitor(opts = {}) {
   const SPEED_RATIO_THRESHOLD = opts.speedRatio     || 0.55; // below 55% of expected time = too fast
   const MIN_WORD_COUNT        = opts.minWords        || 40;   // ignore very short paragraphs
@@ -103,7 +113,8 @@ export function createComprehensionMonitor(opts = {}) {
     const ratio    = elapsed / expected;
 
     // Only flag genuinely difficult text that was read suspiciously fast
-    if (entry.readability.score > MIN_DIFFICULTY) return null; // not difficult enough
+    if (!isEnglishPage())                          return null; // FK formula not valid for this language
+    if (entry.readability.score > MIN_DIFFICULTY)  return null; // not difficult enough
     if (ratio >= SPEED_RATIO_THRESHOLD)            return null; // read at acceptable speed
     if (Date.now() - lastOfferAt < COOLDOWN_MS)    return null; // too soon after last offer
 
