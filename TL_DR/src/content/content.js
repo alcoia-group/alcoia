@@ -37,7 +37,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let pinDefault         = false;
   let debugEnabled       = false;
   let lastCogState       = 'focused';
-  let lastActionAt       = 0;
+  let lastActionAt       = 0;           // global fallback
+  const paraActionAt     = new Map();   // per-paragraph cooldown: fingerprint -> timestamp
   let classifyTimer      = null;
   let currentParagraph   = null;
   let lastHighlighted    = null;
@@ -553,8 +554,22 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
 
       const action = COGNITIVE_STATE_ACTIONS[label];
       const now    = Date.now();
-      if (action === 'none' || now - lastActionAt < ACTION_COOLDOWN) return;
+      if (action === 'none') return;
+
+      // Per-paragraph cooldown: each paragraph has its own 8-second window
+      const paraKey = currentParagraph && currentParagraph.type === 'dom' && currentParagraph.data
+        ? (currentParagraph.data.innerText || '').slice(0, 80).trim()
+        : 'global';
+      const lastFiredForThisPara = paraActionAt.get(paraKey) || 0;
+      if (now - lastFiredForThisPara < ACTION_COOLDOWN) return;
+
+      paraActionAt.set(paraKey, now);
       lastActionAt = now;
+      // Clean old entries (keep map small)
+      if (paraActionAt.size > 50) {
+        const oldest = [...paraActionAt.entries()].sort((a,b)=>a[1]-b[1])[0][0];
+        paraActionAt.delete(oldest);
+      }
       if (action === 'explain' || action === 'simplify') await triggerAIForParagraph(currentParagraph, label);
       else if (action === 'nudge') { const el = currentParagraph?.type==='dom'?currentParagraph.data:null; showNudge(el); if(el) highlightElement(el,3000); }
     }, CLASSIFY_INTERVAL);
@@ -724,6 +739,11 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   // ── Boot ───────────────────────────────────────────────────────────────
   await detectAndInitHandlers();
   await startTracker();
+  // Save WebGazer model on page unload so calibration persists to next page
+  window.addEventListener('beforeunload', () => {
+    try { gazeUtils.saveWebgazerModel(); } catch (e) {}
+  });
+
   _log('Content script loaded ✓');
 
 })();
