@@ -304,6 +304,14 @@
       </div>
       <label class="pill"><input type="checkbox" id="idleBlinkToggle" checked><span class="pill-track"></span></label>
     </label>
+
+    <label class="toggle-row" for="comprehensionToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Comprehension Check</span>
+        <span class="toggle-desc">Offer summaries when pace is too fast for the text difficulty</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="comprehensionToggle" checked><span class="pill-track"></span></label>
+    </label>
   </div>
 
   <div class="section">
@@ -340,14 +348,22 @@
   </div>
 
   <div class="section">
-    <div class="section-label">Demo Tools</div>
-    <div class="btn-row">
-      <button class="btn btn-ghost" id="testConfusedBtn" style="font-size:11px">
-        Simulate: Confused
-      </button>
-      <button class="btn btn-ghost" id="testOverloadedBtn" style="font-size:11px">
-        Simulate: Overloaded
-      </button>
+    <div class="section-label">Simulate States</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px">
+      <button class="btn btn-ghost" id="testConfusedBtn"   style="font-size:11px;padding:7px">Confused</button>
+      <button class="btn btn-ghost" id="testOverloadedBtn" style="font-size:11px;padding:7px">Overloaded</button>
+      <button class="btn btn-ghost" id="testZoningBtn"     style="font-size:11px;padding:7px">Zoning Out</button>
+      <button class="btn btn-ghost" id="testSkimmingBtn"   style="font-size:11px;padding:7px">Skimming</button>
+    </div>
+    <div style="background:rgba(26,126,93,0.05);border:1px solid rgba(26,126,93,0.12);border-radius:8px;padding:9px 11px">
+      <div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:6px;font-weight:700">Keyboard Shortcuts</div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:11px;font-style:italic">
+        <span style="font-family:monospace;background:rgba(26,126,93,0.1);padding:1px 5px;border-radius:3px;color:var(--accent)">Alt+1</span><span style="color:var(--muted)">Confused</span>
+        <span style="font-family:monospace;background:rgba(26,126,93,0.1);padding:1px 5px;border-radius:3px;color:var(--accent)">Alt+2</span><span style="color:var(--muted)">Overloaded</span>
+        <span style="font-family:monospace;background:rgba(26,126,93,0.1);padding:1px 5px;border-radius:3px;color:var(--accent)">Alt+3</span><span style="color:var(--muted)">Zoning Out</span>
+        <span style="font-family:monospace;background:rgba(26,126,93,0.1);padding:1px 5px;border-radius:3px;color:var(--accent)">Alt+4</span><span style="color:var(--muted)">Skimming</span>
+        <span style="font-family:monospace;background:rgba(26,126,93,0.1);padding:1px 5px;border-radius:3px;color:var(--accent)">Esc</span><span style="color:var(--muted)">Close popup</span>
+      </div>
     </div>
   </div>
 
