@@ -154,3 +154,40 @@
   }, false);
 
 })();
+
+    // ── Model save/restore bridge ───────────────────────────────────────────────
+    // Handles messages from gaze-utils.js to serialise/restore the regression model
+    window.addEventListener('message', function(ev) {
+      if (!ev.data || ev.source !== window) return;
+      const d = ev.data;
+
+      if (d.source === 'sra-save-model' && d.id) {
+        try {
+          const data = webgazer.getData ? webgazer.getData() : null;
+          // Store via content script bridge
+          window.postMessage({
+            source:    'sra-model-data',
+            id:        d.id,
+            modelData: data ? JSON.stringify(data) : null,
+          }, '*');
+          // Also directly cache in localStorage as backup
+          if (data) localStorage.setItem('sra_webgazer_model', JSON.stringify(data));
+        } catch (e) {
+          window.postMessage({ source: 'sra-model-saved', id: d.id }, '*');
+        }
+        window.postMessage({ source: 'sra-model-saved', id: d.id }, '*');
+        return;
+      }
+
+      if (d.source === 'sra-restore-model' && d.id && d.modelData) {
+        try {
+          const parsed = typeof d.modelData === 'string' ? JSON.parse(d.modelData) : d.modelData;
+          if (webgazer.setData) webgazer.setData(parsed);
+          console.log('[TL;DR] WebGazer model restored');
+        } catch (e) {
+          console.warn('[TL;DR] Model restore failed:', e.message);
+        }
+        window.postMessage({ source: 'sra-model-restored', id: d.id }, '*');
+        return;
+      }
+    }, false);

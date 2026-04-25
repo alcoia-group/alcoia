@@ -1,15 +1,7 @@
-/* gaze-utils.js
-   - Normalize gaze data to client coords
-   - Exponential smoothing (EMA)  
-   - Velocity spike rejection
-   - Click-based calibration (the CORRECT way to train WebGazer)
-
-   IMPORTANT — Why click-based calibration:
-   WebGazer uses ridge regression to map face/eye features → screen position.
-   It learns from labelled examples: "when my face looked like THIS, I was looking at X,Y".
-   Those examples come from webgazer.recordScreenPosition(x, y, 'click').
-   Passively sampling getCurrentPrediction() just measures the current error —
-   it does NOT train the model. Without click training data, WebGazer guesses.
+/* gaze-utils.js — v3
+   Added:
+   - WebGazer model persistence (save/restore between pages)
+   - Calibration data survives page navigation
 */
 
 let _state = null;
@@ -46,7 +38,45 @@ export async function setCalibration(offset) {
   });
 }
 
-// Normalize raw webgazer {x,y} to client (viewport) coords
+// ── WebGazer model persistence ─────────────────────────────────────────────────
+// WebGazer's ridge regression learns from calibration clicks. Without persistence,
+// every new page starts with a blank model even if you just calibrated.
+// We serialise the model weights to chrome.storage and restore them on load.
+
+export function saveWebgazerModel() {
+  // Runs in isolated world — delegates to bootstrap via postMessage
+  return new Promise(resolve => {
+    const id = 'save-' + Math.random().toString(36).slice(2);
+    const handler = (ev) => {
+      if (!ev.data || ev.data.source !== 'sra-model-saved' || ev.data.id !== id) return;
+      window.removeEventListener('message', handler);
+      resolve();
+    };
+    window.addEventListener('message', handler);
+    window.postMessage({ source: 'sra-save-model', id }, '*');
+    setTimeout(() => { window.removeEventListener('message', handler); resolve(); }, 1500);
+  });
+}
+
+export function restoreWebgazerModel() {
+  // Loads serialised model from storage and sends to bootstrap to apply
+  return new Promise(resolve => {
+    chrome.storage.local.get({ sra_webgazer_model: null }, (res) => {
+      if (!res.sra_webgazer_model) { resolve(false); return; }
+      const id = 'restore-' + Math.random().toString(36).slice(2);
+      const handler = (ev) => {
+        if (!ev.data || ev.data.source !== 'sra-model-restored' || ev.data.id !== id) return;
+        window.removeEventListener('message', handler);
+        resolve(true);
+      };
+      window.addEventListener('message', handler);
+      window.postMessage({ source: 'sra-restore-model', id, modelData: res.sra_webgazer_model }, '*');
+      setTimeout(() => { window.removeEventListener('message', handler); resolve(false); }, 1500);
+    });
+  });
+}
+
+// ── Normalise and smooth ────────────────────────────────────────────────────────
 export function normalizeRawToClient(raw) {
   if (!raw) return null;
   let x = raw.x, y = raw.y;
@@ -83,23 +113,20 @@ export function checkVelocity(state, point) {
   return spd <= state.velocityThreshold;
 }
 
-// ── CLICK-BASED CALIBRATION ───────────────────────────────────────────────────
-//
-// The user sees a dot, clicks it, we call webgazer.recordScreenPosition().
-// That gives WebGazer a (face features → known screen position) training example.
-// After enough clicks, the ridge regression model improves significantly.
-//
-// 9 points in a 3×3 grid = good spatial coverage.
-// Each point is clicked TWICE (two passes) for stability.
-//
+// ── Calibration sequence ────────────────────────────────────────────────────────
 export async function runCalibrationSequence() {
   return new Promise(async (resolve) => {
 
-    // Check webgazer is available in page context via postMessage bridge
+    // First: try to restore a previously saved model
+    // This means a returning user doesn't need to recalibrate from scratch
+    const restored = await restoreWebgazerModel();
+    if (restored) console.log('[TL;DR] Restored WebGazer model from previous session');
+
     const wgAvailable = await new Promise(res => {
       const id = Math.random().toString(36).slice(2);
       const handler = (ev) => {
-        if (ev.source !== window || !ev.data || ev.data.sra_ping_id !== id || ev.data.source !== 'sra-cal-pong') return;
+        if (ev.source !== window || !ev.data || ev.data.sra_ping_id !== id) return;
+        if (ev.data.source !== 'sra-cal-pong') return;
         window.removeEventListener('message', handler);
         res(ev.data.available);
       };
@@ -110,21 +137,13 @@ export async function runCalibrationSequence() {
 
     if (!wgAvailable) {
       console.warn('[TL;DR] WebGazer not available for calibration — skipping');
-      resolve({ dx: 0, dy: 0 });
-      return;
+      resolve({ dx: 0, dy: 0 }); return;
     }
 
-    // 9-point 3×3 grid (normalised 0–1)
-    const GRID = [
-      [0.1, 0.1], [0.5, 0.1], [0.9, 0.1],
-      [0.1, 0.5], [0.5, 0.5], [0.9, 0.5],
-      [0.1, 0.9], [0.5, 0.9], [0.9, 0.9],
-    ];
-    // Two passes for better accuracy
+    const GRID   = [[0.1,0.1],[0.5,0.1],[0.9,0.1],[0.1,0.5],[0.5,0.5],[0.9,0.5],[0.1,0.9],[0.5,0.9],[0.9,0.9]];
     const POINTS = [...GRID, ...GRID];
     const TOTAL  = POINTS.length;
 
-    // ── Build overlay ──────────────────────────────────────────────────────
     const overlay = document.createElement('div');
     overlay.className = 'sra-cal-overlay';
     overlay.innerHTML = `
@@ -135,25 +154,24 @@ export async function runCalibrationSequence() {
           <button class="sra-cal-retry" id="sra-cal-retry">Restart</button>
         </div>
         <p style="font-size:12px;color:#7a7a72;font-style:italic;text-align:center;margin:0">
-          Click each green dot as it appears. Two passes for accuracy.
+          Click each dot as it appears. Two passes for accuracy.
         </p>
         <div class="sra-cal-target-area" id="sra-cal-area">
           <div class="sra-cal-target" id="sra-cal-target" style="left:50%;top:50%"></div>
         </div>
-        <p class="sra-cal-hint" id="sra-cal-hint">Click the dot — <span id="sra-cal-counter">0</span> / ${TOTAL}</p>
+        <p class="sra-cal-hint">Look at the dot, then click it &mdash;
+          <span id="sra-cal-counter">0</span> / ${TOTAL}</p>
       </div>`;
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.classList.add('visible'));
 
-    const fill    = overlay.querySelector('#sra-cal-fill');
-    const target  = overlay.querySelector('#sra-cal-target');
-    const area    = overlay.querySelector('#sra-cal-area');
-    const hint    = overlay.querySelector('#sra-cal-hint');
-    const counter = overlay.querySelector('#sra-cal-counter');
-    const stepsEl = overlay.querySelector('#sra-cal-steps');
-    const retry   = overlay.querySelector('#sra-cal-retry');
+    const fill     = overlay.querySelector('#sra-cal-fill');
+    const target   = overlay.querySelector('#sra-cal-target');
+    const area     = overlay.querySelector('#sra-cal-area');
+    const counter  = overlay.querySelector('#sra-cal-counter');
+    const stepsEl  = overlay.querySelector('#sra-cal-steps');
+    const retry    = overlay.querySelector('#sra-cal-retry');
 
-    // Step dots
     stepsEl.innerHTML = '';
     for (let i = 0; i < TOTAL; i++) {
       const d = document.createElement('div');
@@ -163,10 +181,8 @@ export async function runCalibrationSequence() {
     const stepNodes = Array.from(stepsEl.children);
 
     let idx = 0, cancelled = false;
-    const predictions = [];
 
     function moveDotTo(px, py) {
-      // px, py are 0–1 normalised within the target-area div
       target.style.left = (px * 100) + '%';
       target.style.top  = (py * 100) + '%';
     }
@@ -182,40 +198,21 @@ export async function runCalibrationSequence() {
       const [px, py] = POINTS[idx];
       moveDotTo(px, py);
       updateProgress();
-      // Pulse animation to draw eye
       target.style.transform = 'translate(-50%,-50%) scale(1.4)';
       setTimeout(() => { target.style.transform = 'translate(-50%,-50%) scale(1)'; }, 200);
     }
 
-    // Click handler on the target area
     area.addEventListener('click', async (e) => {
       if (cancelled || idx >= TOTAL) return;
-
       const areaRect = area.getBoundingClientRect();
       const [px, py] = POINTS[idx];
-
-      // Actual screen coordinates of the dot centre
       const dotScreenX = areaRect.left + px * areaRect.width;
       const dotScreenY = areaRect.top  + py * areaRect.height;
-
-      // Record this click as a training example for WebGazer
-      window.postMessage({
-        source:  'sra-cal-record',
-        x:       dotScreenX,
-        y:       dotScreenY,
-      }, '*');
-
-      // Collect a prediction sample for offset computation
-      window.postMessage({ source: 'sra-cal-sample', sra_sample_id: idx }, '*');
-
+      window.postMessage({ source: 'sra-cal-record', x: dotScreenX, y: dotScreenY }, '*');
       idx++;
       updateProgress();
-
-      if (idx >= TOTAL) {
-        finish();
-      } else {
-        setTimeout(showPoint, 350);
-      }
+      if (idx >= TOTAL) finish();
+      else setTimeout(showPoint, 350);
     });
 
     async function finish() {
@@ -223,20 +220,18 @@ export async function runCalibrationSequence() {
       setTimeout(async () => {
         try { overlay.remove(); } catch (e) {}
 
-        // Ask page context for the current prediction at centre to compute residual offset
         const centreX = window.innerWidth  / 2;
         const centreY = window.innerHeight / 2;
         const offset  = await new Promise(res => {
           const id = Math.random().toString(36).slice(2);
           const h  = (ev) => {
-            if (ev.source !== window || !ev.data || ev.data.sra_pred_id !== id || ev.data.source !== 'sra-cal-prediction') return;
+            if (ev.source !== window || !ev.data || ev.data.sra_pred_id !== id) return;
+            if (ev.data.source !== 'sra-cal-prediction') return;
             window.removeEventListener('message', h);
             const pred = ev.data.prediction;
-            if (pred && typeof pred.x === 'number') {
+            if (pred && typeof pred.x === 'number')
               res({ dx: Math.round(centreX - pred.x), dy: Math.round(centreY - pred.y) });
-            } else {
-              res({ dx: 0, dy: 0 });
-            }
+            else res({ dx: 0, dy: 0 });
           };
           window.addEventListener('message', h);
           window.postMessage({ source: 'sra-cal-predict', sra_pred_id: id }, '*');
@@ -244,15 +239,18 @@ export async function runCalibrationSequence() {
         });
 
         await setCalibration(offset);
-        console.log('[TL;DR] Calibration complete. Offset:', offset);
+
+        // Save the model immediately after calibration so it persists
+        await saveWebgazerModel();
+        console.log('[TL;DR] Calibration + model saved');
         resolve(offset);
       }, 280);
     }
 
     retry.addEventListener('click', () => {
-      idx = 0; predictions.length = 0;
+      idx = 0;
       stepNodes.forEach(n => n.classList.remove('active'));
-      fill.style.width = '0%';
+      fill.style.width    = '0%';
       counter.textContent = '0';
       showPoint();
     });
