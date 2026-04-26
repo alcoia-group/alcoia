@@ -176,6 +176,21 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Reading calibration button — triggers the word-highlighting natural reading flow
+  const readingCalBtn = document.getElementById('readingCalBtn');
+  readingCalBtn && readingCalBtn.addEventListener('click', async () => {
+    readingCalBtn.disabled = true;
+    readingCalBtn.textContent = 'Calibrating...';
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    chrome.tabs.sendMessage(tab.id, { type: 'startReadingCalibration' }, (resp) => {
+      if (chrome.runtime.lastError) {
+        alert('No content script — reload the page and try again.');
+      }
+      readingCalBtn.disabled = false;
+      readingCalBtn.textContent = 'Reading Calibration';
+    });
+  });
+
   calibrateBtn.addEventListener('click', async () => {
     calibrateBtn.disabled = true;
     calibrateBtn.textContent = 'Calibrating…';

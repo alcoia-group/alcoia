@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>TL;DR — Feature Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#FAFAF7;--surface:#fff;--border:rgba(26,126,93,0.13);
+  --text:#2c2c2a;--muted:#7a7a72;--accent:#1A7E5D;--accent2:#0f5c42;
+  --serif:'Merriweather',Georgia,serif;
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--serif);font-size:17px;line-height:1.85}
+
+/* ── Layout ── */
+.page{max-width:720px;margin:0 auto;padding:60px 32px 120px}
+
+/* ── Header ── */
+.site-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:18px 32px;border-bottom:1px solid var(--border);
+  background:var(--surface);position:sticky;top:0;z-index:100;
+}
+.logo{font-size:18px;font-weight:700;color:var(--accent);letter-spacing:-0.3px}
+.nav{display:flex;gap:6px;flex-wrap:wrap}
+.nav a{
+  font-size:11px;font-style:italic;color:var(--muted);text-decoration:none;
+  padding:4px 10px;border-radius:5px;border:1px solid var(--border);
+  transition:all 0.12s;
+}
+.nav a:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── Section structure ── */
+.demo-section{
+  margin-bottom:80px;padding-top:32px;
+  border-top:1px solid var(--border);
+}
+.demo-section:first-child{border-top:none;margin-top:0}
+
+.section-tag{
+  display:inline-block;font-size:10px;font-weight:700;letter-spacing:1.2px;
+  text-transform:uppercase;color:var(--accent);margin-bottom:10px;
+  padding:3px 10px;border:1px solid rgba(26,126,93,0.25);border-radius:5px;
+  background:rgba(26,126,93,0.05);
+}
+.section-label{
+  font-size:22px;font-weight:700;margin-bottom:6px;letter-spacing:-0.3px;
+}
+.section-desc{
+  font-size:13px;font-style:italic;color:var(--muted);margin-bottom:24px;
+  line-height:1.6;border-left:3px solid rgba(26,126,93,0.2);padding-left:12px;
+}
+p{margin-bottom:20px;text-align:justify}
+
+/* ── Regression paragraph styling ── */
+.error-word{
+  text-decoration:underline wavy #c0392b;
+  text-decoration-skip-ink:none;
+}
+.correction{
+  color:#1A7E5D;font-style:italic;font-size:0.9em;
+}
+
+/* ── Reading guide (for reading calibration demo) ── */
+.reading-text span.word{
+  display:inline;transition:background 0.1s,color 0.1s;
+  padding:1px 2px;border-radius:2px;
+}
+.reading-text span.word.active{
+  background:rgba(26,126,93,0.2);color:var(--accent2);font-weight:700;
+}
+.reading-text span.word.done{color:#aaa}
+
+/* ── Control bar ── */
+.ctrl-bar{
+  display:flex;align-items:center;gap:10px;margin-bottom:20px;
+  flex-wrap:wrap;
+}
+.btn{
+  padding:7px 14px;border-radius:8px;border:1px solid var(--border);
+  background:transparent;font-family:var(--serif);font-size:12px;
+  font-style:italic;color:var(--accent);cursor:pointer;transition:all 0.12s;
+}
+.btn:hover{background:rgba(26,126,93,0.07);border-color:var(--accent)}
+.btn-primary{background:var(--accent);color:white;border-color:var(--accent)}
+.btn-primary:hover{opacity:0.88}
+.speed-label{font-size:12px;font-style:italic;color:var(--muted)}
+
+/* ── Flesch meter ── */
+.fk-meter{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:14px 18px;margin-bottom:20px;
+  font-size:12px;display:flex;align-items:center;gap:16px;
+}
+.fk-bar-wrap{flex:1;height:6px;background:rgba(26,126,93,0.1);border-radius:3px;overflow:hidden}
+.fk-bar{height:100%;border-radius:3px;transition:width 0.4s}
+.fk-score{font-weight:700;color:var(--accent);font-family:monospace;font-size:14px;min-width:32px}
+.fk-grade{font-style:italic;color:var(--muted)}
+
+/* ── Callout box ── */
+.callout{
+  background:rgba(26,126,93,0.05);border-left:3px solid var(--accent);
+  border-radius:0 8px 8px 0;padding:14px 18px;margin-bottom:20px;
+  font-size:13px;line-height:1.6;color:var(--muted);font-style:italic;
+}
+.callout strong{color:var(--text);font-style:normal}
+
+/* ── Feature badge ── */
+.feat-badge{
+  display:inline-block;font-size:10px;font-family:monospace;
+  background:rgba(26,126,93,0.08);color:var(--accent2);
+  padding:2px 6px;border-radius:3px;margin-bottom:16px;
+}
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="logo">TL;DR — Feature Demo</div>
+  <nav class="nav">
+    <a href="#regression">Regression</a>
+    <a href="#confusion">Confusion</a>
+    <a href="#zoning">Zoning Out</a>
+    <a href="#overload">Overloaded</a>
+    <a href="#flesch">Flesch-Kincaid</a>
+    <a href="#comprehension">Comprehension</a>
+    <a href="#reading-cal">Reading Calibration</a>
+  </nav>
+</header>
+
+<div class="page">
+
+  <div style="margin-bottom:48px;padding-top:16px">
+    <div style="font-size:28px;font-weight:700;margin-bottom:10px;letter-spacing:-0.5px">
+      TL;DR Feature Demonstration
+    </div>
+    <div style="font-size:15px;color:var(--muted);font-style:italic;line-height:1.7">
+      Each section below is designed to trigger a specific cognitive state or extension feature.
+      Have TL;DR running with eye tracking enabled, then read each section naturally.
+      Use <kbd style="font-family:monospace;font-size:12px;background:#eee;padding:1px 5px;border-radius:3px">Alt+1</kbd> through
+      <kbd style="font-family:monospace;font-size:12px;background:#eee;padding:1px 5px;border-radius:3px">Alt+5</kbd>
+      to simulate states manually if eye tracking isn't firing reliably.
+    </div>
+  </div>
+
+  <!-- ── SECTION 1: REGRESSION ─────────────────────────────────────────────── -->
+  <section class="demo-section" id="regression">
+    <div class="section-tag">Gaze Feature: Regression Rate</div>
+    <div class="section-label">The Regression Paragraph</div>
+    <div class="section-desc">
+      This paragraph contains deliberate errors you will notice mid-sentence,
+      forcing your eyes to move backwards to re-read. Watch the debug dot jump
+      rightward-to-leftward repeatedly.
+    </div>
+    <div class="feat-badge">target: regression_rate &gt; 0.25 → confused state</div>
+
+    <p>
+      The capital of Australia is <span class="error-word">Sydney</span>
+      — wait, that is incorrect. The capital is Canberra, not Sydney,
+      which is the largest city. Many readers aceept this misstake without
+      noticing — did you spot the two spleling errors in that sentence?
+      Go back and re-raed it. You will find "aceept" and "spleling" both
+      contain transopsed letters, and "re-raed" is itself a deliberate error.
+      Reading researchers call this the <em>misspelling detection effect</em>:
+      the eye moves forward, the brain detects an anomaly, and the eye
+      regresses to the point of confusion before continuing. This backwards
+      movement — a saccade in the rightward-to-leftward direction — is
+      precisely what TL;DR measures as regression rate.
+    </p>
+
+    <p>
+      Teh sentence you are raeding now contains tow erros at teh start and
+      one in teh middle. Your eye has almost certainly jumped backwards at
+      least twice already. A reader with no comprehension difficulty reads
+      forward ninety percent of the time. A confused or error-detecting reader
+      may make backwards movements on thirty to fifty percent of their saccades.
+      TL;DR treats a regression rate above twenty percent sustained over
+      two and a half seconds — combined with near-zero scroll — as a
+      signal that the reader needs assistance.
+    </p>
+
+    <div class="callout">
+      <strong>What TL;DR should do here:</strong> detect high regression rate,
+      classify as confused, fetch an explanation of whichever paragraph your
+      gaze was on when the threshold was crossed. Use Alt+1 to simulate this immediately.
+    </div>
+  </section>
+
+  <!-- ── SECTION 2: CONFUSION ──────────────────────────────────────────────── -->
+  <section class="demo-section" id="confusion">
+    <div class="section-tag">Classifier State: Confused</div>
+    <div class="section-label">The Confusion Paragraph</div>
+    <div class="section-desc">
+      Dense, unfamiliar terminology presented without definition. Your fixation
+      durations will increase, saccades will shorten, and scroll will stop.
+    </div>
+    <div class="feat-badge">target: avg_fixation_ms &gt; 380 + scroll_delta ≈ 0 → confused state</div>
+
+    <p>
+      The epistemological implications of supervenience relations between
+      qualia and neurophysiological substrates remain contentious within
+      philosophy of mind. Proponents of non-reductive physicalism argue that
+      phenomenal consciousness supervenes nomologically but not logically on
+      physical states, implying the conceivability of epiphenomenal zombies
+      as a rebuke to type-identity theory. Contrariwise, eliminativist
+      accounts following Churchland and Dennett hold that folk-psychological
+      intentional states constitute a degenerative research programme whose
+      taxonomic categories fail to carve nature at its joints, rendering the
+      explanatory gap a pseudo-problem generated by category error rather than
+      genuine ontological discontinuity between the phenomenal and the physical.
+    </p>
+
+    <p>
+      The preceding paragraph was deliberately written at maximum Flesch-Kincaid
+      difficulty. Every term — supervenience, qualia, epiphenomenal, eliminativist,
+      folk-psychological, intentional states — requires prior domain knowledge
+      to decode. If you do not have that knowledge, your fixations become long
+      dwelling attempts to extract meaning, your saccades shorten because you
+      cannot advance until you understand the current word, and your scroll
+      position does not change because you are stuck. This is precisely the
+      gaze signature of the confused state.
+    </p>
+
+    <div class="callout">
+      <strong>What TL;DR should do here:</strong> detect long fixations, short
+      saccades, zero scroll, classify as confused, and offer an explanation of the
+      dense paragraph above. Use Alt+1 to trigger this immediately.
+    </div>
+  </section>
+
+  <!-- ── SECTION 3: ZONING OUT ─────────────────────────────────────────────── -->
+  <section class="demo-section" id="zoning">
+    <div class="section-tag">Classifier State: Zoning Out</div>
+    <div class="section-label">The Zoning Out Paragraph</div>
+    <div class="section-desc">
+      Deliberately repetitive, monotonous content that causes the mind to
+      disengage while the eyes continue their mechanical forward movement.
+    </div>
+    <div class="feat-badge">target: avg_fixation_ms &gt; 700 + gaze_drift_px &gt; 60 → zoning_out state</div>
+
+    <p>
+      The meeting was scheduled for Tuesday. On Tuesday the meeting took place.
+      Everyone who had been invited to Tuesday's meeting attended the meeting
+      that was scheduled. The meeting lasted approximately as long as meetings
+      of this type typically last. After the meeting concluded, the people who
+      had attended the meeting returned to the places they had been before
+      the meeting. A summary of the meeting was later distributed to the
+      people who had attended the meeting, as is customary following meetings
+      of this nature. The next meeting was then scheduled for the following Tuesday.
+    </p>
+
+    <p>
+      The passage above contains nothing that requires active comprehension.
+      The words are simple, the sentences are short, the content is
+      completely devoid of information. When the brain detects this,
+      it disengages from active processing. The eyes continue moving across
+      the lines — making their mechanical saccades — but they begin to drift
+      vertically off the text baseline. Fixations become very long not because
+      the words are hard but because the brain is not processing them at all.
+      Scroll slows to nearly zero because nothing is motivating forward progress.
+    </p>
+
+    <div class="callout">
+      <strong>What TL;DR should do here:</strong> detect very long fixations,
+      high vertical gaze drift, zero scroll, classify as zoning out, and pulse
+      a green highlight on the current paragraph. No AI call — just a gentle
+      visual nudge back to attention. Use Alt+3 to simulate this immediately.
+    </div>
+  </section>
+
+  <!-- ── SECTION 4: OVERLOADED ─────────────────────────────────────────────── -->
+  <section class="demo-section" id="overload">
+    <div class="section-tag">Classifier State: Overloaded</div>
+    <div class="section-label">The Overload Paragraph</div>
+    <div class="section-desc">
+      Multiple concepts introduced simultaneously with dependencies between them,
+      triggering repeated backward movement as the reader tries to hold
+      too many ideas in working memory at once.
+    </div>
+    <div class="feat-badge">target: regression_rate &gt; 0.35 + line_reread_count &gt; 4 → overloaded state</div>
+
+    <p>
+      Consider a directed acyclic graph G=(V,E) where each vertex v∈V has
+      an associated weight w(v)∈ℝ and each edge (u,v)∈E has a capacity
+      c(u,v)&gt;0. The minimum cut of G — defined as the partition of V into
+      two disjoint sets S and T such that the source s∈S, the sink t∈T,
+      and the sum of capacities of edges crossing from S to T is minimised —
+      equals the maximum flow from s to t by the max-flow min-cut theorem.
+      The Ford-Fulkerson algorithm computes this by iteratively finding
+      augmenting paths in the residual graph G_f, where G_f contains a
+      forward edge (u,v) with capacity c(u,v)−f(u,v) and a backward edge
+      (v,u) with capacity f(u,v) for each edge (u,v)∈E with flow f(u,v).
+    </p>
+
+    <p>
+      The passage above introduces graph theory, set theory, optimisation
+      theory, and algorithm theory simultaneously, each building on the
+      previous. A reader without the prerequisite knowledge must hold
+      definitions of G, V, E, w(v), c(u,v), S, T, s, t, f(u,v),
+      and G_f in working memory while trying to understand the theorem.
+      Working memory capacity is limited to approximately seven plus or
+      minus two chunks. This paragraph exceeds that limit significantly,
+      causing the reader to regress to the start of sentences they just
+      read in order to refresh decaying memory traces before attempting
+      to parse the next clause.
+    </p>
+
+    <div class="callout">
+      <strong>What TL;DR should do here:</strong> detect very high regression,
+      very short saccades, highest line re-read count, classify as overloaded,
+      and send the paragraph to the AI with mode=simplify. The response rewrites
+      the content in plain language with bullet points. Use Alt+2 to trigger this.
+    </div>
+  </section>
+
+  <!-- ── SECTION 5: FLESCH-KINCAID ─────────────────────────────────────────── -->
+  <section class="demo-section" id="flesch">
+    <div class="section-tag">Comprehension Monitor: Flesch-Kincaid Score</div>
+    <div class="section-label">The Complexity Spectrum</div>
+    <div class="section-desc">
+      Three versions of the same information at different complexity levels.
+      The live meter below shows the FK score as you move between them.
+    </div>
+
+    <div class="fk-meter" id="fkMeter">
+      <div>
+        <div class="fk-score" id="fkScore">—</div>
+        <div class="fk-grade" id="fkGrade">hover a paragraph</div>
+      </div>
+      <div class="fk-bar-wrap">
+        <div class="fk-bar" id="fkBar" style="width:0%;background:#1A7E5D"></div>
+      </div>
+      <div style="font-size:11px;font-style:italic;color:var(--muted);width:80px;text-align:right">
+        0=hard<br>100=easy
+      </div>
+    </div>
+
+    <p class="fk-para" data-label="Very Easy (FK ~95)">
+      The cat sat on the mat. It was a sunny day. The cat felt warm and happy.
+      She closed her eyes. The sun felt good. She did not want to move.
+      It was a nice day to rest outside. Nothing bad was going to happen.
+      Life was simple and good for the cat on the mat.
+    </p>
+
+    <p class="fk-para" data-label="Standard (FK ~65)">
+      Reading comprehension depends on both vocabulary knowledge and the ability
+      to connect ideas across sentences. Readers who encounter unfamiliar words
+      tend to slow down significantly, spending more time on individual fixations
+      as they attempt to decode meaning from context. This slowing is measurable
+      through eye tracking and correlates reliably with self-reported difficulty.
+    </p>
+
+    <p class="fk-para" data-label="Very Difficult (FK ~15)">
+      The phenomenological underpinnings of hermeneutical interpretation necessitate
+      a dialectical engagement with intersubjective epistemological frameworks,
+      wherein the ontological presuppositions embedded within textual semiosis
+      precondition the reader's constitutive appropriation of propositional
+      content through recursive metacognitive apperception and schematic
+      assimilation of polysemous lexical representations into coherent
+      propositional attitude configurations.
+    </p>
+
+    <div class="callout">
+      <strong>What TL;DR does with FK scores:</strong> when you pass through
+      the very difficult paragraph too quickly (faster than ~110 words per minute),
+      the comprehension monitor flags a speed-vs-complexity mismatch and offers
+      a summary. Hover each paragraph to see its live FK score in the meter above.
+    </div>
+  </section>
+
+  <!-- ── SECTION 6: COMPREHENSION MISMATCH ─────────────────────────────────── -->
+  <section class="demo-section" id="comprehension">
+    <div class="section-tag">Comprehension Monitor: Speed Mismatch</div>
+    <div class="section-label">The Comprehension Trap</div>
+    <div class="section-desc">
+      A short paragraph that looks simple but contains a non-trivial idea.
+      Most readers skim it in under 4 seconds — but understanding it properly
+      requires at least 12 seconds. This triggers the comprehension offer.
+    </div>
+
+    <p id="compTrap">
+      Gödel's incompleteness theorems establish that any consistent formal
+      system capable of expressing basic arithmetic contains true statements
+      that cannot be proven within the system. This implies that mathematical
+      truth is not equivalent to provability — there will always exist
+      mathematical facts that are real but forever beyond the reach of proof.
+    </p>
+
+    <div id="compTimer" style="font-size:12px;font-style:italic;color:var(--muted);margin-bottom:20px">
+      Time on this paragraph: <span id="compSeconds">0</span>s
+      (expected minimum for this complexity: ~12s)
+    </div>
+
+    <div class="callout">
+      <strong>What TL;DR should do here:</strong> if you read the Gödel paragraph
+      in under 6-7 seconds and move on (scroll down), the comprehension monitor
+      should offer a summary. The paragraph has a Flesch-Kincaid score of approximately
+      28 (very difficult) despite being only two sentences. Try scrolling past it quickly,
+      then wait for the offer popup.
+    </div>
+  </section>
+
+  <!-- ── SECTION 7: READING CALIBRATION ────────────────────────────────────── -->
+  <section class="demo-section" id="reading-cal">
+    <div class="section-tag">Expert Calibration: Reading Mode</div>
+    <div class="section-label">Reading Calibration</div>
+    <div class="section-desc">
+      Words are highlighted one by one at natural reading pace. Each highlighted
+      word trains the eye tracker with your actual gaze position — giving
+      80-100 training examples instead of 18 from dot clicking.
+      This significantly improves debug dot accuracy in the reading zone.
+    </div>
+
+    <div class="ctrl-bar">
+      <button class="btn btn-primary" id="startReadingCal">Start Reading Calibration</button>
+      <button class="btn" id="startDotCal">Standard Dot Calibration</button>
+      <label class="speed-label">
+        Speed:
+        <select id="speedSelect" style="font-family:Georgia,serif;font-size:12px;border:1px solid var(--border);border-radius:5px;padding:3px 7px;background:var(--bg)">
+          <option value="280">Slow (180 wpm)</option>
+          <option value="220" selected>Normal (270 wpm)</option>
+          <option value="160">Fast (375 wpm)</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="reading-text" id="readingText" style="font-size:17px;line-height:1.9;min-height:80px;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:10px">
+      <span style="color:var(--muted);font-style:italic">
+        Click "Start Reading Calibration" to begin. Read along with the highlighted word
+        at your natural pace.
+      </span>
+    </div>
+
+    <div id="calStatus" style="font-size:12px;font-style:italic;color:var(--muted);margin-top:10px"></div>
+  </section>
+
+</div>
+
+<script>
+// ── Flesch-Kincaid live meter ───────────────────────────────────────────────
+function countSyllables(word) {
+  word = word.toLowerCase().replace(/[^a-z]/g, '');
+  if (word.length <= 3) return 1;
+  word = word.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '');
+  word = word.replace(/^y/, '');
+  const m = word.match(/[aeiouy]{1,2}/g);
+  return m ? m.length : 1;
+}
+function fk(text) {
+  const sents = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  const words = text.split(/\s+/).filter(w => w.trim().length > 0);
+  if (!sents.length || !words.length) return null;
+  const syl = words.reduce((a,w) => a + countSyllables(w), 0);
+  const score = 206.835 - (1.015 * words.length/sents.length) - (84.6 * syl/words.length);
+  return Math.max(0, Math.min(100, score));
+}
+function fkGrade(score) {
+  if (score >= 80) return { label: 'Very Easy', color: '#1A7E5D' };
+  if (score >= 60) return { label: 'Standard',  color: '#2563a8' };
+  if (score >= 40) return { label: 'Difficult',  color: '#a06000' };
+  return { label: 'Very Difficult', color: '#8b2000' };
+}
+
+document.querySelectorAll('.fk-para').forEach(para => {
+  para.addEventListener('mouseenter', () => {
+    const score  = fk(para.innerText);
+    if (!score) return;
+    const grade  = fkGrade(score);
+    document.getElementById('fkScore').textContent = Math.round(score);
+    document.getElementById('fkGrade').textContent = grade.label + ' — ' + (para.dataset.label || '');
+    document.getElementById('fkBar').style.width   = score + '%';
+    document.getElementById('fkBar').style.background = grade.color;
+  });
+});
+
+// ── Comprehension trap timer ────────────────────────────────────────────────
+const trap     = document.getElementById('compTrap');
+const timerEl  = document.getElementById('compSeconds');
+let startTime  = null, timerInterval = null;
+
+const obs = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting && !startTime) {
+      startTime = Date.now();
+      timerInterval = setInterval(() => {
+        timerEl.textContent = Math.floor((Date.now() - startTime) / 1000);
+      }, 500);
+    } else if (!e.isIntersecting && startTime) {
+      clearInterval(timerInterval);
+    }
+  });
+}, { threshold: 0.5 });
+if (trap) obs.observe(trap);
+
+// ── Reading calibration demo ────────────────────────────────────────────────
+const DEMO_TEXT = `Researchers have found that the human eye does not read smoothly across
+a page but instead jumps from word to word in rapid movements called saccades
+pausing briefly on each word to extract meaning. These pauses are called fixations
+and typically last between one hundred and three hundred milliseconds. The brain
+processes the word during the fixation not during the movement itself. When a reader
+encounters unfamiliar vocabulary their fixation duration increases significantly
+as the brain attempts to decode the meaning from context and prior knowledge.
+Eye tracking researchers use these fixation patterns to understand reading difficulty.`;
+
+const words       = DEMO_TEXT.trim().split(/\s+/).filter(w=>w);
+const readingDiv  = document.getElementById('readingText');
+const calStatus   = document.getElementById('calStatus');
+let   calRunning  = false;
+let   calTimer    = null;
+let   wordIdx     = 0;
+let   spans       = [];
+
+function buildWordSpans() {
+  readingDiv.innerHTML = '';
+  spans = [];
+  words.forEach(word => {
+    const s = document.createElement('span');
+    s.className = 'word';
+    s.textContent = word + ' ';
+    readingDiv.appendChild(s);
+    spans.push(s);
+  });
+}
+
+document.getElementById('startReadingCal').addEventListener('click', () => {
+  if (calRunning) return;
+  calRunning = true;
+  wordIdx    = 0;
+  buildWordSpans();
+  const msPerWord = parseInt(document.getElementById('speedSelect').value) || 220;
+  calStatus.textContent = 'Reading calibration running...';
+
+  calTimer = setInterval(() => {
+    if (wordIdx > 0) spans[wordIdx-1].className = 'word done';
+    if (wordIdx >= spans.length) {
+      clearInterval(calTimer);
+      calRunning = false;
+      calStatus.textContent = `Complete — ${spans.length} calibration points recorded in the reading zone.`;
+      return;
+    }
+    const span = spans[wordIdx];
+    span.className = 'word active';
+    const rect = span.getBoundingClientRect();
+    if (rect.width > 0) {
+      const cx = rect.left + rect.width/2;
+      const cy = rect.top  + rect.height/2;
+      // In a real extension context this would call webgazer.recordScreenPosition via postMessage
+      // For the demo page, we just log it
+      if (window.__sra_cal_record) {
+        window.__sra_cal_record(cx, cy);
+      } else {
+        console.log('[Demo] Cal point:', Math.round(cx), Math.round(cy));
+      }
+    }
+    wordIdx++;
+    calStatus.textContent = `Calibrating... (${wordIdx} / ${spans.length})`;
+  }, msPerWord);
+});
+
+document.getElementById('startDotCal').addEventListener('click', () => {
+  // This will trigger the extension's standard calibration if installed
+  if (window.sra && window.sra.runCalibration) {
+    window.sra.runCalibration();
+  } else {
+    alert('TL;DR extension not detected on this page. Load the extension first.');
+  }
+});
+</script>
+</body>
+</html>
