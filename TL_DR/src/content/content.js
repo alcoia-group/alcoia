@@ -70,6 +70,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const idleModule   = await loadModule('src/content/idle-overlay.js');
   const { updateIdleState, forceStopIdle } = idleModule;
   const compModule  = await loadModule('src/content/comprehension-monitor.js');
+  const readCalModule = await loadModule('src/content/reading-calibration.js');
+  const { runReadingCalibration } = readCalModule;
   const comprehensionMonitor = compModule.createComprehensionMonitor({
     speedRatio:     0.55,
     minWords:       40,
@@ -702,6 +704,25 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
       try { window.postMessage({source:'sra-control',type:'setPredictionPoints',enabled:debugEnabled},'*'); } catch(e){}
       sendResponse({ status:'ok' }); return true;
     }
+    if (msg.type === 'startReadingCalibration') {
+      (async () => {
+        try {
+          const result = await runReadingCalibration({
+            msPerWord:  220,
+            onComplete: (success) => {
+              _log('Reading calibration complete, success:', success);
+            }
+          });
+          // After reading calibration, save the improved model
+          try { await gazeUtils.saveWebgazerModel(); } catch(e) {}
+          sendResponse({ status: 'ok', result });
+        } catch (e) {
+          sendResponse({ status: 'error', error: String(e) });
+        }
+      })();
+      return true;
+    }
+
     if (msg.type === 'startCamera') {
       window.__sra_tracker_started = false;
       try { await startTracker(); sendResponse({status:'ok'}); }
