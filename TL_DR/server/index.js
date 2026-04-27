@@ -4,6 +4,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
+const path    = require('path');
+const fs      = require('fs');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -23,18 +25,11 @@ if (!GROQ_API_KEY) {
 }
 
 // ── Prompts ────────────────────────────────────────────────────────────────
-// Design principles:
-//   1. Role context first — tell the model exactly what it is doing
-//   2. Specific output format — length, tone, structure
-//   3. Audience awareness — non-expert, returning reader
-//   4. No padding — short responses are better for a popup
-
 function buildPrompt(text, mode) {
   const escaped = text.trim();
 
   const prompts = {
 
-    // Selection: user highlighted text and wants a quick summary
     tldr: `You are a reading assistant embedded in a browser. The user has highlighted the following text and wants a concise summary.
 
 Write 2–3 sentences that capture the core point. Start directly — no preamble like "This text discusses...". Write as if explaining to a smart friend who hasn't read it.
@@ -42,7 +37,6 @@ Write 2–3 sentences that capture the core point. Start directly — no preambl
 Text:
 ${escaped}`,
 
-    // Gaze-triggered: classifier detected confusion (re-reading, stuck)
     explain_more: `You are a reading assistant. The reader's eye movements indicate they are confused by this passage — they are re-reading it repeatedly and making no progress through the page.
 
 Explain this passage clearly. Your response must:
@@ -56,7 +50,6 @@ Do not summarise. Explain. Make the concept click.
 Passage:
 ${escaped}`,
 
-    // Gaze-triggered: classifier detected overload (extreme regression, very short saccades)
     simplify: `You are a reading assistant. The reader's eye movements show they are cognitively overloaded — their eyes keep jumping back to the start of lines and they cannot move forward.
 
 Rewrite this passage in plain language. Your response must:
@@ -71,7 +64,6 @@ Target reading level: someone intelligent but unfamiliar with this topic.
 Original passage:
 ${escaped}`,
 
-    // User selected code — detected by content.js heuristic
     explain_code: `You are a code explainer embedded in a browser extension. The reader selected this code and wants to understand it.
 
 Explain what this code does in plain language. Structure your response as:
@@ -84,7 +76,6 @@ Write for a developer who knows programming but is unfamiliar with this specific
 Code:
 ${escaped}`,
 
-    // "Explain More" button in popup — user wants deeper explanation
     deep_explain: `You are a reading assistant. The user has read an initial explanation and wants to go deeper.
 
 Provide a thorough explanation of the following passage. Include:
@@ -105,7 +96,6 @@ ${escaped}`,
 
 // ── Groq call ──────────────────────────────────────────────────────────────
 async function callGroq(prompt, mode) {
-  // Use a slightly smarter model for deep explanations
   const model = mode === 'deep_explain'
     ? (process.env.GROQ_SMART_MODEL || 'llama-3.3-70b-versatile')
     : GROQ_MODEL;
@@ -125,8 +115,8 @@ async function callGroq(prompt, mode) {
         },
         { role: 'user', content: prompt },
       ],
-      temperature: 0.25,   // low temp = more consistent, factual output
-      max_tokens:  220,    // enough for a good explanation, not so much it rambles
+      temperature: 0.25,
+      max_tokens:  220,
       top_p:       0.9,
     }),
   });
@@ -147,11 +137,9 @@ app.post('/api/summarize', async (req, res) => {
     return res.status(400).json({ error: 'No text provided.' });
   }
 
-  // Cap input at 4000 chars to avoid token limit issues
   const clipped = text.trim().slice(0, 4000);
   const prompt  = buildPrompt(clipped, mode);
 
-  // Local-only mode (no API key)
   if (!GROQ_API_KEY) {
     const canned = mode === 'tldr'
       ? `[No API key] ${clipped.slice(0, 200)}${clipped.length > 200 ? '...' : ''}`
@@ -169,6 +157,22 @@ app.post('/api/summarize', async (req, res) => {
   }
 });
 
+// ── Demo page ──────────────────────────────────────────────────────────────
+// Serves demo.html at http://localhost:3000/demo
+// Place demo.html at the project root (same level as the TL_DR folder and server/).
+// The extension injects normally here because localhost is a secure context.
+app.get('/demo', (req, res) => {
+  const demoPath = path.join(__dirname, '..', 'demo.html');
+  if (fs.existsSync(demoPath)) {
+    res.sendFile(demoPath);
+  } else {
+    res.status(404).send(
+      'demo.html not found. Place it at the project root ' +
+      '(one level above the server/ folder), then restart the server.'
+    );
+  }
+});
+
 // ── Health check ───────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({
@@ -180,5 +184,6 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n  TL;DR backend → http://localhost:${PORT}`);
-  console.log(`  Health check  → http://localhost:${PORT}/health\n`);
+  console.log(`  Health check  → http://localhost:${PORT}/health`);
+  console.log(`  Demo page     → http://localhost:${PORT}/demo\n`);
 });

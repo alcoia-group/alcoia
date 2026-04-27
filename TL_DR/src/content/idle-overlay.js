@@ -1,110 +1,134 @@
-/* idle-overlay.js
-   Detects when the user's gaze leaves the screen or becomes inactive,
-   then pulses the viewport edges to draw attention back.
-
-   How "not looking at screen" is detected:
-   1. gaze_drift_px is very high (eyes wandering far off text)
-   2. No gaze data received for > IDLE_TIMEOUT_MS (user looked away entirely)
-   3. velocity_mean is near zero but scroll is also zero (frozen, not reading)
-
-   The edge pulse uses a CSS box-shadow on a fixed full-viewport div.
-   It does NOT use position:fixed on body (breaks scroll) or outline on html.
+/* idle-overlay.js — v2
+   Corner bracket design — four L-shaped brackets at the viewport corners.
+   Much more visible than the thin inset box-shadow.
+   Blinks continuously until the user's gaze returns to text content.
+   Stops only when gaze is detected back on the page.
 */
 
-// ── Create the edge overlay element ──────────────────────────────────────────
-const OVERLAY_ID = 'sra-idle-overlay';
+const OVERLAY_ID = 'sra-idle-corners';
 
-function getOrCreateOverlay() {
+// ── Create corner brackets ─────────────────────────────────────────────────
+function getOrCreateCorners() {
   let el = document.getElementById(OVERLAY_ID);
   if (el) return el;
 
   el = document.createElement('div');
   el.id = OVERLAY_ID;
   Object.assign(el.style, {
-    position:        'fixed',
-    inset:           '0',
-    pointerEvents:   'none',        // never blocks clicks
-    zIndex:          '2147483644',  // below popups (2147483647) but above everything else
-    borderRadius:    '0',
-    opacity:         '0',
-    transition:      'opacity 0.4s ease',
-    border:          '0px solid transparent',
+    position:      'fixed',
+    inset:         '0',
+    pointerEvents: 'none',
+    zIndex:        '2147483644',
+    opacity:       '0',
+    transition:    'opacity 0.35s ease',
   });
+
+  // Four corners — each is an L-shaped bracket made of two pseudo-divs
+  const positions = [
+    { top: '0',    left: '0',    borderTop: true,  borderLeft: true  },
+    { top: '0',    right: '0',   borderTop: true,  borderRight: true },
+    { bottom: '0', left: '0',    borderBottom: true, borderLeft: true },
+    { bottom: '0', right: '0',   borderBottom: true, borderRight: true },
+  ];
+
+  positions.forEach(pos => {
+    const corner = document.createElement('div');
+    Object.assign(corner.style, {
+      position: 'fixed',
+      width:    '52px',
+      height:   '52px',
+      ...Object.fromEntries(
+        Object.entries(pos).filter(([k]) => !k.startsWith('border'))
+      ),
+    });
+
+    // Build border sides
+    const THICKNESS = '5px';
+    const COLOR     = 'rgba(26, 126, 93, VAL)';
+
+    if (pos.borderTop)    corner.style.borderTop    = `${THICKNESS} solid ${COLOR.replace('VAL','0.9')}`;
+    if (pos.borderBottom) corner.style.borderBottom = `${THICKNESS} solid ${COLOR.replace('VAL','0.9')}`;
+    if (pos.borderLeft)   corner.style.borderLeft   = `${THICKNESS} solid ${COLOR.replace('VAL','0.9')}`;
+    if (pos.borderRight)  corner.style.borderRight  = `${THICKNESS} solid ${COLOR.replace('VAL','0.9')}`;
+
+    corner.style.borderRadius = '0px';
+    el.appendChild(corner);
+  });
+
   document.body.appendChild(el);
   return el;
 }
 
-// ── Animation state ───────────────────────────────────────────────────────────
-let pulseTimer     = null;
-let pulseActive    = false;
-let pulsePhase     = 0;
-let idleStarted    = null;
-const PULSE_INTERVAL = 600;    // ms between pulse steps
-const FADE_DURATION  = 1800;   // ms to fully show the pulse
-const IDLE_TIMEOUT   = 4000;   // ms of no gaze before triggering
+// ── Animation state ────────────────────────────────────────────────────────
+let pulseTimer    = null;
+let pulseActive   = false;
+let idleStartedAt = null;
+let IDLE_TIMEOUT  = 4000;  // ms before triggering
 
-// Green matches TL;DR's accent, fades to transparent at the outer edges
-const PULSE_COLOR = 'rgba(26, 126, 93, ';
+// Blink: alternates between full opacity and near-zero, staying visible
+let blinkState = true;
 
 function startPulse() {
   if (pulseActive) return;
   pulseActive = true;
-  const el = getOrCreateOverlay();
+  const el = getOrCreateCorners();
 
-  // Pulse: cycle between two box-shadow sizes
-  function step() {
+  function blink() {
     if (!pulseActive) return;
-    pulsePhase = 1 - pulsePhase;
-    const size    = pulsePhase ? '0px 0px 0px 8px' : '0px 0px 0px 14px';
-    const opacity = pulsePhase ? '0.65' : '0.35';
-    el.style.boxShadow = `inset ${size} ${PULSE_COLOR}0.55)`;
-    el.style.opacity   = opacity;
-    pulseTimer = setTimeout(step, PULSE_INTERVAL);
+    blinkState = !blinkState;
+    el.style.opacity       = blinkState ? '1' : '0.15';
+    el.style.transition    = blinkState ? 'opacity 0.18s ease' : 'opacity 0.45s ease';
+    pulseTimer = setTimeout(blink, blinkState ? 500 : 700);
   }
 
   el.style.opacity = '1';
-  step();
+  blink();
 }
 
 function stopPulse() {
   if (!pulseActive) return;
-  pulseActive = false;
+  pulseActive   = false;
+  idleStartedAt = null;
   clearTimeout(pulseTimer);
   const el = document.getElementById(OVERLAY_ID);
-  if (el) { el.style.opacity = '0'; el.style.boxShadow = 'none'; }
-  idleStarted = null;
+  if (el) {
+    el.style.transition = 'opacity 0.4s ease';
+    el.style.opacity    = '0';
+  }
 }
 
-// ── Public API — called from content.js ──────────────────────────────────────
+// ── Public API ─────────────────────────────────────────────────────────────
 export function updateIdleState(features, lastGazePt, gazeReceivedAt) {
   const now = Date.now();
 
-  // Condition 1: no gaze data received for IDLE_TIMEOUT ms
-  // (user looked away entirely, eyes closed, or camera lost face)
+  // Condition 1: no gaze data at all (user looked away, camera lost face)
   const timeSinceGaze = now - gazeReceivedAt;
   if (timeSinceGaze > IDLE_TIMEOUT) {
-    if (!idleStarted) idleStarted = now;
+    if (!idleStartedAt) idleStartedAt = now;
     startPulse();
     return;
   }
 
-  // Condition 2: features say the user is zoning out (eyes drifting off text)
-  // Only trigger if we have features AND the drift is very high
+  // Condition 2: gaze data exists but eyes are drifting far off text
   if (features) {
-    const isZoning = features.gaze_drift_px > 80 &&
-                     features.scroll_delta_px < 5 &&
-                     features.velocity_mean < 150;
-    if (isZoning) {
-      if (!idleStarted) idleStarted = now;
-      // Only pulse if they've been zoning for > 3 seconds
-      if (now - idleStarted > 3000) { startPulse(); return; }
+    const isDrifting = features.gaze_drift_px    > 80 &&
+                       features.scroll_delta_px  < 5  &&
+                       features.velocity_mean    < 150;
+    if (isDrifting) {
+      if (!idleStartedAt) idleStartedAt = now;
+      if (now - idleStartedAt > 3000) { startPulse(); return; }
     } else {
+      // Eyes are back on content — stop pulsing
       stopPulse();
+      return;
     }
     return;
   }
 
+  // Gaze present and no drift — stop
   stopPulse();
 }
 
 export function forceStopIdle() { stopPulse(); }
+
+export function setIdleTimeout(ms) { IDLE_TIMEOUT = ms || 4000; }
