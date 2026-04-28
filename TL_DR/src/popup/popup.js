@@ -182,6 +182,8 @@ document.addEventListener('DOMContentLoaded', () => {
     readingCalBtn.disabled = true;
     readingCalBtn.textContent = 'Calibrating...';
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    // Reset the one-time flag so it saves fresh calibration after this
+    chrome.storage.local.set({ sra_ever_calibrated: false });
     chrome.tabs.sendMessage(tab.id, { type: 'startReadingCalibration' }, (resp) => {
       if (chrome.runtime.lastError) {
         alert('No content script — reload the page and try again.');
@@ -192,6 +194,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   calibrateBtn.addEventListener('click', async () => {
+    // Reset the one-time flag so calibration runs fresh this time
+    chrome.storage.local.set({ sra_ever_calibrated: false });
     calibrateBtn.disabled = true;
     calibrateBtn.textContent = 'Calibrating…';
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
