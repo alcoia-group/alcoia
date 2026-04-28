@@ -22,8 +22,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   // ── Constants ──────────────────────────────────────────────────────────
   const BACKEND_DEFAULT     = 'http://localhost:3000/api/summarize';
   const MIN_SELECTION_CHARS = 15;
-  const CLASSIFY_INTERVAL   = 2500;
-  const ACTION_COOLDOWN     = 8000;
+  const CLASSIFY_INTERVAL   = 3000;  // classify every 3s — slightly less CPU, still responsive
+  const ACTION_COOLDOWN     = 20000;  // 20s between triggers — prevents feeling too aggressive
   const POPUP_ID            = 'sra-floating-popup';
   const POPUP_MARGIN        = 14;
 
@@ -391,6 +391,11 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   // ── Gaze-triggered AI ──────────────────────────────────────────────────
   async function triggerAIForParagraph(paraInfo, reason) {
     if (!paraInfo) return;
+
+    // Don't trigger if a popup is already visible — prevents repositioning
+    // while the user reads the current summary
+    const existingPopup = document.getElementById(POPUP_ID);
+    if (existingPopup && existingPopup.classList.contains('show')) return;
     let text = '', el = null;
     if (paraInfo.type === 'dom') { el = paraInfo.data; text = (el?.innerText || el?.textContent || '').trim(); }
     else if (paraInfo.type === 'pdf')  text = await pdfHandler.getParagraphText(paraInfo.data);
@@ -410,7 +415,7 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   }
 
   // ── Gaze processing ────────────────────────────────────────────────────
-  const gazeState = gazeUtils.createGazeState({ smoothingAlpha:0.18, dropoutFrames:3, velocityThreshold:1200 });
+  const gazeState = gazeUtils.createGazeState({ smoothingAlpha:0.35, dropoutFrames:3, velocityThreshold:1800 });
   let consecutiveNull = 0, lastGazePt = null;
 
   async function onGaze(data) {
@@ -428,17 +433,33 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
     try {
       const f = await findParagraphAt(pt.x, pt.y);
       if (f) {
-        // Track paragraph entry for comprehension monitoring
-        if (comprehensionCheckEnabled && f.type === 'dom' && f.data !== (currentParagraph && currentParagraph.data)) {
-          // Leaving previous paragraph — check for speed mismatch
-          const signal = comprehensionMonitor.leaveParagraph();
-          if (signal) handleComprehensionSignal(signal);
-          // Entering new paragraph
-          comprehensionMonitor.enterParagraph(f.data);
+        // Ignore the popup element itself — gaze landing on the popup
+        // should not change currentParagraph or reposition the popup
+        const isPopup = f.type === 'dom' && f.data &&
+          (f.data.id === POPUP_ID || f.data.closest?.('#' + POPUP_ID));
+        if (!isPopup) {
+          // Track paragraph entry for comprehension monitoring
+          if (comprehensionCheckEnabled && f.type === 'dom' && f.data !== (currentParagraph && currentParagraph.data)) {
+            const signal = comprehensionMonitor.leaveParagraph();
+            if (signal) handleComprehensionSignal(signal);
+            comprehensionMonitor.enterParagraph(f.data);
+          }
+          currentParagraph = f;
         }
-        currentParagraph = f;
       }
     } catch (e) {}
+  }
+
+  // ── Popup factory ────────────────────────────────────────────────────────
+  function getOrCreatePopup() {
+    let root = document.getElementById(POPUP_ID);
+    if (!root) {
+      root = document.createElement('div');
+      root.id        = POPUP_ID;
+      root.className = 'sra-popup';
+      document.body.appendChild(root);
+    }
+    return root;
   }
 
   // ── Comprehension signal handler ──────────────────────────────────────────
@@ -617,11 +638,30 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
 
           setTimeout(async () => {
             try {
-              const cal = await gazeUtils.runCalibrationSequence();
-              if (cal) await gazeUtils.setCalibration(cal);
-              _log('Calibration complete:', cal);
+              // One-time calibration: if user has calibrated before, restore
+              // the saved model silently. No overlay, no interruption.
+              // Recalibrate anytime via the popup buttons.
+              const stored = await new Promise(resolve =>
+                chrome.storage.local.get({ sra_ever_calibrated: false }, r => resolve(r))
+              );
+              if (stored.sra_ever_calibrated) {
+                _log('Restoring saved calibration...');
+                await gazeUtils.restoreWebgazerModel();
+                const savedCal = await gazeUtils.getCalibration();
+                if (savedCal) await gazeUtils.setCalibration(savedCal);
+                _log('Calibration restored — skipping sequence');
+              } else {
+                _log('First-time calibration starting...');
+                const cal = await gazeUtils.runCalibrationSequence();
+                if (cal) {
+                  await gazeUtils.setCalibration(cal);
+                  await gazeUtils.saveWebgazerModel();
+                  chrome.storage.local.set({ sra_ever_calibrated: true });
+                  _log('First-time calibration complete and saved');
+                }
+              }
             } catch (e) {
-              _warn('Calibration failed (non-fatal):', e.message);
+              _warn('Calibration step failed (non-fatal):', e.message);
             }
             startClassificationLoop();
           }, 800);
