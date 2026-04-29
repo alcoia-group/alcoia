@@ -434,4 +434,4 @@ export const STATE_LABELS = {
   confused:   'Confused',
   zoning_out: 'Zoning Out',
   overloaded: 'Overloaded',
-};
+}; 
