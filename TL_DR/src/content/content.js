@@ -72,13 +72,13 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const compModule  = await loadModule('src/content/comprehension-monitor.js');
   const readCalModule = await loadModule('src/content/reading-calibration.js');
   const { runReadingCalibration } = readCalModule;
-  const comprehensionMonitor = compModule.createComprehensionMonitor({
-    speedRatio:     0.55,
-    minWords:       40,
-    minDifficulty:  40,
-    backtrackWindow:6000,
-    cooldown:       15000,
-  });
+const comprehensionMonitor = compModule.createComprehensionMonitor({
+  speedRatio:     0.30,   // only fire if reading at 30% of expected — genuinely rushed
+  minWords:       70,     // paragraph must be substantial enough to warrant a check
+  minDifficulty:  58,     // only dense/complex text triggers it (Flesch score threshold)
+  backtrackWindow:4000,   // scroll-back window tightened — must happen within 4s
+  cooldown:       30000,  // 30s cooldown — matches the feel of cognitive state popups
+});
   const classModule  = await loadModule('src/content/classifier.js');
 
   const featureExtractor = featModule.createFeatureExtractor({ windowMs: 2500, minPoints: 15 });
