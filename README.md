@@ -5,7 +5,7 @@ TL;DR is a Chrome extension that reads how you read. It uses your webcam to trac
 Unlike a traditional AI assistant that waits for you to ask for help, TL;DR detects when you need it and acts before you consciously decide to ask.
 
 ---  
-
+ 
 ## How it works
 
 The extension runs three systems simultaneously.
