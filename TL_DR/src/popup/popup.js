@@ -1,23 +1,29 @@
 document.addEventListener('DOMContentLoaded', () => {
   const $ = id => document.getElementById(id);
 
-  const assistantToggle  = $('assistantToggle');
-  const eyeToggle        = $('eyeToggle');
-  const selToggle        = $('selToggle');
-  const highlightToggle  = $('highlightToggle');
-  const autohideToggle   = $('autohideToggle');
-  const autohideTimeout  = $('autohideTimeout');
-  const timeoutRow       = $('timeoutRow');
-  const pinDefaultToggle = $('pinDefaultToggle');
-  const debugTogglePopup = $('debugTogglePopup');
-  const backendUrlInput  = $('backendUrl');
-  const startCameraBtn   = $('startCameraBtn');
-  const calibrateBtn     = $('calibrateBtn');
-  const troubleshootBtn  = $('troubleshootBtn');
-  const upgradeBtn       = $('upgradeBtn');
-  const cameraDot        = $('cameraDot');
-  const cameraStatus     = $('cameraStatus');
-  const cogStateChip     = $('cogStateChip');
+  const assistantToggle    = $('assistantToggle');
+  const eyeToggle          = $('eyeToggle');
+  const selToggle          = $('selToggle');
+  const highlightToggle    = $('highlightToggle');
+  const autohideToggle     = $('autohideToggle');
+  const autohideTimeout    = $('autohideTimeout');
+  const timeoutRow         = $('timeoutRow');
+  const pinDefaultToggle   = $('pinDefaultToggle');
+  const debugTogglePopup   = $('debugTogglePopup');
+  const backendUrlInput    = $('backendUrl');
+  const startCameraBtn     = $('startCameraBtn');
+  const calibrateBtn       = $('calibrateBtn');
+  const troubleshootBtn    = $('troubleshootBtn');
+  const upgradeBtn         = $('upgradeBtn');
+  const cameraDot          = $('cameraDot');
+  const cameraStatus       = $('cameraStatus');
+  const cogStateChip       = $('cogStateChip');
+  const ttsToggle          = $('ttsToggle');
+  const focusRulerToggle   = $('focusRulerToggle');
+  const dyslexiaToggle     = $('dyslexiaToggle');
+  const dyslexiaOptions    = $('dyslexiaOptions');
+  const bionicToggle       = $('bionicToggle');
+  const dyslexiaColorSelect = $('dyslexiaColorSelect');
 
   // ── Load saved settings ────────────────────────────────────────────────
   const DEFAULTS = {
@@ -26,6 +32,8 @@ document.addEventListener('DOMContentLoaded', () => {
     sra_autohide: false, sra_autohide_timeout: 12,
     sra_pin_default: false, sra_debug: false, sra_enabled: true,
     sra_camera_ready: false, sra_camera_error: '', sra_current_state: '',
+    sra_tts: false, sra_focus_ruler: false,
+    sra_dyslexia: false, sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
   };
 
   chrome.storage.local.get(DEFAULTS, (res) => {
@@ -41,8 +49,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (idleBlinkToggle)     idleBlinkToggle.checked     = res.sra_idle_blink !== false;
     if (comprehensionToggle) comprehensionToggle.checked = res.sra_comprehension !== false;
     assistantToggle.checked    = res.sra_enabled !== false;
+    if (ttsToggle)          ttsToggle.checked          = !!res.sra_tts;
+    if (focusRulerToggle)   focusRulerToggle.checked   = !!res.sra_focus_ruler;
+    if (dyslexiaToggle)     {
+      dyslexiaToggle.checked = !!res.sra_dyslexia;
+      if (dyslexiaOptions) dyslexiaOptions.style.display = res.sra_dyslexia ? 'block' : 'none';
+    }
+    if (bionicToggle)       bionicToggle.checked       = !!res.sra_bionic;
+    if (dyslexiaColorSelect) dyslexiaColorSelect.value = res.sra_dyslexia_color || '';
 
-    // Restore camera status from storage
     if (res.sra_camera_ready) {
       setCameraStatus('active', 'camera active');
     } else if (res.sra_camera_error) {
@@ -50,8 +65,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       setCameraStatus('', 'camera off');
     }
-
-    // Restore cognitive state
     if (res.sra_current_state) setCogState(res.sra_current_state);
   });
 
@@ -111,6 +124,11 @@ document.addEventListener('DOMContentLoaded', () => {
       sra_enabled:          assistantToggle.checked,
       sra_idle_blink:       idleBlinkToggle    ? idleBlinkToggle.checked    : true,
       sra_comprehension:    comprehensionToggle ? comprehensionToggle.checked : true,
+      sra_tts:              ttsToggle          ? ttsToggle.checked          : false,
+      sra_focus_ruler:      focusRulerToggle   ? focusRulerToggle.checked   : false,
+      sra_dyslexia:         dyslexiaToggle     ? dyslexiaToggle.checked     : false,
+      sra_dyslexia_color:   dyslexiaColorSelect ? dyslexiaColorSelect.value : '',
+      sra_bionic:           bionicToggle       ? bionicToggle.checked       : false,
     };
     chrome.storage.local.set(s);
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -121,6 +139,10 @@ document.addEventListener('DOMContentLoaded', () => {
         highlightPara: s.sra_highlight_para,
         autohide: s.sra_autohide, autohideTimeout: s.sra_autohide_timeout,
         pinDefault: s.sra_pin_default, debug: s.sra_debug,
+        idleBlink: s.sra_idle_blink, comprehension: s.sra_comprehension,
+        tts: s.sra_tts, focusRuler: s.sra_focus_ruler,
+        dyslexia: s.sra_dyslexia, dyslexiaColor: s.sra_dyslexia_color,
+        bionic: s.sra_bionic,
       }, () => { if (chrome.runtime.lastError) {} });
       if (debugTogglePopup.checked !== undefined)
         chrome.tabs.sendMessage(tabs[0].id, { type: 'debugToggle', enabled: s.sra_debug },
@@ -136,10 +158,15 @@ document.addEventListener('DOMContentLoaded', () => {
     timeoutRow.style.display = autohideToggle.checked ? 'flex' : 'none';
     saveAndBroadcast();
   });
-  [eyeToggle, selToggle, highlightToggle, pinDefaultToggle, debugTogglePopup, idleBlinkToggle, comprehensionToggle]
+  dyslexiaToggle && dyslexiaToggle.addEventListener('change', () => {
+    if (dyslexiaOptions) dyslexiaOptions.style.display = dyslexiaToggle.checked ? 'block' : 'none';
+    saveAndBroadcast();
+  });
+  [eyeToggle, selToggle, highlightToggle, pinDefaultToggle, debugTogglePopup,
+   idleBlinkToggle, comprehensionToggle, ttsToggle, focusRulerToggle, bionicToggle]
     .filter(Boolean).forEach(el => el.addEventListener('change', saveAndBroadcast));
-  backendUrlInput.addEventListener('change', saveAndBroadcast);
-  autohideTimeout.addEventListener('change', saveAndBroadcast);
+  [backendUrlInput, autohideTimeout, dyslexiaColorSelect]
+    .filter(Boolean).forEach(el => el.addEventListener('change', saveAndBroadcast));
 
   // Eye toggle also starts camera
   eyeToggle.addEventListener('change', () => {

@@ -83,6 +83,35 @@ export function checkVelocity(state, point) {
   return spd <= state.velocityThreshold;
 }
 
+// ── PERSONAL BASELINE NORMALIZATION ──────────────────────────────────────────
+// Maps the user's natural "focused reading" feature values to the range the
+// classifier was trained on (synthetic average reader). Without this, a careful
+// reader with naturally long fixations would always look "confused" to the tree.
+//
+// Each feature is scaled by (TYPICAL / baseline), so that when the user reads at
+// their natural focused pace, features land near the classifier's focused region.
+const TYPICAL_FOCUSED = {
+  avg_fixation_ms:   220,
+  regression_rate:   0.10,
+  saccade_length:    100,
+  saccade_std:        35,
+  gaze_drift_px:      20,
+  velocity_mean:     280,
+  line_reread_count:   0.5,
+};
+
+export function normalizeWithBaseline(features, baseline) {
+  if (!baseline) return features;
+  const out = { ...features };
+  for (const key of Object.keys(TYPICAL_FOCUSED)) {
+    const b = baseline[key];
+    if (b && b > 0) {
+      out[key] = features[key] * (TYPICAL_FOCUSED[key] / b);
+    }
+  }
+  return out;
+}
+
 // ── CLICK-BASED CALIBRATION ───────────────────────────────────────────────────
 //
 // The user sees a dot, clicks it, we call webgazer.recordScreenPosition().
@@ -223,28 +252,60 @@ export async function runCalibrationSequence() {
       setTimeout(async () => {
         try { overlay.remove(); } catch (e) {}
 
-        // Ask page context for the current prediction at centre to compute residual offset
+        // Take 5 prediction samples at the viewport centre with 180ms spacing,
+        // then average them. One sample is too noisy to trust.
         const centreX = window.innerWidth  / 2;
         const centreY = window.innerHeight / 2;
-        const offset  = await new Promise(res => {
-          const id = Math.random().toString(36).slice(2);
-          const h  = (ev) => {
-            if (ev.source !== window || !ev.data || ev.data.sra_pred_id !== id || ev.data.source !== 'sra-cal-prediction') return;
-            window.removeEventListener('message', h);
-            const pred = ev.data.prediction;
-            if (pred && typeof pred.x === 'number') {
-              res({ dx: Math.round(centreX - pred.x), dy: Math.round(centreY - pred.y) });
-            } else {
-              res({ dx: 0, dy: 0 });
-            }
-          };
-          window.addEventListener('message', h);
-          window.postMessage({ source: 'sra-cal-predict', sra_pred_id: id }, '*');
-          setTimeout(() => { window.removeEventListener('message', h); res({ dx: 0, dy: 0 }); }, 1000);
-        });
+
+        async function sampleOffset() {
+          return new Promise(res => {
+            const id = Math.random().toString(36).slice(2);
+            const h  = (ev) => {
+              if (ev.source !== window || !ev.data || ev.data.sra_pred_id !== id || ev.data.source !== 'sra-cal-prediction') return;
+              window.removeEventListener('message', h);
+              const pred = ev.data.prediction;
+              if (pred && typeof pred.x === 'number') {
+                res({ dx: centreX - pred.x, dy: centreY - pred.y });
+              } else {
+                res(null);
+              }
+            };
+            window.addEventListener('message', h);
+            window.postMessage({ source: 'sra-cal-predict', sra_pred_id: id }, '*');
+            setTimeout(() => { window.removeEventListener('message', h); res(null); }, 800);
+          });
+        }
+
+        const samples = [];
+        for (let i = 0; i < 5; i++) {
+          await new Promise(r => setTimeout(r, 180));
+          const s = await sampleOffset();
+          if (s) samples.push(s);
+        }
+
+        let offset = { dx: 0, dy: 0 };
+        if (samples.length > 0) {
+          // Trim extreme outliers: drop highest and lowest dx if we have enough
+          if (samples.length >= 4) {
+            samples.sort((a, b) => a.dx - b.dx);
+            const trimmed = samples.slice(1, -1);
+            offset = {
+              dx: Math.round(trimmed.reduce((s, p) => s + p.dx, 0) / trimmed.length),
+              dy: Math.round(trimmed.reduce((s, p) => s + p.dy, 0) / trimmed.length),
+            };
+          } else {
+            offset = {
+              dx: Math.round(samples.reduce((s, p) => s + p.dx, 0) / samples.length),
+              dy: Math.round(samples.reduce((s, p) => s + p.dy, 0) / samples.length),
+            };
+          }
+          // Cap at ±200px — larger offsets indicate a failed prediction, not a real error
+          offset.dx = Math.max(-200, Math.min(200, offset.dx));
+          offset.dy = Math.max(-200, Math.min(200, offset.dy));
+        }
 
         await setCalibration(offset);
-        console.log('[TL;DR] Calibration complete. Offset:', offset);
+        console.log('[TL;DR] Calibration complete. Offset:', offset, `(from ${samples.length} samples)`);
         resolve(offset);
       }, 280);
     }

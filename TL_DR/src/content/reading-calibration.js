@@ -177,17 +177,26 @@ export async function runReadingCalibration(opts = {}) {
       spans.push(span);
     });
 
-    let animFrame = null;
-    let stopped   = false;
+    let animFrame  = null;
+    let stopped    = false;
+    let startedAt  = null;  // wall-clock time when highlighting begins
 
     function cleanup(success) {
       stopped = true;
       cancelAnimationFrame(animFrame);
       overlay.style.opacity = '0';
+
+      // Compute WPM from actual elapsed time during the highlight loop
+      let wpm = null;
+      if (success && startedAt) {
+        const elapsedSec = (Date.now() - startedAt) / 1000;
+        wpm = elapsedSec > 0 ? Math.round((words.length / elapsedSec) * 60) : null;
+      }
+
       setTimeout(() => {
         try { overlay.remove(); } catch(e) {}
-        onComplete(success);
-        resolve(success);
+        onComplete(success, wpm);
+        resolve({ success, wpm });
       }, 320);
     }
 
@@ -253,6 +262,7 @@ export async function runReadingCalibration(opts = {}) {
         animFrame = requestAnimationFrame(step);
       }
 
+      startedAt = Date.now();
       animFrame = requestAnimationFrame(step);
     }, 2000);
   });
