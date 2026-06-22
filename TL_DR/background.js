@@ -1,6 +1,21 @@
 // background service worker (MV3)
 // Handles messages from content scripts and popup (notes saving, WebGazer injection)
 
+// ── Local PDF redirect ─────────────────────────────────────────────────────────
+// Chrome's native PDF viewer runs in a sandboxed renderer that content scripts
+// cannot inject into. When a local file:// PDF is opened, redirect it to the
+// extension's custom PDF viewer page, which has full TL;DR integration.
+// Requires "Allow access to file URLs" to be enabled in chrome://extensions.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'loading') return;
+  const url = tab.url || '';
+  if (!url || !/^file:\/\/.+\.pdf(\?.*)?$/i.test(url)) return;
+
+  const viewerUrl = chrome.runtime.getURL('src/pdf-viewer/viewer.html')
+    + '?src=' + encodeURIComponent(url);
+  chrome.tabs.update(tabId, { url: viewerUrl });
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.action) return;
 

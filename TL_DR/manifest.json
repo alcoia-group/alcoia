@@ -7,10 +7,12 @@
     "storage",
     "scripting",
     "activeTab",
-    "tabs"
+    "tabs",
+    "webNavigation"
   ],
   "host_permissions": [
     "<all_urls>",
+    "file:///*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
@@ -45,6 +47,7 @@
         "src/styles/**",
         "src/popup/**",
         "src/content/**",
+        "src/pdf-viewer/**",
         "assets/**"
       ],
       "matches": [

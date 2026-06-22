@@ -318,6 +318,54 @@
       </div>
       <label class="pill"><input type="checkbox" id="comprehensionToggle" checked><span class="pill-track"></span></label>
     </label>
+
+    <label class="toggle-row" for="ttsToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Read Aloud (TTS)</span>
+        <span class="toggle-desc">Speak the paragraph when confusion is detected</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="ttsToggle"><span class="pill-track"></span></label>
+    </label>
+
+    <label class="toggle-row" for="focusRulerToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Focus Ruler</span>
+        <span class="toggle-desc">Dim above &amp; below gaze line to anchor reading</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="focusRulerToggle"><span class="pill-track"></span></label>
+    </label>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Accessibility</div>
+
+    <label class="toggle-row" for="dyslexiaToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Dyslexia Mode</span>
+        <span class="toggle-desc">Cleaner font, wider spacing, softer confusion threshold</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="dyslexiaToggle"><span class="pill-track"></span></label>
+    </label>
+
+    <div id="dyslexiaOptions" style="display:none;padding:4px 2px 2px 4px">
+      <label class="toggle-row" for="bionicToggle">
+        <div class="toggle-info">
+          <span class="toggle-name">Bionic Reading</span>
+          <span class="toggle-desc">Bold first half of each word when AI triggers</span>
+        </div>
+        <label class="pill"><input type="checkbox" id="bionicToggle"><span class="pill-track"></span></label>
+      </label>
+      <div class="field-row" style="padding:4px 2px">
+        <span class="field-label">Colour overlay tint</span>
+        <select id="dyslexiaColorSelect" class="field-input" style="padding:5px 8px;font-size:11px">
+          <option value="">None</option>
+          <option value="rgba(255,243,180,0.12)">Warm yellow (default)</option>
+          <option value="rgba(180,220,255,0.12)">Light blue</option>
+          <option value="rgba(200,255,200,0.10)">Soft green</option>
+          <option value="rgba(255,200,200,0.10)">Pale rose</option>
+        </select>
+      </div>
+    </div>
   </div>
 
   <div class="section">

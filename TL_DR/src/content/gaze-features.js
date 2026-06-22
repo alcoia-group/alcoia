@@ -161,6 +161,9 @@ export function createFeatureExtractor(opts = {}) {
     scrollDelta = 0;
     lastScrollY = window.scrollY;
 
+    // Quality: fraction of raw buffer that survived DBSCAN (1.0 = clean, <0.25 = noisy/bad lighting)
+    const gazeQuality = candidates.length / buffer.length;
+
     return {
       avg_fixation_ms:   avgFixationMs,
       fixation_std:      fixationStd,
@@ -171,6 +174,7 @@ export function createFeatureExtractor(opts = {}) {
       scroll_delta_px:   scrollDeltaCapture,
       velocity_mean:     velocityMean,
       line_reread_count: lineRereadCount,
+      gaze_quality:      gazeQuality,
     };
   }
 
