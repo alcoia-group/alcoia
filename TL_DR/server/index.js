@@ -10,8 +10,41 @@ const fs      = require('fs');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow same-origin (no header), Chrome extension, and localhost only.
+    // This blocks arbitrary websites from hitting the local server.
+    if (
+      !origin ||
+      /^chrome-extension:\/\//.test(origin) ||
+      /^https?:\/\/(localhost|127\.0\.0\.1)/.test(origin)
+    ) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS: origin not allowed'));
+    }
+  },
+}));
 app.use(express.json({ limit: '2mb' }));
+
+// ── Rate limiter (30 req/min per IP) ───────────────────────────────────────
+const _rlMap = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 60000;
+  for (const [ip, ts] of _rlMap) {
+    const fresh = ts.filter(t => t > cutoff);
+    if (fresh.length === 0) _rlMap.delete(ip); else _rlMap.set(ip, fresh);
+  }
+}, 60000);
+function rateLimit(req, res, next) {
+  const ip  = req.ip || '0.0.0.0';
+  const now = Date.now();
+  const ts  = (_rlMap.get(ip) || []).filter(t => now - t < 60000);
+  if (ts.length >= 30) return res.status(429).json({ error: 'Rate limit exceeded. Try again in a minute.' });
+  ts.push(now);
+  _rlMap.set(ip, ts);
+  next();
+}
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL   = process.env.GROQ_MODEL   || 'llama-3.1-8b-instant';
@@ -130,7 +163,7 @@ async function callGroq(prompt, mode) {
 }
 
 // ── Main endpoint ──────────────────────────────────────────────────────────
-app.post('/api/summarize', async (req, res) => {
+app.post('/api/summarize', rateLimit, async (req, res) => {
   const { text = '', mode = 'tldr' } = req.body || {};
 
   if (!text || text.trim().length < 3) {
