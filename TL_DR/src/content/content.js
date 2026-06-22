@@ -687,10 +687,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     } catch (e) {}
   }, { passive: true });
 
-  document.addEventListener('click', e => {
-    try { if (window.webgazer) webgazer.recordScreenPosition(e.clientX, e.clientY, 'click'); } catch (e) {}
-  });
-
   // ── PDF/PPTX handlers ─────────────────────────────────────────────────
   async function detectAndInitHandlers() {
     const url = window.location.href;
