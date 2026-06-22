@@ -49,6 +49,27 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let comprehensionCheckEnabled = true;
   let lastGazeReceivedAt = Date.now();  // tracks when we last got a real gaze point
 
+  // ── New feature flags ──────────────────────────────────────────────────
+  let ttsEnabled          = false;
+  let focusRulerEnabled   = false;
+  let dyslexiaEnabled     = false;
+  let dyslexiaColor       = 'rgba(255,243,180,0.12)';
+  let bionicEnabled       = false;
+  let personalBaseline    = null;  // from calibration or chrome.storage
+  let prevParagraphText   = '';    // for AI context window
+
+  // ── State smoothing ring buffer ────────────────────────────────────────
+  const STATE_HISTORY     = [];
+  const STATE_HISTORY_MAX = 3;
+
+  function getSmoothedState(newLabel) {
+    STATE_HISTORY.push(newLabel);
+    if (STATE_HISTORY.length > STATE_HISTORY_MAX) STATE_HISTORY.shift();
+    const counts = {};
+    for (const s of STATE_HISTORY) counts[s] = (counts[s] || 0) + 1;
+    return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+  }
+
   // Expose restart hook for the double-injection guard above
   window.__sra_restart_tracker = () => { window.__sra_tracker_started = false; startTracker(); };
 
@@ -72,12 +93,19 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const compModule  = await loadModule('src/content/comprehension-monitor.js');
   const readCalModule = await loadModule('src/content/reading-calibration.js');
   const { runReadingCalibration } = readCalModule;
+  const ttsModule      = await loadModule('src/content/tts-handler.js');
+  const rulerModule    = await loadModule('src/content/focus-ruler.js');
+  const dyslexiaModule = await loadModule('src/content/dyslexia-utils.js');
+
+  const ttsHandler  = ttsModule.createTTSHandler();
+  const focusRuler  = rulerModule.createFocusRuler();
+  const dyslexiaUtils = dyslexiaModule;
 const comprehensionMonitor = compModule.createComprehensionMonitor({
-  speedRatio:     0.30,   // only fire if reading at 30% of expected — genuinely rushed
-  minWords:       70,     // paragraph must be substantial enough to warrant a check
-  minDifficulty:  58,     // only dense/complex text triggers it (Flesch score threshold)
-  backtrackWindow:4000,   // scroll-back window tightened — must happen within 4s
-  cooldown:       30000,  // 30s cooldown — matches the feel of cognitive state popups
+  speedRatio:     0.30,
+  minWords:       70,
+  minDifficulty:  58,
+  backtrackWindow:4000,
+  cooldown:       30000,
 });
   const classModule  = await loadModule('src/content/classifier.js');
 
@@ -89,6 +117,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     sra_backend_url: BACKEND_DEFAULT, sra_eye: true, sra_selection: true,
     sra_highlight_para: true, sra_autohide: false, sra_autohide_timeout: 12,
     sra_pin_default: false, sra_debug: false, sra_idle_blink: true, sra_comprehension: true,
+    sra_tts: false, sra_focus_ruler: false, sra_dyslexia: false,
+    sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
+    sra_personal_baseline: null, sra_baseline_wpm: null,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     eyeTrackingEnabled = res.sra_eye !== false;
@@ -99,6 +130,15 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     pinDefault         = !!res.sra_pin_default;
     debugEnabled              = !!res.sra_debug;
     comprehensionCheckEnabled = res.sra_comprehension !== false;
+    ttsEnabled        = !!res.sra_tts;
+    focusRulerEnabled = !!res.sra_focus_ruler;
+    dyslexiaEnabled   = !!res.sra_dyslexia;
+    dyslexiaColor     = res.sra_dyslexia_color || 'rgba(255,243,180,0.12)';
+    bionicEnabled     = !!res.sra_bionic;
+    personalBaseline  = res.sra_personal_baseline || null;
+    if (res.sra_baseline_wpm) comprehensionMonitor.seedWpmFromCalibration(res.sra_baseline_wpm);
+    if (dyslexiaEnabled) dyslexiaUtils.applyDyslexiaCSS(dyslexiaColor);
+    if (focusRulerEnabled) focusRuler.enable();
   });
 
   // ── Utilities ──────────────────────────────────────────────────────────
@@ -119,14 +159,16 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   }
 
   // ── AI fetch ───────────────────────────────────────────────────────────
-  async function fetchSummary(text, mode = 'tldr') {
+  async function fetchSummary(text, mode = 'tldr', context = '') {
     try {
       const url = backendUrl || BACKEND_DEFAULT;
       _log(`Fetching ${url} mode=${mode} len=${text.length}`);
+      const body = { text: text.slice(0, 3500), mode };
+      if (context) body.context = context.slice(0, 800);
       const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text.slice(0, 3500), mode }),
+        body: JSON.stringify(body),
       });
       if (!resp.ok) { _warn(`Server ${resp.status}`); return null; }
       const j = await resp.json();
@@ -405,11 +447,20 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     const mode = reason === 'overloaded' ? 'simplify' : reason === 'confused' ? 'explain_more' : 'tldr';
     const triggerLabel = { confused:'— confused', overloaded:'— overloaded', zoning_out:'— zoning out' }[reason] || reason;
 
-    if (el) highlightElement(el, 6000);
+    if (el) {
+      highlightElement(el, 6000);
+      if (bionicEnabled) dyslexiaUtils.applyBionicReading(el);
+    }
     let anchorRect = null;
     try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
 
-    const summary = await fetchSummary(text, mode);
+    // TTS: speak the paragraph if enabled (before AI fetch so it starts immediately)
+    if (ttsEnabled) {
+      ttsHandler.speak(text, { el: el || null });
+    }
+
+    // Fetch AI summary, including previous paragraph as context for denser text
+    const summary = await fetchSummary(text, mode, prevParagraphText);
     if (!summary) return;
     renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source:'gaze', trigger:reason, triggerLabel });
   }
@@ -430,18 +481,24 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     lastGazePt = pt;
     lastGazeReceivedAt = Date.now();
     featureExtractor.addPoint(pt);
+
+    // Focus ruler follows gaze Y in real time
+    if (focusRulerEnabled) focusRuler.update(pt.y);
+
     try {
       const f = await findParagraphAt(pt.x, pt.y);
       if (f) {
-        // Ignore the popup element itself — gaze landing on the popup
-        // should not change currentParagraph or reposition the popup
         const isPopup = f.type === 'dom' && f.data &&
           (f.data.id === POPUP_ID || f.data.closest?.('#' + POPUP_ID));
         if (!isPopup) {
-          // Track paragraph entry for comprehension monitoring
           if (comprehensionCheckEnabled && f.type === 'dom' && f.data !== (currentParagraph && currentParagraph.data)) {
             const signal = comprehensionMonitor.leaveParagraph();
             if (signal) handleComprehensionSignal(signal);
+            // Save text of departing paragraph as context for the next AI call
+            if (currentParagraph?.type === 'dom' && currentParagraph.data) {
+              prevParagraphText = (currentParagraph.data.innerText || currentParagraph.data.textContent || '')
+                .trim().slice(0, 800);
+            }
             comprehensionMonitor.enterParagraph(f.data);
           }
           currentParagraph = f;
@@ -564,18 +621,40 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     _log('Classification loop started');
     classifyTimer = setInterval(async () => {
       if (!eyeTrackingEnabled || !lastGazePt) return;
-      const features = featureExtractor.computeFeatures();
-      if (!features) return;
-      const { label, confidence } = classifyGazeState(features);
-      lastCogState = label;
+      const rawFeatures = featureExtractor.computeFeatures();
+      if (!rawFeatures) return;
+
+      // Quality gate: skip classification when webcam tracking is too noisy
+      // (poor lighting, glasses glare, face partially occluded)
+      if (rawFeatures.gaze_quality < 0.25) {
+        if (debugEnabled) _log(`Skipping classify — low gaze quality (${(rawFeatures.gaze_quality*100).toFixed(0)}%)`);
+        return;
+      }
+
+      // Normalize features against personal baseline so individual reading
+      // styles don't bias the fixed classifier thresholds
+      const features = personalBaseline
+        ? gazeUtils.normalizeWithBaseline(rawFeatures, personalBaseline)
+        : rawFeatures;
+
+      // Apply dyslexia threshold patch before classifying
+      const classFeatures = dyslexiaEnabled
+        ? dyslexiaUtils.patchFeaturesForDyslexia(features)
+        : features;
+
+      const { label, confidence } = classifyGazeState(classFeatures);
+
+      // Smooth over 3 windows to prevent single-sample false triggers
+      const smoothedLabel = getSmoothedState(label);
+      lastCogState = smoothedLabel;
       // Store so popup can read it
-      chrome.storage.local.set({ sra_current_state: label });
-      if (debugEnabled) _log(`State: ${label} (${(confidence*100).toFixed(0)}%)`);
+      chrome.storage.local.set({ sra_current_state: smoothedLabel });
+      if (debugEnabled) _log(`State: ${smoothedLabel} (raw: ${label}, conf: ${(confidence*100).toFixed(0)}%, quality: ${(rawFeatures.gaze_quality*100).toFixed(0)}%)`);
       // Update idle overlay (blinking edges when not looking at screen)
-      if (idleBlinkEnabled) updateIdleState(features, lastGazePt, lastGazeReceivedAt);
+      if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
       else forceStopIdle();
 
-      const action = COGNITIVE_STATE_ACTIONS[label];
+      const action = COGNITIVE_STATE_ACTIONS[smoothedLabel];
       const now    = Date.now();
       if (action === 'none') return;
 
@@ -593,7 +672,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         const oldest = [...paraActionAt.entries()].sort((a,b)=>a[1]-b[1])[0][0];
         paraActionAt.delete(oldest);
       }
-      if (action === 'explain' || action === 'simplify') await triggerAIForParagraph(currentParagraph, label);
+      if (action === 'explain' || action === 'simplify') await triggerAIForParagraph(currentParagraph, smoothedLabel);
       else if (action === 'nudge') { const el = currentParagraph?.type==='dom'?currentParagraph.data:null; showNudge(el); if(el) highlightElement(el,3000); }
     }, CLASSIFY_INTERVAL);
   }
@@ -678,6 +757,16 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     } catch (e) { _warn('startTracker failed:', e); }
   }
 
+  // Continuous click recording: every click is a WebGazer training example.
+  // This is the correct way — postMessage to the bootstrap in page context,
+  // which calls webgazer.recordScreenPosition(). Content scripts can't access
+  // window.webgazer directly (isolated world), but postMessage crosses worlds.
+  document.addEventListener('click', (e) => {
+    try {
+      window.postMessage({ source: 'sra-cal-record', x: e.clientX, y: e.clientY }, '*');
+    } catch (err) {}
+  }, { passive: true, capture: false });
+
   // Scroll backtrack detection (user scrolls back to re-read = comprehension signal)
   window.addEventListener('scroll', () => {
     if (!comprehensionCheckEnabled) return;
@@ -726,6 +815,20 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       if (msg.idleBlink     !== undefined) { idleBlinkEnabled = !!msg.idleBlink; if (!idleBlinkEnabled) forceStopIdle(); }
       if (msg.comprehension !== undefined) comprehensionCheckEnabled = !!msg.comprehension;
       if (msg.backendUrl)                  backendUrl         = msg.backendUrl;
+      // New feature flags
+      if (msg.tts           !== undefined) ttsEnabled         = !!msg.tts;
+      if (msg.focusRuler    !== undefined) {
+        focusRulerEnabled = !!msg.focusRuler;
+        focusRulerEnabled ? focusRuler.enable() : focusRuler.disable();
+      }
+      if (msg.dyslexia      !== undefined || msg.dyslexiaColor !== undefined) {
+        if (msg.dyslexia !== undefined) dyslexiaEnabled = !!msg.dyslexia;
+        if (msg.dyslexiaColor) dyslexiaColor = msg.dyslexiaColor;
+        dyslexiaEnabled
+          ? dyslexiaUtils.applyDyslexiaCSS(dyslexiaColor)
+          : dyslexiaUtils.removeDyslexiaCSS();
+      }
+      if (msg.bionic        !== undefined) bionicEnabled = !!msg.bionic;
       try { window.postMessage({ source:'sra-control', type:'setPredictionPoints', enabled:!!debugEnabled },'*'); } catch(e){}
       sendResponse({ status: 'ok' }); return;
     }
@@ -743,13 +846,25 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (msg.type === 'startReadingCalibration') {
       (async () => {
         try {
+          // Reset feature extractor so calibration gaze data builds a clean baseline
+          featureExtractor.reset();
           const result = await runReadingCalibration({
             msPerWord:  220,
-            onComplete: (success) => {
-              _log('Reading calibration complete, success:', success);
+            onComplete: (success, wpm) => {
+              _log('Reading calibration complete, success:', success, 'wpm:', wpm);
+              if (success && wpm) {
+                // Seed comprehension monitor WPM baseline from calibration
+                comprehensionMonitor.seedWpmFromCalibration(wpm);
+                // Capture gaze feature baseline from what was just recorded
+                const baselineFeatures = featureExtractor.computeFeatures();
+                if (baselineFeatures) {
+                  personalBaseline = baselineFeatures;
+                  chrome.storage.local.set({ sra_personal_baseline: baselineFeatures, sra_baseline_wpm: wpm });
+                  _log('Personal baseline saved:', baselineFeatures);
+                }
+              }
             }
           });
-          // After reading calibration, save the improved model
           try { await gazeUtils.saveWebgazerModel(); } catch(e) {}
           sendResponse({ status: 'ok', result });
         } catch (e) {

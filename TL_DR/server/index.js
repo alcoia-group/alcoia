@@ -58,8 +58,11 @@ if (!GROQ_API_KEY) {
 }
 
 // ── Prompts ────────────────────────────────────────────────────────────────
-function buildPrompt(text, mode) {
-  const escaped = text.trim();
+function buildPrompt(text, mode, context) {
+  const escaped  = text.trim();
+  const ctxBlock = context
+    ? `\n\nFor reference, here is the paragraph that immediately preceded this one:\n"""\n${context.trim()}\n"""\n`
+    : '';
 
   const prompts = {
 
@@ -79,7 +82,7 @@ Explain this passage clearly. Your response must:
 - Avoid jargon unless you immediately define it
 
 Do not summarise. Explain. Make the concept click.
-
+${ctxBlock}
 Passage:
 ${escaped}`,
 
@@ -93,7 +96,7 @@ Rewrite this passage in plain language. Your response must:
 - Cut everything that isn't essential
 
 Target reading level: someone intelligent but unfamiliar with this topic.
-
+${ctxBlock}
 Original passage:
 ${escaped}`,
 
@@ -164,14 +167,14 @@ async function callGroq(prompt, mode) {
 
 // ── Main endpoint ──────────────────────────────────────────────────────────
 app.post('/api/summarize', rateLimit, async (req, res) => {
-  const { text = '', mode = 'tldr' } = req.body || {};
+  const { text = '', mode = 'tldr', context = '' } = req.body || {};
 
   if (!text || text.trim().length < 3) {
     return res.status(400).json({ error: 'No text provided.' });
   }
 
   const clipped = text.trim().slice(0, 4000);
-  const prompt  = buildPrompt(clipped, mode);
+  const prompt  = buildPrompt(clipped, mode, context);
 
   if (!GROQ_API_KEY) {
     const canned = mode === 'tldr'

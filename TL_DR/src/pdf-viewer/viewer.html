@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>TL;DR — PDF Viewer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent: #1A7E5D;
+      --bg:     #3a3a3a;
+      --bar-h:  44px;
+    }
+    body { background: var(--bg); font-family: Georgia, serif; min-height: 100vh; }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--bar-h);
+      background: #222; color: #ddd; display: flex; align-items: center;
+      gap: 10px; padding: 0 14px; z-index: 999; box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    }
+    #toolbar .brand { font-size: 13px; font-weight: 700; font-style: italic; color: var(--accent); margin-right: 6px; }
+    #toolbar button {
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+      color: #ccc; border-radius: 6px; padding: 4px 10px; cursor: pointer;
+      font-family: Georgia, serif; font-size: 12px;
+    }
+    #toolbar button:hover { background: rgba(255,255,255,0.15); }
+    #page-info { font-size: 12px; color: #aaa; margin-left: auto; }
+    #filename  { font-size: 11px; color: #888; font-style: italic; max-width: 260px;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ── Canvas area ── */
+    #viewer {
+      padding-top: calc(var(--bar-h) + 16px);
+      padding-bottom: 40px;
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+    }
+    .page-wrap {
+      position: relative;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    .page-wrap canvas { display: block; }
+
+    /* Text layer — transparent overlay for selection + gaze hit-testing */
+    .textLayer {
+      position: absolute; inset: 0; overflow: hidden;
+      line-height: 1; pointer-events: none;
+    }
+    .textLayer span {
+      color: transparent; position: absolute; white-space: pre;
+      cursor: text; pointer-events: all; transform-origin: 0% 0%;
+    }
+    .textLayer ::selection { background: rgba(26,126,93,0.25); }
+
+    /* ── Loading / error ── */
+    #status {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+      color: #aaa; font-size: 15px; font-style: italic; text-align: center;
+    }
+    #error-box {
+      display: none;
+      background: rgba(180,40,40,0.12); border: 1px solid rgba(180,40,40,0.3);
+      border-radius: 10px; padding: 18px 24px; color: #f88; font-size: 13px;
+      max-width: 480px; text-align: center; margin: 80px auto;
+    }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <span class="brand">TL;DR</span>
+  <button id="prevBtn">&#8592; Prev</button>
+  <button id="nextBtn">Next &#8594;</button>
+  <button id="zoomOutBtn">&#8722;</button>
+  <button id="zoomInBtn">&#43;</button>
+  <span id="filename">loading…</span>
+  <span id="page-info"></span>
+</div>
+
+<div id="viewer"></div>
+<div id="status">Loading PDF…</div>
+<div id="error-box"></div>
+
+<script>
+(async () => {
+  const params  = new URLSearchParams(location.search);
+  const fileUrl = params.get('src');
+  if (!fileUrl) { showError('No PDF source specified.'); return; }
+
+  document.getElementById('filename').textContent =
+    decodeURIComponent(fileUrl.split('/').pop() || fileUrl);
+
+  // ── Load PDF.js ───────────────────────────────────────────────────────
+  const pdfJsUrl    = chrome.runtime.getURL('src/libs/pdfjs/pdf.min.js');
+  const workerUrl   = chrome.runtime.getURL('src/libs/pdfjs/pdf.worker.min.js');
+
+  await new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = pdfJsUrl;
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+  pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+
+  // ── Load document ─────────────────────────────────────────────────────
+  let pdfDoc, currentPage = 1, scale = 1.4;
+  try {
+    pdfDoc = await pdfjsLib.getDocument({ url: fileUrl }).promise;
+  } catch (e) {
+    showError(`Could not load PDF: ${e.message}<br><br>
+      Make sure "Allow access to file URLs" is enabled for TL;DR in
+      <code>chrome://extensions</code>.`);
+    return;
+  }
+
+  document.getElementById('status').style.display = 'none';
+  updatePageInfo();
+
+  // Render all pages up front for small docs; render lazily for large ones
+  if (pdfDoc.numPages <= 20) {
+    for (let i = 1; i <= pdfDoc.numPages; i++) await renderPage(i);
+  } else {
+    await renderPage(1);
+    // Render remaining pages incrementally
+    for (let i = 2; i <= pdfDoc.numPages; i++) {
+      requestIdleCallback ? requestIdleCallback(() => renderPage(i)) : setTimeout(() => renderPage(i), i * 80);
+    }
+  }
+
+  // ── Render a single page ──────────────────────────────────────────────
+  async function renderPage(num) {
+    const page    = await pdfDoc.getPage(num);
+    const vp      = page.getViewport({ scale });
+    const wrap    = document.createElement('div');
+    wrap.className = 'page-wrap';
+    wrap.dataset.page = num;
+
+    const canvas  = document.createElement('canvas');
+    canvas.width  = vp.width;
+    canvas.height = vp.height;
+    const ctx     = canvas.getContext('2d');
+
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+
+    // Build text layer for selection and gaze hit-testing
+    const textContent = await page.getTextContent();
+    const textLayer   = document.createElement('div');
+    textLayer.className = 'textLayer';
+    textLayer.style.width  = vp.width  + 'px';
+    textLayer.style.height = vp.height + 'px';
+
+    pdfjsLib.renderTextLayer({
+      textContentSource: textContent,
+      container: textLayer,
+      viewport: vp,
+      textDivs: [],
+    });
+
+    wrap.appendChild(canvas);
+    wrap.appendChild(textLayer);
+    document.getElementById('viewer').appendChild(wrap);
+  }
+
+  // ── Toolbar controls ──────────────────────────────────────────────────
+  function scrollToPage(num) {
+    const wrap = document.querySelector(`[data-page="${num}"]`);
+    if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    currentPage = num;
+    updatePageInfo();
+  }
+
+  document.getElementById('prevBtn').onclick = () => {
+    if (currentPage > 1) scrollToPage(currentPage - 1);
+  };
+  document.getElementById('nextBtn').onclick = () => {
+    if (currentPage < pdfDoc.numPages) scrollToPage(currentPage + 1);
+  };
+  document.getElementById('zoomInBtn').onclick  = () => { scale = Math.min(scale + 0.2, 3.0); rebuildAllPages(); };
+  document.getElementById('zoomOutBtn').onclick = () => { scale = Math.max(scale - 0.2, 0.5); rebuildAllPages(); };
+
+  async function rebuildAllPages() {
+    document.getElementById('viewer').innerHTML = '';
+    for (let i = 1; i <= pdfDoc.numPages; i++) await renderPage(i);
+  }
+
+  function updatePageInfo() {
+    document.getElementById('page-info').textContent =
+      `Page ${currentPage} of ${pdfDoc.numPages}`;
+  }
+
+  // Update current page indicator as user scrolls
+  const observer = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting) {
+        currentPage = Number(e.target.dataset.page) || currentPage;
+        updatePageInfo();
+      }
+    }
+  }, { threshold: 0.5 });
+  // Observe page wraps once they exist
+  new MutationObserver(() => {
+    document.querySelectorAll('.page-wrap:not([data-observed])').forEach(el => {
+      observer.observe(el); el.dataset.observed = '1';
+    });
+  }).observe(document.getElementById('viewer'), { childList: true });
+
+  function showError(msg) {
+    document.getElementById('status').style.display = 'none';
+    const box = document.getElementById('error-box');
+    box.innerHTML = msg; box.style.display = 'block';
+  }
+})();
+</script>
+
+</body>
+</html>
