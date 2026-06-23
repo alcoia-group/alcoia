@@ -21,7 +21,7 @@
     }
 
     body {
-      width: 310px;
+      width: 400px;
       background: var(--bg);
       color: var(--text);
       font-family: var(--serif);
@@ -122,6 +122,28 @@
     .toggle-info   { display: flex; flex-direction: column; gap: 1px; }
     .toggle-name   { font-size: 13px; }
     .toggle-desc   { font-size: 11px; color: var(--muted); font-style: italic; }
+
+    /* ── 2-column toggle grid ── */
+    .toggle-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
+    }
+    .toggle-cell {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 9px 11px 10px;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.15s;
+    }
+    .toggle-cell:hover { background: rgba(26,126,93,0.05); border-color: rgba(26,126,93,0.22); }
+    .toggle-cell-top {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 6px;
+      margin-bottom: 3px;
+    }
+    .toggle-cell-name { font-size: 11.5px; font-weight: 700; flex: 1; line-height: 1.3; }
+    .toggle-cell-desc { font-size: 10px; color: var(--muted); font-style: italic; line-height: 1.4; }
 
     /* ── State chips ── */
     .state-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 3px 0; }
@@ -243,87 +265,93 @@
 
     <div class="section">
       <div class="section-label">Core Features</div>
+      <div class="toggle-grid">
 
-      <label class="toggle-row" for="eyeToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Eye Tracking</span>
-          <span class="toggle-desc">Gaze-triggered AI summaries</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="eyeToggle" checked><span class="pill-track"></span></label>
-      </label>
+        <label class="toggle-cell" for="eyeToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Eye Tracking</span>
+            <label class="pill"><input type="checkbox" id="eyeToggle" checked><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Gaze-triggered AI summaries</span>
+        </label>
 
-      <label class="toggle-row" for="selToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Highlight Summaries</span>
-          <span class="toggle-desc">AI popup when you select text</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="selToggle" checked><span class="pill-track"></span></label>
-      </label>
+        <label class="toggle-cell" for="selToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Highlight Summaries</span>
+            <label class="pill"><input type="checkbox" id="selToggle" checked><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">AI popup on text selection</span>
+        </label>
 
-      <label class="toggle-row" for="highlightToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Paragraph Highlighting</span>
-          <span class="toggle-desc">Outline the source paragraph</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="highlightToggle" checked><span class="pill-track"></span></label>
-      </label>
+        <label class="toggle-cell" for="highlightToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Para Highlight</span>
+            <label class="pill"><input type="checkbox" id="highlightToggle" checked><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Outline the source paragraph</span>
+        </label>
 
-      <label class="toggle-row" for="comprehensionToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Comprehension Check</span>
-          <span class="toggle-desc">Alert when pace mismatches text difficulty</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="comprehensionToggle" checked><span class="pill-track"></span></label>
-      </label>
+        <label class="toggle-cell" for="comprehensionToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Comprehension</span>
+            <label class="pill"><input type="checkbox" id="comprehensionToggle" checked><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Alert on pace vs. difficulty mismatch</span>
+        </label>
 
-      <label class="toggle-row" for="ttsToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Read Aloud (TTS)</span>
-          <span class="toggle-desc">Speak paragraph when confused · Alt+T</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="ttsToggle"><span class="pill-track"></span></label>
-      </label>
+        <label class="toggle-cell" for="ttsToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Read Aloud</span>
+            <label class="pill"><input type="checkbox" id="ttsToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">TTS when confused · <kbd>Alt+T</kbd></span>
+        </label>
 
-      <label class="toggle-row" for="focusRulerToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Focus Ruler</span>
-          <span class="toggle-desc">Dim above &amp; below your reading line · Alt+F</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="focusRulerToggle"><span class="pill-track"></span></label>
-      </label>
+        <label class="toggle-cell" for="focusRulerToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Focus Ruler</span>
+            <label class="pill"><input type="checkbox" id="focusRulerToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Dims above &amp; below reading line · <kbd>Alt+F</kbd></span>
+        </label>
+
+      </div>
     </div>
 
     <div class="section">
       <div class="section-label">Behaviour</div>
+      <div class="toggle-grid">
 
-      <label class="toggle-row" for="autohideToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Auto-hide Popups</span>
-          <span class="toggle-desc">Dismiss summaries after timeout</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="autohideToggle"><span class="pill-track"></span></label>
-      </label>
+        <label class="toggle-cell" for="autohideToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Auto-hide</span>
+            <label class="pill"><input type="checkbox" id="autohideToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Dismiss summaries after timeout</span>
+        </label>
 
-      <div class="field-row-inline" id="timeoutRow" style="display:none">
+        <label class="toggle-cell" for="pinDefaultToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Pin by Default</span>
+            <label class="pill"><input type="checkbox" id="pinDefaultToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Keep summaries open until closed</span>
+        </label>
+
+        <label class="toggle-cell" for="idleBlinkToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Idle Pulse</span>
+            <label class="pill"><input type="checkbox" id="idleBlinkToggle" checked><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Blink edges when you look away</span>
+        </label>
+
+      </div>
+
+      <div class="field-row-inline" id="timeoutRow" style="display:none;margin-top:8px">
         <span class="field-label">Auto-hide after (seconds)</span>
         <input class="field-input-sm" id="autohideTimeout" type="number" min="3" max="120" value="12">
       </div>
-
-      <label class="toggle-row" for="pinDefaultToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Pin by Default</span>
-          <span class="toggle-desc">Keep summaries open until closed</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="pinDefaultToggle"><span class="pill-track"></span></label>
-      </label>
-
-      <label class="toggle-row" for="idleBlinkToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Idle Edge Pulse</span>
-          <span class="toggle-desc">Blink screen edges when you look away</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="idleBlinkToggle" checked><span class="pill-track"></span></label>
-      </label>
     </div>
 
   </div>
@@ -412,6 +440,7 @@
       <div class="btn-grid">
         <button class="btn btn-ghost" id="sessionReportBtn">Session Report</button>
         <button class="btn btn-ghost" id="notesBtn">Saved Notes</button>
+        <button class="btn btn-ghost" id="viewHighlightsBtn" style="grid-column:1/-1">View My Highlights</button>
       </div>
     </div>
 
@@ -440,6 +469,7 @@
           <kbd>Alt+F</kbd><span class="kbd-desc">Toggle Focus Ruler</span>
           <kbd>Alt+N</kbd><span class="kbd-desc">Open Notes</span>
           <kbd>Alt+G</kbd><span class="kbd-desc">Open Session Report</span>
+          <kbd>Ctrl+drag</kbd><span class="kbd-desc">Colour-highlight selected text</span>
           <kbd>Esc</kbd><span class="kbd-desc">Close popup</span>
           <kbd>Alt+1</kbd><span class="kbd-desc">Simulate: Confused</span>
           <kbd>Alt+2</kbd><span class="kbd-desc">Simulate: Overloaded</span>
