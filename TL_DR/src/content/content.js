@@ -25,8 +25,11 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const CLASSIFY_INTERVAL   = 3000;  // classify every 3s — slightly less CPU, still responsive
   const ACTION_COOLDOWN     = 20000;  // 20s between triggers — prevents feeling too aggressive
   const POPUP_MARGIN        = 14;
+  const MAX_POPUPS          = 5;   // hard cap before oldest unpinned is evicted
   // All currently open floating popups — keyed by paragraph fingerprint
-  const openPopups = new Map();
+  const openPopups          = new Map();
+  // Fingerprints of paragraphs currently awaiting an AI response (race-condition guard)
+  const inFlightFingerprints = new Set();
 
   // ── Runtime state ──────────────────────────────────────────────────────
   let backendUrl         = BACKEND_DEFAULT;
@@ -297,19 +300,32 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   // ── Render popup (multi-popup: each paragraph gets its own card) ────────
   function renderPopup(anchorRect, html, meta = {}) {
-    const fingerprint = (meta.text || '').slice(0, 80).trim();
+    // Fix: no text → no dedup key and no meaningful content; bail immediately
+    if (!meta.text || !meta.text.trim()) return;
+
+    const fingerprint = meta.text.slice(0, 80).trim();
 
     // Dedup: same paragraph already has a visible popup — just flash it
-    if (fingerprint && openPopups.has(fingerprint)) {
+    if (openPopups.has(fingerprint)) {
       const entry = openPopups.get(fingerprint);
       if (entry.el && document.contains(entry.el)) { flashPopup(entry.el); return; }
       openPopups.delete(fingerprint);
     }
 
+    // Fix: enforce MAX_POPUPS cap — evict the oldest unpinned popup first
+    if (openPopups.size >= MAX_POPUPS) {
+      for (const [fp, { el }] of openPopups.entries()) {
+        if (!el || !document.contains(el)) { openPopups.delete(fp); break; }
+        if (el.dataset.pinned !== 'true') { closePopup(el, fp); break; }
+      }
+      // If every open popup is pinned and we're at the cap, don't create another
+      if (openPopups.size >= MAX_POPUPS) return;
+    }
+
     const root = document.createElement('div');
     root.className = 'sra-popup';
     document.body.appendChild(root);
-    if (fingerprint) openPopups.set(fingerprint, { el: root });
+    openPopups.set(fingerprint, { el: root });
 
     const badge = meta.trigger
       ? `<div class="sra-state-badge">${esc(meta.triggerLabel || meta.trigger)}</div>`
@@ -338,8 +354,12 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       root.dataset.pinned = pinned.toString();
       pinBtn.classList.toggle('active', pinned);
       clearTimeout(root._hideT);
-      if (!pinned && autohideEnabled)
-        root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
+      if (!pinned) {
+        // Fix: unpin always starts a countdown — autohide time if enabled, else a
+        // generous 60 s fallback so forgotten unpinned cards don't accumulate forever
+        const secs = autohideEnabled ? Math.max(3, autohideTimeoutSec) : 60;
+        root._hideT = setTimeout(() => closePopup(root, fingerprint), secs * 1000);
+      }
     };
 
     root.querySelector('.sra-explain-btn').onclick = async () => {
@@ -349,6 +369,10 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       const body = root.querySelector('.sra-popup-body');
       if (body && s) body.innerHTML = badge + `<div>${esc(s)}</div>`;
       btn.textContent = 'Explain More'; btn.disabled = false;
+      // Fix: reset the autohide timer so the user has time to read the expanded content
+      clearTimeout(root._hideT);
+      if (autohideEnabled && root.dataset.pinned !== 'true')
+        root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
     };
 
     root.querySelector('.sra-note-btn').onclick = () => {
@@ -775,6 +799,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       if (_e.el && document.contains(_e.el)) { flashPopup(_e.el); return; }
       openPopups.delete(_fp);
     }
+    // Fix: block concurrent fetches for the same paragraph (race condition guard)
+    if (_fp && inFlightFingerprints.has(_fp)) return;
+    if (_fp) inFlightFingerprints.add(_fp);
 
     const mode = reason === 'overloaded' ? 'simplify' : reason === 'confused' ? 'explain_more' : 'tldr';
     const triggerLabel = { confused:'— confused', overloaded:'— overloaded', zoning_out:'— zoning out' }[reason] || reason;
@@ -786,17 +813,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     let anchorRect = null;
     try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
 
-    // TTS: speak the paragraph if enabled (before AI fetch so it starts immediately)
-    if (ttsEnabled) {
-      ttsHandler.speak(text, { el: el || null });
-    }
+    if (ttsEnabled) ttsHandler.speak(text, { el: el || null });
 
-    // Fetch AI summary, including previous paragraph as context for denser text
-    const summary = await fetchSummary(text, mode, prevParagraphText);
-    if (!summary) return;
-    renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source:'gaze', trigger:reason, triggerLabel });
-    saveHighlight(text, summary, reason);
-    sessionTracker.recordSignal('cognitive', reason, text.slice(0, 150));
+    try {
+      const summary = await fetchSummary(text, mode, prevParagraphText);
+      if (!summary) return;
+      renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source:'gaze', trigger:reason, triggerLabel });
+      saveHighlight(text, summary, reason);
+      sessionTracker.recordSignal('cognitive', reason, text.slice(0, 150));
+    } finally {
+      if (_fp) inFlightFingerprints.delete(_fp);
+    }
   }
 
   // ── Gaze processing ────────────────────────────────────────────────────
@@ -1236,12 +1263,67 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
   });
 
+  // ── SPA navigation: close unpinned popups, badge pinned ones as stale ────
+  function onSpaNavigate() {
+    for (const [fp, { el }] of [...openPopups.entries()]) {
+      if (!el || !document.contains(el)) { openPopups.delete(fp); continue; }
+      if (el.dataset.pinned !== 'true') {
+        closePopup(el, fp);
+      } else {
+        // Warn user that this popup belongs to the previous page
+        if (!el.querySelector('.sra-stale-notice')) {
+          const notice = document.createElement('div');
+          notice.className = 'sra-stale-notice';
+          notice.textContent = '↑ from previous page';
+          notice.style.cssText = 'font-size:9px;color:#aaa;font-style:italic;padding:0 0 4px;';
+          el.querySelector('.sra-popup-body')?.prepend(notice);
+        }
+      }
+    }
+    inFlightFingerprints.clear();
+  }
+
+  if (!window.__sra_history_patched) {
+    window.__sra_history_patched = true;
+    const _patchHistory = (method) => {
+      const orig = history[method];
+      history[method] = function (...args) {
+        const result = orig.apply(this, args);
+        onSpaNavigate();
+        return result;
+      };
+    };
+    _patchHistory('pushState');
+    _patchHistory('replaceState');
+    window.addEventListener('popstate', onSpaNavigate);
+  }
+
+  // ── Resize: re-clamp all visible popups to the new viewport bounds ───────
+  if (!window.__sra_resize_watcher) {
+    window.__sra_resize_watcher = true;
+    let _resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(_resizeTimer);
+      _resizeTimer = setTimeout(() => {
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const m  = POPUP_MARGIN;
+        for (const [, { el }] of openPopups.entries()) {
+          if (!el || !document.contains(el) || !el.classList.contains('show')) continue;
+          const pw = el.offsetWidth  || 360;
+          const ph = el.offsetHeight || 150;
+          el.style.left = clamp(parseFloat(el.style.left) || 0, m, vw - pw - m) + 'px';
+          el.style.top  = clamp(parseFloat(el.style.top)  || 0, m, vh - ph - m) + 'px';
+        }
+      }, 150);
+    });
+  }
+
   // ── Boot ───────────────────────────────────────────────────────────────
   await detectAndInitHandlers();
   await startTracker();
   restoreHighlightMarkers();
   restoreTextHighlights();
-  // Save WebGazer model on page unload so calibration persists to next page
   window.addEventListener('beforeunload', () => {
     try { sessionTracker.save(); } catch (e) {}
   });
