@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>TL;DR — Session Report</title>
+  <link href="https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --accent: #1A7E5D; --accent2: #0f5c42;
+      --bg: #FAFAF7; --text: #2c2c2a; --muted: #7a7a72;
+      --border: rgba(26,126,93,0.12);
+      --serif: 'Merriweather', Georgia, serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: var(--serif); font-size: 13px; line-height: 1.65; }
+
+    .page { max-width: 680px; margin: 0 auto; padding: 28px 22px 60px; }
+
+    .top-bar { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+    h1 { font-size: 22px; color: var(--accent); }
+    .sub { font-size: 12px; color: var(--muted); font-style: italic; margin-bottom: 22px; }
+
+    /* session picker */
+    .picker { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 22px; }
+    .pick-btn {
+      background: white; border: 1px solid var(--border); border-radius: 8px;
+      padding: 5px 11px; cursor: pointer; font-family: var(--serif); font-size: 11px;
+      color: var(--muted); transition: all 0.15s;
+    }
+    .pick-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+    .pick-btn:hover:not(.active) { border-color: var(--accent); color: var(--accent); }
+
+    /* stat cards */
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px,1fr)); gap: 10px; margin-bottom: 26px; }
+    .stat-card { background: white; border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px; }
+    .stat-value { font-size: 24px; font-weight: 700; color: var(--accent); }
+    .stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-top: 3px; }
+
+    .sec-title {
+      font-size: 9px; font-weight: 700; letter-spacing: 1.3px; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 10px; margin-top: 26px;
+    }
+
+    /* state bar */
+    .state-bar { height: 26px; border-radius: 8px; overflow: hidden; display: flex; margin-bottom: 9px; }
+    .state-seg  { height: 100%; }
+    .state-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+    .leg-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); font-style: italic; }
+    .leg-dot  { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+    /* signal list */
+    .signal-list { display: flex; flex-direction: column; gap: 9px; }
+    .signal-item { background: white; border: 1px solid var(--border); border-radius: 9px; padding: 11px 14px; }
+    .sig-badge {
+      display: inline-block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.8px;
+      padding: 2px 7px; border-radius: 4px; margin-bottom: 6px; font-weight: 700;
+    }
+    .sig-text { font-size: 12px; color: var(--muted); font-style: italic; line-height: 1.6; }
+
+    .empty { text-align: center; padding: 50px 20px; color: var(--muted); font-style: italic; }
+
+    .page-info { font-size: 11px; color: var(--muted); font-style: italic; margin-bottom: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <div class="top-bar">
+    <h1>Session Report</h1>
+  </div>
+  <p class="sub">Your reading patterns from recent sessions. Sessions shorter than 30s are not saved.</p>
+
+  <div class="picker" id="picker"></div>
+  <div id="report"><p class="empty">No sessions yet. Read some pages with TL;DR active and come back here.</p></div>
+
+</div>
+<script>
+const STATE_COLORS = {
+  focused: '#1A7E5D', skimming: '#2563a8', confused: '#a06000',
+  zoning_out: '#5a3e8a', overloaded: '#8b2000',
+};
+const STATE_LABELS = {
+  focused: 'Focused', skimming: 'Skimming', confused: 'Confused',
+  zoning_out: 'Zoning Out', overloaded: 'Overloaded',
+};
+
+function dur(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), r = s % 60;
+  return r > 0 ? `${m}m ${r}s` : `${m}m`;
+}
+
+function renderReport(session) {
+  const totalMs = session.totalMs || (session.endedAt - session.startedAt) || 1;
+  const totalStateMs = Object.values(session.stateDurations || {}).reduce((a, b) => a + b, 0) || totalMs;
+
+  // State bar
+  const segs = Object.entries(STATE_COLORS).map(([state, color]) => {
+    const ms  = (session.stateDurations || {})[state] || 0;
+    const pct = totalStateMs > 0 ? (ms / totalStateMs * 100).toFixed(1) : '0.0';
+    return { state, color, pct: parseFloat(pct), ms };
+  }).filter(s => s.pct > 0);
+
+  const barHtml = segs.length
+    ? segs.map(s => `<div class="state-seg" style="width:${s.pct}%;background:${s.color}" title="${STATE_LABELS[s.state]}: ${dur(s.ms)}"></div>`).join('')
+    : '<div style="width:100%;background:#e0ddd8"></div>';
+
+  const legHtml = segs.map(s =>
+    `<div class="leg-item"><div class="leg-dot" style="background:${s.color}"></div>${STATE_LABELS[s.state]} ${s.pct}%</div>`
+  ).join('');
+
+  // Signals
+  const interesting = (session.signals || []).filter(s =>
+    s.type === 'backtrack' || s.subtype === 'confused' || s.subtype === 'overloaded' || s.type === 'speed_mismatch'
+  );
+  const sigHtml = interesting.length
+    ? interesting.map(s => {
+        const bc = s.type === 'backtrack' ? '#5a3e8a' : s.subtype === 'overloaded' ? '#8b2000' : '#a06000';
+        const lab = s.type === 'backtrack' ? 'scroll backtrack' : (s.subtype || s.type);
+        const txt = s.text ? `<p class="sig-text">"${s.text.slice(0, 120)}${s.text.length > 120 ? '…' : ''}"</p>` : '';
+        return `<div class="signal-item">
+          <span class="sig-badge" style="background:${bc}18;color:${bc};border:1px solid ${bc}40">${lab}</span>
+          ${txt}
+        </div>`;
+      }).join('')
+    : '<p style="color:var(--muted);font-style:italic;font-size:12px">No confusion signals this session — great reading!</p>';
+
+  const dateStr = session.startedAt ? new Date(session.startedAt).toLocaleString([], { dateStyle:'medium', timeStyle:'short' }) : '—';
+  const pageTitle = (session.title || session.url || '').slice(0, 80);
+
+  return `
+    <p class="page-info">${pageTitle} &mdash; ${dateStr}</p>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-value">${dur(totalMs)}</div><div class="stat-label">Time on Page</div></div>
+      <div class="stat-card"><div class="stat-value">${session.avgWpm || '—'}</div><div class="stat-label">Avg WPM</div></div>
+      <div class="stat-card"><div class="stat-value">${session.confusionCount || 0}</div><div class="stat-label">Confusion Triggers</div></div>
+      <div class="stat-card"><div class="stat-value">${session.backtrackCount || 0}</div><div class="stat-label">Scroll Backtracks</div></div>
+    </div>
+
+    <div class="sec-title">Cognitive State Distribution</div>
+    <div class="state-bar">${barHtml}</div>
+    <div class="state-legend">${legHtml || '<span style="color:var(--muted);font-style:italic;font-size:11px">No state data yet</span>'}</div>
+
+    <div class="sec-title">Confusion &amp; Struggle Points</div>
+    <div class="signal-list">${sigHtml}</div>
+  `;
+}
+
+chrome.storage.local.get({ sra_sessions: [] }, ({ sra_sessions: sessions }) => {
+  const picker  = document.getElementById('picker');
+  const report  = document.getElementById('report');
+  if (!sessions.length) return;
+
+  sessions.slice(0, 10).forEach((s, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'pick-btn' + (i === 0 ? ' active' : '');
+    const d = s.startedAt ? new Date(s.startedAt) : new Date();
+    btn.textContent = d.toLocaleDateString([], { month:'short', day:'numeric' }) + ' ' +
+      d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    btn.onclick = () => {
+      document.querySelectorAll('.pick-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      report.innerHTML = renderReport(s);
+    };
+    picker.appendChild(btn);
+  });
+
+  report.innerHTML = renderReport(sessions[0]);
+});
+</script>
+</body>
+</html>
