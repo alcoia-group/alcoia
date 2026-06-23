@@ -58,6 +58,44 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let personalBaseline    = null;  // from calibration or chrome.storage
   let prevParagraphText   = '';    // for AI context window
 
+  // ── Gaze quality tracking ──────────────────────────────────────────────
+  let lowQualityStreak    = 0;
+  let lastQualityWarnAt   = 0;
+
+  // ── Highlight persistence ──────────────────────────────────────────────
+  function saveHighlight(text, summary, state) {
+    if (!text || !summary) return;
+    const urlKey = window.location.hostname + window.location.pathname;
+    const fp = text.slice(0, 80).trim();
+    chrome.storage.local.get({ sra_highlights: {} }, ({ sra_highlights: hl }) => {
+      if (!hl[urlKey]) hl[urlKey] = [];
+      if (!hl[urlKey].find(h => h.fingerprint === fp)) {
+        hl[urlKey].unshift({ fingerprint: fp, text: text.slice(0, 300), summary: summary.slice(0, 300), state, timestamp: Date.now(), url: window.location.href, title: document.title });
+        if (hl[urlKey].length > 50) hl[urlKey].length = 50;
+        chrome.storage.local.set({ sra_highlights: hl });
+      }
+    });
+  }
+
+  function restoreHighlightMarkers() {
+    const urlKey = window.location.hostname + window.location.pathname;
+    chrome.storage.local.get({ sra_highlights: {} }, ({ sra_highlights: hl }) => {
+      const saved = hl[urlKey] || [];
+      if (!saved.length) return;
+      const fps = new Set(saved.map(h => h.fingerprint));
+      document.querySelectorAll('p, li, blockquote, article, section').forEach(el => {
+        const fp = (el.innerText || el.textContent || '').trim().slice(0, 80);
+        if (fps.has(fp)) el.dataset.sraSummarized = '1';
+      });
+      if (!document.getElementById('sra-hl-marker-css')) {
+        const s = document.createElement('style');
+        s.id = 'sra-hl-marker-css';
+        s.textContent = '[data-sra-summarized]{border-left:2px solid rgba(26,126,93,0.3)!important;padding-left:6px!important;}';
+        document.head.appendChild(s);
+      }
+    });
+  }
+
   // ── State smoothing ring buffer ────────────────────────────────────────
   const STATE_HISTORY     = [];
   const STATE_HISTORY_MAX = 3;
@@ -97,9 +135,11 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const rulerModule    = await loadModule('src/content/focus-ruler.js');
   const dyslexiaModule = await loadModule('src/content/dyslexia-utils.js');
 
-  const ttsHandler  = ttsModule.createTTSHandler();
-  const focusRuler  = rulerModule.createFocusRuler();
+  const ttsHandler    = ttsModule.createTTSHandler();
+  const focusRuler    = rulerModule.createFocusRuler();
   const dyslexiaUtils = dyslexiaModule;
+  const sessionModule  = await loadModule('src/content/session-tracker.js');
+  const sessionTracker = sessionModule.createSessionTracker();
 const comprehensionMonitor = compModule.createComprehensionMonitor({
   speedRatio:     0.30,
   minWords:       70,
@@ -276,39 +316,68 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     window.__sra_esc_installed = true;
 
     document.addEventListener('keydown', async (e) => {
-      // Escape — close popup
       if (e.key === 'Escape') { hidePopup(); return; }
-
-      // Keyboard shortcuts for simulating cognitive states (no modifier needed on F-keys)
-      // Alt+1 through Alt+5 to avoid clashing with browser or page shortcuts
-      // Alt+1 = confused, Alt+2 = overloaded, Alt+3 = zoning_out, Alt+4 = skimming, Alt+5 = focused
       if (!e.altKey) return;
 
+      // Alt+1–5: simulate cognitive states for testing
       const stateMap = { '1': 'confused', '2': 'overloaded', '3': 'zoning_out', '4': 'skimming', '5': 'focused' };
-      const state = stateMap[e.key];
-      if (!state) return;
+      const simState = stateMap[e.key];
+      if (simState) {
+        e.preventDefault();
+        showSimulateToast(simState);
+        lastActionAt = 0;
+        lastCogState = simState;
+        chrome.storage.local.set({ sra_current_state: simState });
+        const action = COGNITIVE_STATE_ACTIONS[simState];
+        if (action === 'explain' || action === 'simplify') {
+          const para = await findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
+          if (para) { currentParagraph = para; await triggerAIForParagraph(para, simState); }
+        } else if (action === 'nudge') {
+          const el = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
+          showNudge(el); if (el) highlightElement(el, 3000);
+        }
+        return;
+      }
 
-      e.preventDefault();
+      // Alt+S: summarise paragraph at current gaze / viewport centre
+      if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        const para = await findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
+        if (para) { currentParagraph = para; lastActionAt = 0; await triggerAIForParagraph(para, 'manual'); }
+        return;
+      }
 
-      // Show brief on-screen toast so user knows the shortcut fired
-      showSimulateToast(state);
+      // Alt+T: toggle TTS read-aloud
+      if (e.key === 't' || e.key === 'T') {
+        e.preventDefault();
+        ttsEnabled = !ttsEnabled;
+        chrome.storage.local.set({ sra_tts: ttsEnabled });
+        showSimulateToast(ttsEnabled ? '🔊 Read Aloud on  (Alt+T)' : '🔇 Read Aloud off (Alt+T)');
+        return;
+      }
 
-      // Reset cooldown and trigger
-      lastActionAt = 0;
-      lastCogState = state;
-      chrome.storage.local.set({ sra_current_state: state });
+      // Alt+F: toggle focus ruler
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        focusRulerEnabled = !focusRulerEnabled;
+        focusRulerEnabled ? focusRuler.enable() : focusRuler.disable();
+        chrome.storage.local.set({ sra_focus_ruler: focusRulerEnabled });
+        showSimulateToast(focusRulerEnabled ? '👁 Focus Ruler on  (Alt+F)' : '👁 Focus Ruler off (Alt+F)');
+        return;
+      }
 
-      const action = COGNITIVE_STATE_ACTIONS[state];
-      if (action === 'explain' || action === 'simplify') {
-        const cx = window.innerWidth  / 2;
-        const cy = window.innerHeight / 2;
-        const para = await findParagraphAt(cx, cy);
-        if (para) { currentParagraph = para; await triggerAIForParagraph(para, state); }
-        else _warn('No paragraph found at viewport centre for simulate — scroll to a text area');
-      } else if (action === 'nudge') {
-        const el = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
-        showNudge(el);
-        if (el) highlightElement(el, 3000);
+      // Alt+N: open notes page
+      if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        chrome.runtime.sendMessage({ action: 'openTab', url: chrome.runtime.getURL('src/popup/notes.html') });
+        return;
+      }
+
+      // Alt+G: open session report page
+      if (e.key === 'g' || e.key === 'G') {
+        e.preventDefault();
+        chrome.runtime.sendMessage({ action: 'openTab', url: chrome.runtime.getURL('src/popup/session-report.html') });
+        return;
       }
     });
   }
@@ -357,6 +426,30 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       toast.style.opacity = '0';
       setTimeout(() => { try { toast.remove(); } catch(e){} }, 250);
     }, 1800);
+  }
+
+  // ── Gaze quality toast ─────────────────────────────────────────────────
+  function showQualityToast() {
+    const existing = document.getElementById('sra-quality-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.id = 'sra-quality-toast';
+    Object.assign(toast.style, {
+      position:     'fixed', top: '14px', right: '14px',
+      background:   '#2c2c2a', color: '#f0ede8',
+      padding:      '9px 16px', borderRadius: '9px',
+      fontFamily:   'Georgia, serif', fontSize: '12px',
+      zIndex:       '2147483640', opacity: '0',
+      transition:   'opacity 0.2s ease', pointerEvents: 'none',
+      boxShadow:    '0 4px 14px rgba(0,0,0,0.25)', maxWidth: '240px', lineHeight: '1.5',
+    });
+    toast.textContent = 'Low camera quality — move to better lighting or centre your face in frame.';
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => requestAnimationFrame(() => { toast.style.opacity = '1'; }));
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => { try { toast.remove(); } catch(e){} }, 250);
+    }, 5000);
   }
 
   // ── Focus nudge ────────────────────────────────────────────────────────
@@ -463,6 +556,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     const summary = await fetchSummary(text, mode, prevParagraphText);
     if (!summary) return;
     renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source:'gaze', trigger:reason, triggerLabel });
+    saveHighlight(text, summary, reason);
+    sessionTracker.recordSignal('cognitive', reason, text.slice(0, 150));
   }
 
   // ── Gaze processing ────────────────────────────────────────────────────
@@ -524,6 +619,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (!comprehensionCheckEnabled) return;
 
     comprehensionMonitor.markOfferShown();
+    sessionTracker.recordSignal(signal.type, signal.subtype || '', signal.text || '');
 
     const el = (signal.type === 'speed_mismatch') ? signal.el
               : (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
@@ -628,8 +724,14 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       // (poor lighting, glasses glare, face partially occluded)
       if (rawFeatures.gaze_quality < 0.25) {
         if (debugEnabled) _log(`Skipping classify — low gaze quality (${(rawFeatures.gaze_quality*100).toFixed(0)}%)`);
+        lowQualityStreak++;
+        if (lowQualityStreak >= 8 && Date.now() - lastQualityWarnAt > 60000) {
+          showQualityToast();
+          lastQualityWarnAt = Date.now();
+        }
         return;
       }
+      lowQualityStreak = 0;
 
       // Normalize features against personal baseline so individual reading
       // styles don't bias the fixed classifier thresholds
@@ -647,8 +749,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       // Smooth over 3 windows to prevent single-sample false triggers
       const smoothedLabel = getSmoothedState(label);
       lastCogState = smoothedLabel;
-      // Store so popup can read it
       chrome.storage.local.set({ sra_current_state: smoothedLabel });
+      sessionTracker.recordState(smoothedLabel);
       if (debugEnabled) _log(`State: ${smoothedLabel} (raw: ${label}, conf: ${(confidence*100).toFixed(0)}%, quality: ${(rawFeatures.gaze_quality*100).toFixed(0)}%)`);
       // Update idle overlay (blinking edges when not looking at screen)
       if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
@@ -724,17 +826,14 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
                 chrome.storage.local.get({ sra_ever_calibrated: false }, r => resolve(r))
               );
               if (stored.sra_ever_calibrated) {
-                _log('Restoring saved calibration...');
-                await gazeUtils.restoreWebgazerModel();
-                const savedCal = await gazeUtils.getCalibration();
-                if (savedCal) await gazeUtils.setCalibration(savedCal);
-                _log('Calibration restored — skipping sequence');
+                // Calibration offset is already loaded from storage in createGazeState().
+                // WebGazer keeps improving from continuous click recording as the user reads.
+                _log('Calibration persisted — skipping first-time sequence');
               } else {
                 _log('First-time calibration starting...');
                 const cal = await gazeUtils.runCalibrationSequence();
                 if (cal) {
                   await gazeUtils.setCalibration(cal);
-                  await gazeUtils.saveWebgazerModel();
                   chrome.storage.local.set({ sra_ever_calibrated: true });
                   _log('First-time calibration complete and saved');
                 }
@@ -911,9 +1010,10 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   // ── Boot ───────────────────────────────────────────────────────────────
   await detectAndInitHandlers();
   await startTracker();
+  restoreHighlightMarkers();
   // Save WebGazer model on page unload so calibration persists to next page
   window.addEventListener('beforeunload', () => {
-    try { gazeUtils.saveWebgazerModel(); } catch (e) {}
+    try { sessionTracker.save(); } catch (e) {}
   });
 
   _log('Content script loaded ✓');
