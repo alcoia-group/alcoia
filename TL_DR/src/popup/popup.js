@@ -37,6 +37,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const notesBtn           = $('notesBtn');
   const sessionReportBtn   = $('sessionReportBtn');
   const viewHighlightsBtn  = $('viewHighlightsBtn');
+  const exportBtn          = $('exportBtn');
+  const pageSummaryBtn     = $('pageSummaryBtn');
   const cameraDot          = $('cameraDot');
   const cameraStatus       = $('cameraStatus');
   const cogStateChip       = $('cogStateChip');
@@ -254,6 +256,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   viewHighlightsBtn.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/highlights.html') });
+  });
+
+  exportBtn.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/export.html') });
+  });
+
+  pageSummaryBtn.addEventListener('click', () => {
+    pageSummaryBtn.disabled = true;
+    pageSummaryBtn.textContent = 'Analysing…';
+    chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+      if (!tabs[0]?.id) { pageSummaryBtn.disabled = false; pageSummaryBtn.textContent = 'What is this page? ✦'; return; }
+      chrome.tabs.sendMessage(tabs[0].id, { type: 'pageSummary' }, () => {
+        pageSummaryBtn.disabled = false;
+        pageSummaryBtn.textContent = 'What is this page? ✦';
+        window.close();
+      });
+    });
   });
 
   upgradeBtn.addEventListener('click', () => {

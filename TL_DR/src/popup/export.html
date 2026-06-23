@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>TL;DR — Export Annotations</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #FAFAF7; --surface: rgba(255,255,255,0.75); --border: rgba(26,126,93,0.12);
+      --text: #2c2c2a; --muted: #7a7a72; --accent: #1A7E5D; --serif: 'Georgia', serif;
+    }
+    body { background: var(--bg); color: var(--text); font-family: var(--serif); font-size: 13px; min-height: 100vh; }
+
+    .header {
+      position: sticky; top: 0; z-index: 10; background: var(--bg);
+      border-bottom: 1px solid var(--border); padding: 16px 24px 12px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .brand { font-size: 18px; font-weight: 700; font-style: italic; }
+    .brand span { color: var(--accent); }
+
+    .toolbar { padding: 12px 24px; display: flex; gap: 10px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
+    .btn {
+      padding: 8px 16px; border-radius: 9px; border: none; cursor: pointer;
+      font-family: var(--serif); font-size: 12px; transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary  { background: var(--accent); color: white; }
+    .btn-ghost    { background: rgba(26,126,93,0.08); color: var(--accent); border: 1px solid rgba(26,126,93,0.2); }
+    .stat { font-size: 11px; color: var(--muted); font-style: italic; margin-left: auto; }
+
+    #preview {
+      margin: 18px 24px 40px;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.65;
+      color: #333;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: calc(100vh - 180px);
+      overflow-y: auto;
+    }
+    .empty { text-align: center; padding: 60px 24px; color: var(--muted); font-style: italic; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="brand">TL;<span>DR</span> — Export</div>
+  <span id="statLine" class="stat"></span>
+</div>
+
+<div class="toolbar">
+  <button class="btn btn-primary" id="downloadBtn">Download .md</button>
+  <button class="btn btn-ghost"   id="copyBtn">Copy to clipboard</button>
+</div>
+
+<pre id="preview">Loading…</pre>
+
+<script>
+function pad2(n) { return String(n).padStart(2, '0'); }
+function fmtDate(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+function fmtDuration(ms) {
+  if (!ms) return '—';
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s/60)}m ${s%60}s`;
+}
+
+function buildMarkdown(notes, highlights, sessions) {
+  const lines = [];
+  const now   = fmtDate(Date.now());
+
+  lines.push(`# TL;DR Reading Annotations`);
+  lines.push(`> Exported ${now}\n`);
+
+  // ── Notes ──────────────────────────────────────────────────────────────
+  const noteList = (notes || []).slice(0, 200);
+  lines.push(`## Notes (${noteList.length})`);
+  if (!noteList.length) {
+    lines.push('_No notes saved yet._\n');
+  } else {
+    noteList.forEach(n => {
+      const url   = n.meta?.url   || '';
+      const title = n.meta?.title || url || 'Unknown page';
+      lines.push(`### ${title}`);
+      if (url) lines.push(`> Source: ${url}`);
+      lines.push(`> Saved: ${fmtDate(n.id)}\n`);
+      lines.push(n.text || '');
+      lines.push('');
+    });
+  }
+
+  // ── Colour highlights ──────────────────────────────────────────────────
+  const COLOR_EMOJI = { yellow: '🟡', green: '🟢', blue: '🔵', pink: '🩷', orange: '🟠' };
+  const allHl = [];
+  for (const [urlKey, entries] of Object.entries(highlights || {})) {
+    (entries || []).forEach(e => allHl.push({ ...e, urlKey }));
+  }
+  allHl.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  lines.push(`## Colour Highlights (${allHl.length})`);
+  if (!allHl.length) {
+    lines.push('_No highlights yet. Hold Ctrl and drag to select text on any page._\n');
+  } else {
+    // Group by page
+    const byUrl = {};
+    allHl.forEach(h => { (byUrl[h.urlKey] = byUrl[h.urlKey] || []).push(h); });
+    for (const [urlKey, entries] of Object.entries(byUrl)) {
+      lines.push(`### ${entries[0]?.title || urlKey}`);
+      lines.push(`> ${entries[0]?.url || urlKey}\n`);
+      entries.forEach(h => {
+        const emoji = COLOR_EMOJI[h.colorKey] || '•';
+        lines.push(`${emoji} "${(h.text || '').slice(0, 300)}"`);
+        lines.push(`   _${fmtDate(h.timestamp)}_\n`);
+      });
+    }
+  }
+
+  // ── Session history ────────────────────────────────────────────────────
+  const sessionList = (sessions || []).slice(0, 30);
+  lines.push(`## Session History (${sessionList.length} sessions)`);
+  if (!sessionList.length) {
+    lines.push('_No sessions recorded yet._\n');
+  } else {
+    sessionList.forEach(s => {
+      const title = s.title || s.url || 'Unknown';
+      const date  = fmtDate(s.startedAt);
+      lines.push(`### ${title}`);
+      lines.push(`> ${s.url || ''}`);
+      lines.push(`> ${date} · ${fmtDuration(s.duration)}\n`);
+
+      if (s.states) {
+        const totalMs = Object.values(s.states).reduce((a, b) => a + b, 0) || 1;
+        const stateParts = Object.entries(s.states)
+          .filter(([, ms]) => ms > 0)
+          .sort(([,a],[,b]) => b - a)
+          .map(([k, ms]) => `${k} ${Math.round(ms/totalMs*100)}%`)
+          .join(' · ');
+        if (stateParts) lines.push(`**States:** ${stateParts}`);
+      }
+      if (s.wpmReadings?.length) {
+        const avg = Math.round(s.wpmReadings.reduce((a,b)=>a+b,0)/s.wpmReadings.length);
+        lines.push(`**Avg WPM:** ${avg}`);
+      }
+      if (s.signals?.length) {
+        lines.push(`**Events:**`);
+        s.signals.slice(0, 10).forEach(sig => {
+          lines.push(`- [${sig.type}] ${sig.subtype || ''} — "${(sig.text || '').slice(0, 80)}"`);
+        });
+      }
+      lines.push('');
+    });
+  }
+
+  return lines.join('\n');
+}
+
+chrome.storage.local.get(
+  { sra_notes: [], sra_text_highlights: {}, sra_sessions: [] },
+  ({ sra_notes, sra_text_highlights, sra_sessions }) => {
+    const md = buildMarkdown(sra_notes, sra_text_highlights, sra_sessions);
+    document.getElementById('preview').textContent = md;
+
+    const noteCount = (sra_notes || []).length;
+    const hlCount   = Object.values(sra_text_highlights || {}).reduce((a, b) => a + (b?.length || 0), 0);
+    const sesCount  = (sra_sessions || []).length;
+    document.getElementById('statLine').textContent =
+      `${noteCount} note${noteCount!==1?'s':''} · ${hlCount} highlight${hlCount!==1?'s':''} · ${sesCount} session${sesCount!==1?'s':''}`;
+
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+      const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url;
+      a.download = `tldr-annotations-${new Date().toISOString().slice(0,10)}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    document.getElementById('copyBtn').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(md);
+        const btn = document.getElementById('copyBtn');
+        btn.textContent = 'Copied ✓';
+        setTimeout(() => { btn.textContent = 'Copy to clipboard'; }, 2000);
+      } catch (_) {}
+    });
+  }
+);
+</script>
+</body>
+</html>
