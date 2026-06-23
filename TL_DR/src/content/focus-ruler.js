@@ -6,15 +6,25 @@
 */
 
 const RULER_ID    = 'sra-focus-ruler';
-const BAND_PX     = 52;   // px half-height of the clear window (full band = 104px)
-const DIM_OPACITY = 0.38; // darkness of the dim panels
-const SMOOTH_K    = 0.14; // EMA alpha for ruler Y (slower than gaze EMA — avoids jitter)
+const DIM_OPACITY = 0.38;
+const SMOOTH_K    = 0.14;
+
+// Half-height of the clear window per cognitive state (full band = 2×)
+const BAND_BY_STATE = {
+  focused:    52,   // 104 px — comfortable reading
+  skimming:   80,   // 160 px — moving fast, wide window
+  confused:   36,   // 72 px  — lock attention tight
+  overloaded: 28,   // 56 px  — maximum focus assist
+  zoning_out: 64,   // 128 px — gentle re-engagement
+};
+const DEFAULT_BAND_PX = 52;
 
 export function createFocusRuler() {
-  let enabled  = false;
-  let smoothY  = null;
+  let enabled    = false;
+  let smoothY    = null;
   let rafPending = false;
   let pendingY   = null;
+  let bandPx     = DEFAULT_BAND_PX;
 
   function ensureDOM() {
     if (document.getElementById(RULER_ID)) return;
@@ -68,8 +78,8 @@ export function createFocusRuler() {
     const ln  = document.getElementById('sra-ruler-line');
     if (!top || !bot || !ln) return;
 
-    const clearTop = Math.max(0, y - BAND_PX);
-    const clearBot = Math.max(0, vh - y - BAND_PX);
+    const clearTop = Math.max(0, y - bandPx);
+    const clearBot = Math.max(0, vh - y - bandPx);
 
     top.style.height = clearTop + 'px';
     bot.style.height = clearBot + 'px';
@@ -107,6 +117,11 @@ export function createFocusRuler() {
     update(gazeY) {
       if (!enabled) return;
       scheduleUpdate(gazeY);
+    },
+
+    // Called whenever the classified cognitive state changes
+    adaptToState(state) {
+      bandPx = BAND_BY_STATE[state] || DEFAULT_BAND_PX;
     },
 
     isEnabled() { return enabled; },

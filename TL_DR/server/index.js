@@ -124,6 +124,38 @@ Be thorough but clear. No bullet points — write in flowing prose.
 
 Passage:
 ${escaped}`,
+
+    define_word: `You are a vocabulary assistant embedded in a browser. A reader hovered over a word while reading and wants to understand it in context.
+
+${escaped}
+
+Your response must:
+- Explain what this word or term means IN THIS SPECIFIC CONTEXT (not a general dictionary definition)
+- Use plain language, 1–2 sentences
+- If it's jargon or a technical term, give a one-phrase real-world analogy
+- Do NOT repeat the word in your first sentence
+
+Maximum 50 words.`,
+
+    page_summary: `You are a reading assistant. Give a structured overview of the following article or page so the reader knows what they're getting into before (or after) reading it.
+
+Format your response EXACTLY like this — do not deviate:
+
+**Main argument:** [one sentence — the central claim or purpose of this page]
+
+**Key points:**
+• [point 1]
+• [point 2]
+• [point 3]
+
+**Key terms:** [3–5 important words or concepts, comma-separated]
+
+**Difficulty:** [Easy / Moderate / Dense / Technical] — [one phrase explaining why]
+
+**Read time:** ~[N] min
+
+Page content:
+${escaped}`,
   };
 
   return (prompts[mode] || prompts.tldr) +
@@ -132,7 +164,8 @@ ${escaped}`,
 
 // ── Groq call ──────────────────────────────────────────────────────────────
 async function callGroq(prompt, mode) {
-  const model = mode === 'deep_explain'
+  const smartModes = new Set(['deep_explain', 'page_summary']);
+  const model = smartModes.has(mode)
     ? (process.env.GROQ_SMART_MODEL || 'llama-3.3-70b-versatile')
     : GROQ_MODEL;
 
@@ -152,7 +185,7 @@ async function callGroq(prompt, mode) {
         { role: 'user', content: prompt },
       ],
       temperature: 0.25,
-      max_tokens:  220,
+      max_tokens:  mode === 'page_summary' ? 400 : mode === 'define_word' ? 80 : 220,
       top_p:       0.9,
     }),
   });
@@ -173,7 +206,8 @@ app.post('/api/summarize', rateLimit, async (req, res) => {
     return res.status(400).json({ error: 'No text provided.' });
   }
 
-  const clipped = text.trim().slice(0, 4000);
+  const limit   = mode === 'page_summary' ? 6000 : 4000;
+  const clipped = text.trim().slice(0, limit);
   const prompt  = buildPrompt(clipped, mode, context);
 
   if (!GROQ_API_KEY) {
