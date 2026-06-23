@@ -48,6 +48,7 @@
         "src/popup/**",
         "src/content/**",
         "src/pdf-viewer/**",
+        "src/pptx-viewer/**",
         "assets/**"
       ],
       "matches": [

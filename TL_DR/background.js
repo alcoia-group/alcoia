@@ -9,15 +9,28 @@
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'loading') return;
   const url = tab.url || '';
-  if (!url || !/^file:\/\/.+\.pdf(\?.*)?$/i.test(url)) return;
+  if (!url) return;
 
-  const viewerUrl = chrome.runtime.getURL('src/pdf-viewer/viewer.html')
-    + '?src=' + encodeURIComponent(url);
-  chrome.tabs.update(tabId, { url: viewerUrl });
+  if (/^file:\/\/.+\.pdf(\?.*)?$/i.test(url)) {
+    const viewerUrl = chrome.runtime.getURL('src/pdf-viewer/viewer.html') + '?src=' + encodeURIComponent(url);
+    chrome.tabs.update(tabId, { url: viewerUrl });
+    return;
+  }
+
+  if (/^file:\/\/.+\.pptx(\?.*)?$/i.test(url)) {
+    const viewerUrl = chrome.runtime.getURL('src/pptx-viewer/viewer.html') + '?src=' + encodeURIComponent(url);
+    chrome.tabs.update(tabId, { url: viewerUrl });
+  }
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.action) return;
+
+  if (msg.action === 'openTab') {
+    chrome.tabs.create({ url: msg.url });
+    sendResponse({ status: 'ok' });
+    return;
+  }
 
   if (msg.action === 'saveNote') {
     chrome.storage.local.get({ sra_notes: [] }, (res) => {
