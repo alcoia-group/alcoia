@@ -24,8 +24,9 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const MIN_SELECTION_CHARS = 15;
   const CLASSIFY_INTERVAL   = 3000;  // classify every 3s — slightly less CPU, still responsive
   const ACTION_COOLDOWN     = 20000;  // 20s between triggers — prevents feeling too aggressive
-  const POPUP_ID            = 'sra-floating-popup';
   const POPUP_MARGIN        = 14;
+  // All currently open floating popups — keyed by paragraph fingerprint
+  const openPopups = new Map();
 
   // ── Runtime state ──────────────────────────────────────────────────────
   let backendUrl         = BACKEND_DEFAULT;
@@ -229,7 +230,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   }
 
   // ── Popup positioning ──────────────────────────────────────────────────
-  function clampToViewport(root, anchorRect) {
+  function placePopup(root, anchorRect, avoidRects) {
     root.style.visibility = 'hidden';
     root.style.display    = 'block';
     const pw = root.offsetWidth  || 360;
@@ -238,31 +239,77 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     const vh = window.innerHeight;
     const m  = POPUP_MARGIN;
     const a  = anchorRect || { left: vw/2-100, right: vw/2+100, top: vh/2-30, bottom: vh/2+30 };
+    const av = avoidRects || [];
 
-    let left, top;
-    if      (a.right  + m + pw <= vw - m) { left = a.right  + m;     top = clamp(a.top,    m, vh - ph - m); }
-    else if (a.left   - m - pw >= m)       { left = a.left   - m - pw; top = clamp(a.top,    m, vh - ph - m); }
-    else if (a.bottom + m + ph <= vh - m)  { left = clamp(a.left, m, vw - pw - m); top = a.bottom + m; }
-    else if (a.top    - m - ph >= m)       { left = clamp(a.left, m, vw - pw - m); top = a.top    - m - ph; }
-    else                                   { left = vw - pw - m;  top = m; }
+    function overlaps(cx, cy) {
+      return av.some(r =>
+        cx < r.right + m && cx + pw > r.left - m &&
+        cy < r.bottom + m && cy + ph > r.top - m
+      );
+    }
 
-    root.style.left       = clamp(left, m, vw - pw - m) + 'px';
-    root.style.top        = clamp(top,  m, vh - ph - m) + 'px';
+    // Shift a candidate down past any blocking popup, up to 6 attempts
+    function settle(left, top) {
+      for (let i = 0; i < 6; i++) {
+        if (!overlaps(left, top)) return { left, top };
+        const blocker = av.find(r =>
+          left < r.right + m && left + pw > r.left - m &&
+          top  < r.bottom + m && top  + ph > r.top - m
+        );
+        if (!blocker || blocker.bottom + m + ph > vh - m) return null;
+        top = blocker.bottom + m;
+      }
+      return null;
+    }
+
+    const candidates = [];
+    if (a.right  + m + pw <= vw - m)  candidates.push({ left: a.right + m,      top: clamp(a.top, m, vh - ph - m) });
+    if (a.left   - m - pw >= m)        candidates.push({ left: a.left - m - pw,   top: clamp(a.top, m, vh - ph - m) });
+    if (a.bottom + m + ph <= vh - m)   candidates.push({ left: clamp(a.left, m, vw - pw - m), top: a.bottom + m });
+    if (a.top    - m - ph >= m)        candidates.push({ left: clamp(a.left, m, vw - pw - m), top: a.top - m - ph });
+
+    let chosen = null;
+    for (const c of candidates) {
+      chosen = settle(c.left, c.top);
+      if (chosen) break;
+    }
+    if (!chosen) chosen = { left: vw - pw - m, top: m };
+
+    root.style.left       = clamp(chosen.left, m, vw - pw - m) + 'px';
+    root.style.top        = clamp(chosen.top,  m, vh - ph - m) + 'px';
     root.style.position   = 'fixed';
     root.style.visibility = '';
   }
 
-  // ── Render popup ───────────────────────────────────────────────────────
+  function closePopup(el, fingerprint) {
+    if (fingerprint) openPopups.delete(fingerprint);
+    clearTimeout(el._hideT);
+    el.classList.remove('show');
+    setTimeout(() => { try { el.remove(); } catch (_) {} }, 250);
+  }
+
+  function flashPopup(el) {
+    const orig = el.style.boxShadow;
+    el.style.transition = 'box-shadow 0.12s';
+    el.style.boxShadow  = '0 0 0 3px rgba(26,126,93,0.65)';
+    setTimeout(() => { el.style.boxShadow = orig; }, 500);
+  }
+
+  // ── Render popup (multi-popup: each paragraph gets its own card) ────────
   function renderPopup(anchorRect, html, meta = {}) {
-    let root = document.getElementById(POPUP_ID);
-    if (!root) {
-      root = document.createElement('div');
-      root.id = POPUP_ID; root.className = 'sra-popup';
-      document.body.appendChild(root);
+    const fingerprint = (meta.text || '').slice(0, 80).trim();
+
+    // Dedup: same paragraph already has a visible popup — just flash it
+    if (fingerprint && openPopups.has(fingerprint)) {
+      const entry = openPopups.get(fingerprint);
+      if (entry.el && document.contains(entry.el)) { flashPopup(entry.el); return; }
+      openPopups.delete(fingerprint);
     }
-    root.classList.remove('show');
-    root.style.display = 'none';
-    delete root.dataset.pinned;
+
+    const root = document.createElement('div');
+    root.className = 'sra-popup';
+    document.body.appendChild(root);
+    if (fingerprint) openPopups.set(fingerprint, { el: root });
 
     const badge = meta.trigger
       ? `<div class="sra-state-badge">${esc(meta.triggerLabel || meta.trigger)}</div>`
@@ -272,53 +319,62 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
     root.innerHTML = `
       <div class="sra-controls">
-        <button class="sra-ctrl-btn" id="sra-pin-btn" title="Pin">📌</button>
-        <button class="sra-ctrl-btn" id="sra-close-btn" title="Close">✕</button>
+        <button class="sra-ctrl-btn sra-pin-btn" title="Pin">📌</button>
+        <button class="sra-ctrl-btn sra-close-btn" title="Close">✕</button>
       </div>
       <div class="sra-popup-body">${badge}${html}</div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
-        <button class="sra-btn sra-btn-primary"  id="sra-explain-btn">Explain More</button>
-        <button class="sra-btn sra-btn-secondary" id="sra-note-btn">Save Note</button>
+        <button class="sra-btn sra-btn-primary  sra-explain-btn">Explain More</button>
+        <button class="sra-btn sra-btn-secondary sra-note-btn">Save Note</button>
       </div>`;
 
-    root.querySelector('#sra-close-btn').onclick = hidePopup;
+    root.querySelector('.sra-close-btn').onclick = () => closePopup(root, fingerprint);
 
-    const pinBtn = root.querySelector('#sra-pin-btn');
+    const pinBtn = root.querySelector('.sra-pin-btn');
     if (pinDefault) { root.dataset.pinned = 'true'; pinBtn.classList.add('active'); }
     pinBtn.onclick = () => {
-      const p = root.dataset.pinned === 'true';
-      root.dataset.pinned = (!p).toString();
-      pinBtn.classList.toggle('active', !p);
+      const pinned = root.dataset.pinned !== 'true';
+      root.dataset.pinned = pinned.toString();
+      pinBtn.classList.toggle('active', pinned);
+      clearTimeout(root._hideT);
+      if (!pinned && autohideEnabled)
+        root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
     };
 
-    const explainBtn = root.querySelector('#sra-explain-btn');
-    explainBtn.onclick = async () => {
-      explainBtn.disabled = true; explainBtn.textContent = 'Thinking…';
+    root.querySelector('.sra-explain-btn').onclick = async () => {
+      const btn = root.querySelector('.sra-explain-btn');
+      btn.disabled = true; btn.textContent = 'Thinking…';
       const s = await fetchSummary(meta.text || '', 'explain_more');
       const body = root.querySelector('.sra-popup-body');
       if (body && s) body.innerHTML = badge + `<div>${esc(s)}</div>`;
-      explainBtn.textContent = 'Explain More'; explainBtn.disabled = false;
+      btn.textContent = 'Explain More'; btn.disabled = false;
     };
 
-    const noteBtn = root.querySelector('#sra-note-btn');
-    noteBtn.onclick = () => {
+    root.querySelector('.sra-note-btn').onclick = () => {
       chrome.runtime.sendMessage({ action: 'saveNote', note: { text: meta.text || '', meta } });
-      noteBtn.textContent = 'Saved ✓'; noteBtn.disabled = true;
+      const btn = root.querySelector('.sra-note-btn');
+      btn.textContent = 'Saved ✓'; btn.disabled = true;
     };
 
-    clampToViewport(root, anchorRect);
+    const avoidRects = [...openPopups.values()]
+      .filter(e => e.el !== root && document.contains(e.el) && e.el.classList.contains('show'))
+      .map(e => e.el.getBoundingClientRect());
+
+    placePopup(root, anchorRect, avoidRects);
     requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
+
     clearTimeout(root._hideT);
     if (autohideEnabled && root.dataset.pinned !== 'true')
-      root._hideT = setTimeout(hidePopup, Math.max(3, autohideTimeoutSec) * 1000);
+      root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
   }
 
+  // Close all unpinned popups (Esc)
   function hidePopup() {
-    const root = document.getElementById(POPUP_ID);
-    if (!root || root.dataset.pinned === 'true') return;
-    root.classList.remove('show');
-    setTimeout(() => { if (root) root.style.display = 'none'; }, 220);
+    for (const [fp, { el }] of [...openPopups.entries()]) {
+      if (!el || !document.contains(el)) { openPopups.delete(fp); continue; }
+      if (el.dataset.pinned !== 'true') closePopup(el, fp);
+    }
   }
 
   if (!window.__sra_esc_installed) {
@@ -706,15 +762,19 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   async function triggerAIForParagraph(paraInfo, reason) {
     if (!paraInfo) return;
 
-    // Don't trigger if a popup is already visible — prevents repositioning
-    // while the user reads the current summary
-    const existingPopup = document.getElementById(POPUP_ID);
-    if (existingPopup && existingPopup.classList.contains('show')) return;
     let text = '', el = null;
     if (paraInfo.type === 'dom') { el = paraInfo.data; text = (el?.innerText || el?.textContent || '').trim(); }
     else if (paraInfo.type === 'pdf')  text = await pdfHandler.getParagraphText(paraInfo.data);
     else if (paraInfo.type === 'pptx') text = await pptxHandler.getParagraphText(paraInfo.data);
     if (!text || text.length < 25) return;
+
+    // Don't spawn a duplicate popup for the same paragraph
+    const _fp = text.slice(0, 80).trim();
+    if (_fp && openPopups.has(_fp)) {
+      const _e = openPopups.get(_fp);
+      if (_e.el && document.contains(_e.el)) { flashPopup(_e.el); return; }
+      openPopups.delete(_fp);
+    }
 
     const mode = reason === 'overloaded' ? 'simplify' : reason === 'confused' ? 'explain_more' : 'tldr';
     const triggerLabel = { confused:'— confused', overloaded:'— overloaded', zoning_out:'— zoning out' }[reason] || reason;
@@ -763,7 +823,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       const f = await findParagraphAt(pt.x, pt.y);
       if (f) {
         const isPopup = f.type === 'dom' && f.data &&
-          (f.data.id === POPUP_ID || f.data.closest?.('#' + POPUP_ID));
+          (f.data.classList?.contains('sra-popup') || !!f.data.closest?.('.sra-popup'));
         if (!isPopup) {
           if (comprehensionCheckEnabled && f.type === 'dom' && f.data !== (currentParagraph && currentParagraph.data)) {
             const signal = comprehensionMonitor.leaveParagraph();
@@ -781,18 +841,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     } catch (e) {}
   }
 
-  // ── Popup factory ────────────────────────────────────────────────────────
-  function getOrCreatePopup() {
-    let root = document.getElementById(POPUP_ID);
-    if (!root) {
-      root = document.createElement('div');
-      root.id        = POPUP_ID;
-      root.className = 'sra-popup';
-      document.body.appendChild(root);
-    }
-    return root;
-  }
-
   // ── Comprehension signal handler ──────────────────────────────────────────
   async function handleComprehensionSignal(signal) {
     if (!comprehensionCheckEnabled) return;
@@ -803,69 +851,71 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     const el = (signal.type === 'speed_mismatch') ? signal.el
               : (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
 
-    // Highlight the paragraph gently
     if (el) highlightElement(el, 4000);
 
-    // Get the text — for backtrack we use the nearest paragraph
     let text = signal.text || '';
     if (!text && el) text = (el.innerText || el.textContent || '').trim();
     if (!text) return;
 
-    // Get anchor rect
     let anchorRect = null;
     try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
 
-    // Build an offer popup — gentler than a forced summary
-    // Two buttons: "Summarise this" (fetches AI) or "I understood it" (dismisses)
-    const offerHtml = buildComprehensionOfferHtml(signal);
+    const fingerprint = 'comp-' + text.slice(0, 80).trim();
+    if (openPopups.has(fingerprint)) {
+      const entry = openPopups.get(fingerprint);
+      if (entry.el && document.contains(entry.el)) { flashPopup(entry.el); return; }
+      openPopups.delete(fingerprint);
+    }
 
-    const root = getOrCreatePopup();
-    root.classList.remove('show');
-    root.style.display = 'none';
-    delete root.dataset.pinned;
+    const root = document.createElement('div');
+    root.className = 'sra-popup';
+    document.body.appendChild(root);
+    openPopups.set(fingerprint, { el: root });
+
+    const offerHtml = buildComprehensionOfferHtml(signal);
 
     root.innerHTML = `
       <div class="sra-controls">
-        <button class="sra-ctrl-btn" id="sra-close-btn" title="Close">&#x2715;</button>
+        <button class="sra-ctrl-btn sra-close-btn" title="Close">&#x2715;</button>
       </div>
       <div class="sra-popup-body">${offerHtml}</div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
-        <button class="sra-btn sra-btn-primary"   id="sra-comp-summarise">Summarise it</button>
-        <button class="sra-btn sra-btn-secondary"  id="sra-comp-dismiss">I understood it</button>
+        <button class="sra-btn sra-btn-primary  sra-comp-summarise">Summarise it</button>
+        <button class="sra-btn sra-btn-secondary sra-comp-dismiss">I understood it</button>
       </div>`;
 
-    root.querySelector('#sra-close-btn').onclick = hidePopup;
-    root.querySelector('#sra-comp-dismiss').onclick = hidePopup;
-    root.querySelector('#sra-comp-summarise').onclick = async () => {
-      const btn = root.querySelector('#sra-comp-summarise');
-      btn.disabled = true;
-      btn.textContent = 'Thinking…';
+    root.querySelector('.sra-close-btn').onclick = () => closePopup(root, fingerprint);
+    root.querySelector('.sra-comp-dismiss').onclick = () => closePopup(root, fingerprint);
+    root.querySelector('.sra-comp-summarise').onclick = async () => {
+      const btn = root.querySelector('.sra-comp-summarise');
+      btn.disabled = true; btn.textContent = 'Thinking…';
       const summary = await fetchSummary(text, 'explain_more');
       if (summary) {
         const body = root.querySelector('.sra-popup-body');
         if (body) body.innerHTML = `<div class="sra-state-badge">comprehension assist</div><div>${esc(summary)}</div>`;
-        btn.textContent = 'Summarise it';
-        btn.disabled = false;
-        // Swap dismiss button to "Save Note"
-        const dismiss = root.querySelector('#sra-comp-dismiss');
+        btn.textContent = 'Summarise it'; btn.disabled = false;
+        const dismiss = root.querySelector('.sra-comp-dismiss');
         if (dismiss) {
           dismiss.textContent = 'Save Note';
           dismiss.onclick = () => {
             chrome.runtime.sendMessage({ action: 'saveNote', note: { text, meta: { source: 'comprehension', mode: 'explain_more' } } });
-            dismiss.textContent = 'Saved ✓';
-            dismiss.disabled = true;
+            dismiss.textContent = 'Saved ✓'; dismiss.disabled = true;
           };
         }
       }
     };
 
-    clampToViewport(root, anchorRect);
+    const avoidRects = [...openPopups.values()]
+      .filter(e => e.el !== root && document.contains(e.el) && e.el.classList.contains('show'))
+      .map(e => e.el.getBoundingClientRect());
+
+    placePopup(root, anchorRect, avoidRects);
     requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
 
     clearTimeout(root._hideT);
     if (autohideEnabled && root.dataset.pinned !== 'true')
-      root._hideT = setTimeout(hidePopup, Math.max(3, autohideTimeoutSec) * 1000);
+      root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
   }
 
   function buildComprehensionOfferHtml(signal) {
