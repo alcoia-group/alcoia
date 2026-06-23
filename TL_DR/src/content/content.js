@@ -96,6 +96,15 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
     });
   }
 
+  // ── Text-highlight colors ──────────────────────────────────────────────
+  const HIGHLIGHT_COLORS = [
+    { key: 'yellow', bg: '#FFF59D', label: 'Yellow' },
+    { key: 'green',  bg: '#A5D6A7', label: 'Green'  },
+    { key: 'blue',   bg: '#90CAF9', label: 'Blue'   },
+    { key: 'pink',   bg: '#F48FB1', label: 'Pink'   },
+    { key: 'orange', bg: '#FFCC80', label: 'Orange' },
+  ];
+
   // ── State smoothing ring buffer ────────────────────────────────────────
   const STATE_HISTORY     = [];
   const STATE_HISTORY_MAX = 3;
@@ -452,6 +461,164 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }, 5000);
   }
 
+  // ── Text highlighting (Ctrl+drag to select) ────────────────────────────
+  function showColorPicker(range, clientX, clientY) {
+    removeColorPicker();
+    const picker = document.createElement('div');
+    picker.id = 'sra-color-picker';
+    Object.assign(picker.style, {
+      position: 'fixed', zIndex: '2147483645',
+      left: Math.min(clientX, window.innerWidth - 200) + 'px',
+      top:  (clientY + 10) + 'px',
+      background: 'white',
+      border: '1px solid rgba(0,0,0,0.10)',
+      borderRadius: '14px',
+      padding: '8px 11px',
+      display: 'flex', alignItems: 'center', gap: '7px',
+      boxShadow: '0 6px 24px rgba(0,0,0,0.16)',
+      fontFamily: 'Georgia, serif',
+    });
+
+    const label = document.createElement('span');
+    label.textContent = 'Highlight:';
+    label.style.cssText = 'font-size:10px;color:#888;font-style:italic;white-space:nowrap;';
+    picker.appendChild(label);
+
+    HIGHLIGHT_COLORS.forEach(({ key, bg, label: lbl }) => {
+      const sw = document.createElement('button');
+      sw.title = lbl;
+      Object.assign(sw.style, {
+        width: '22px', height: '22px', borderRadius: '50%', background: bg,
+        border: '2px solid rgba(0,0,0,0.12)', cursor: 'pointer', flexShrink: '0',
+        transition: 'transform 0.12s',
+      });
+      sw.onmouseenter = () => { sw.style.transform = 'scale(1.2)'; };
+      sw.onmouseleave = () => { sw.style.transform = ''; };
+      sw.addEventListener('mousedown', e => e.preventDefault()); // keep selection alive
+      sw.addEventListener('click', e => {
+        e.stopPropagation();
+        applyTextHighlight(range, bg, key);
+        removeColorPicker();
+      });
+      picker.appendChild(sw);
+    });
+
+    const dismiss = document.createElement('button');
+    dismiss.textContent = '×';
+    dismiss.style.cssText = 'background:none;border:none;cursor:pointer;color:#bbb;font-size:18px;padding:0 2px;line-height:1;';
+    dismiss.addEventListener('click', e => { e.stopPropagation(); removeColorPicker(); });
+    picker.appendChild(dismiss);
+
+    document.body.appendChild(picker);
+    // Auto-dismiss on next outside click
+    setTimeout(() => document.addEventListener('click', removeColorPicker, { once: true }), 10);
+  }
+
+  function removeColorPicker() {
+    const p = document.getElementById('sra-color-picker');
+    if (p) p.remove();
+  }
+
+  function applyTextHighlight(range, bgColor, colorKey) {
+    if (!range || range.collapsed) return;
+    const text = range.toString().trim();
+    if (!text || text.length > 2000) return; // guard against Ctrl+A
+
+    const hlId = 'sra-hl-' + Date.now();
+    const mark  = document.createElement('mark');
+    mark.dataset.sraHlId    = hlId;
+    mark.dataset.sraHlColor = colorKey;
+    mark.style.cssText = `background:${bgColor};border-radius:3px;padding:0 1px;mix-blend-mode:multiply;cursor:default;`;
+    mark.title = 'Double-click to remove highlight';
+
+    try {
+      range.surroundContents(mark);
+    } catch (_) {
+      // Selection crosses element boundaries
+      const frag = range.extractContents();
+      mark.appendChild(frag);
+      range.insertNode(mark);
+    }
+
+    mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
+
+    // Context for restoration
+    const bodyText = document.body.innerText || '';
+    const pos = bodyText.indexOf(text);
+    const ctxBefore = pos > 0 ? bodyText.slice(Math.max(0, pos - 40), pos).trim() : '';
+    const ctxAfter  = pos >= 0 ? bodyText.slice(pos + text.length, pos + text.length + 40).trim() : '';
+
+    const urlKey = window.location.hostname + window.location.pathname;
+    chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: hl }) => {
+      if (!hl[urlKey]) hl[urlKey] = [];
+      hl[urlKey].push({
+        id: hlId, text: text.slice(0, 300), color: bgColor, colorKey,
+        ctxBefore, ctxAfter,
+        url: window.location.href, title: document.title, timestamp: Date.now(),
+      });
+      if (hl[urlKey].length > 100) hl[urlKey].shift();
+      chrome.storage.local.set({ sra_text_highlights: hl });
+    });
+  }
+
+  function deleteTextHighlight(hlId, markEl) {
+    const parent = markEl.parentNode;
+    if (!parent) return;
+    while (markEl.firstChild) parent.insertBefore(markEl.firstChild, markEl);
+    parent.removeChild(markEl);
+
+    const urlKey = window.location.hostname + window.location.pathname;
+    chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: hl }) => {
+      if (hl[urlKey]) {
+        hl[urlKey] = hl[urlKey].filter(h => h.id !== hlId);
+        chrome.storage.local.set({ sra_text_highlights: hl });
+      }
+    });
+  }
+
+  function restoreTextHighlights() {
+    const urlKey = window.location.hostname + window.location.pathname;
+    chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: hl }) => {
+      const saved = hl[urlKey] || [];
+      if (!saved.length) return;
+      saved.forEach(entry => { try { restoreSingleHighlight(entry); } catch (_) {} });
+    });
+  }
+
+  function restoreSingleHighlight({ id: hlId, text, color, ctxBefore }) {
+    if (!text || text.length < 2) return;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const tag = node.parentElement?.tagName?.toUpperCase?.();
+      if (['SCRIPT','STYLE','NOSCRIPT','MARK'].includes(tag)) continue;
+      const idx = node.textContent.indexOf(text);
+      if (idx === -1) continue;
+      // Light context check to avoid wrong match
+      const pre = node.textContent.slice(0, idx).trim().slice(-20);
+      if (ctxBefore && ctxBefore.length > 4 && !ctxBefore.endsWith(pre.slice(-4)) && !pre.endsWith(ctxBefore.slice(-8))) continue;
+
+      const range = document.createRange();
+      range.setStart(node, idx);
+      range.setEnd(node, Math.min(idx + text.length, node.textContent.length));
+
+      const mark = document.createElement('mark');
+      mark.dataset.sraHlId = hlId;
+      mark.style.cssText = `background:${color};border-radius:3px;padding:0 1px;mix-blend-mode:multiply;cursor:default;`;
+      mark.title = 'Double-click to remove highlight';
+      mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
+
+      try {
+        range.surroundContents(mark);
+      } catch (_) {
+        const frag = range.extractContents();
+        mark.appendChild(frag);
+        range.insertNode(mark);
+      }
+      return;
+    }
+  }
+
   // ── Focus nudge ────────────────────────────────────────────────────────
   function showNudge(el) {
     if (!el) return;
@@ -473,12 +640,25 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     return inCode || (str.match(/[{};]/g)||[]).length > 2 || (str.match(kw)||[]).length > 1;
   }
 
-  // ── Selection TL;DR ────────────────────────────────────────────────────
+  // ── Selection TL;DR (or Ctrl+drag → colour highlight) ──────────────────
   document.addEventListener('mouseup', async (ev) => {
     if (!selectionEnabled) return;
+
     let selected = '';
-    try { selected = window.getSelection()?.toString().trim() || ''; } catch (e) {}
+    let selRange  = null;
+    try {
+      const sel = window.getSelection();
+      selected  = sel?.toString().trim() || '';
+      if (sel?.rangeCount > 0) selRange = sel.getRangeAt(0).cloneRange();
+    } catch (e) {}
     if (!selected || selected.length < MIN_SELECTION_CHARS) return;
+
+    // Ctrl/Cmd + drag → colour highlight instead of AI summary
+    if (ev.ctrlKey || ev.metaKey) {
+      removeColorPicker();
+      if (selRange) showColorPicker(selRange, ev.clientX, ev.clientY);
+      return;
+    }
 
     // Highlight source element
     try {
@@ -492,9 +672,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     // Anchor rect
     let anchorRect = null;
     try {
-      const sel = window.getSelection();
-      if (sel?.rangeCount > 0) {
-        const r = sel.getRangeAt(0).getBoundingClientRect();
+      if (selRange) {
+        const r = selRange.getBoundingClientRect();
         if (r.width || r.height) anchorRect = r;
       }
     } catch (e) {}
@@ -1011,6 +1190,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   await detectAndInitHandlers();
   await startTracker();
   restoreHighlightMarkers();
+  restoreTextHighlights();
   // Save WebGazer model on page unload so calibration persists to next page
   window.addEventListener('beforeunload', () => {
     try { sessionTracker.save(); } catch (e) {}

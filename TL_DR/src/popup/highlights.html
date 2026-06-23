@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>TL;DR — My Highlights</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #FAFAF7; --surface: rgba(255,255,255,0.75); --border: rgba(26,126,93,0.12);
+      --text: #2c2c2a; --muted: #7a7a72; --accent: #1A7E5D; --serif: 'Georgia', serif;
+    }
+    body { background: var(--bg); color: var(--text); font-family: var(--serif); font-size: 13px;
+           min-height: 100vh; }
+
+    .header {
+      position: sticky; top: 0; z-index: 10;
+      background: var(--bg); border-bottom: 1px solid var(--border);
+      padding: 16px 22px 12px; display: flex; align-items: center; justify-content: space-between;
+    }
+    .brand { font-size: 18px; font-weight: 700; font-style: italic; letter-spacing: -0.5px; }
+    .brand span { color: var(--accent); }
+    .count-badge { font-size: 11px; color: var(--muted); font-style: italic; }
+
+    .controls {
+      padding: 10px 22px; display: flex; gap: 8px; align-items: center;
+      border-bottom: 1px solid var(--border);
+    }
+    .filter-btn {
+      padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border);
+      background: none; cursor: pointer; font-family: var(--serif); font-size: 11px;
+      color: var(--muted); transition: all 0.15s;
+    }
+    .filter-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+    .filter-swatch {
+      width: 14px; height: 14px; border-radius: 50%; display: inline-block;
+      vertical-align: middle; margin-right: 4px; border: 1px solid rgba(0,0,0,0.1);
+    }
+    .clear-all {
+      margin-left: auto; background: none; border: none; font-family: var(--serif);
+      font-size: 11px; color: #c0392b; cursor: pointer; font-style: italic;
+      padding: 4px 8px; border-radius: 6px; transition: background 0.12s;
+    }
+    .clear-all:hover { background: rgba(192,57,43,0.08); }
+
+    #list { padding: 14px 22px 40px; display: flex; flex-direction: column; gap: 10px; }
+
+    .hl-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+      padding: 13px 16px; position: relative;
+      border-left: 4px solid #ccc;
+      transition: box-shadow 0.15s;
+    }
+    .hl-card:hover { box-shadow: 0 3px 14px rgba(0,0,0,0.06); }
+    .hl-text {
+      font-size: 13px; line-height: 1.65; margin-bottom: 8px;
+      font-style: italic; color: var(--text);
+    }
+    .hl-meta {
+      font-size: 10px; color: var(--muted); display: flex; gap: 10px; align-items: center;
+      flex-wrap: wrap;
+    }
+    .hl-site { font-style: italic; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hl-date { flex-shrink: 0; }
+    .hl-delete {
+      position: absolute; top: 10px; right: 12px;
+      background: none; border: none; cursor: pointer; font-size: 16px;
+      color: #ccc; transition: color 0.12s; line-height: 1; padding: 2px;
+    }
+    .hl-delete:hover { color: #c0392b; }
+
+    .empty {
+      text-align: center; padding: 60px 22px; color: var(--muted); font-style: italic;
+    }
+    .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
+    .empty p { font-size: 13px; line-height: 1.7; }
+    .empty code {
+      background: rgba(26,126,93,0.08); border-radius: 4px; padding: 1px 6px;
+      font-size: 11px; color: var(--accent); font-style: normal;
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="brand">TL;<span>DR</span> — My Highlights</div>
+  <span class="count-badge" id="countBadge"></span>
+</div>
+
+<div class="controls" id="controls">
+  <button class="filter-btn active" data-color="all">All</button>
+  <button class="filter-btn" data-color="yellow">
+    <span class="filter-swatch" style="background:#FFF59D"></span>Yellow
+  </button>
+  <button class="filter-btn" data-color="green">
+    <span class="filter-swatch" style="background:#A5D6A7"></span>Green
+  </button>
+  <button class="filter-btn" data-color="blue">
+    <span class="filter-swatch" style="background:#90CAF9"></span>Blue
+  </button>
+  <button class="filter-btn" data-color="pink">
+    <span class="filter-swatch" style="background:#F48FB1"></span>Pink
+  </button>
+  <button class="filter-btn" data-color="orange">
+    <span class="filter-swatch" style="background:#FFCC80"></span>Orange
+  </button>
+  <button class="clear-all" id="clearAllBtn">Clear all</button>
+</div>
+
+<div id="list"></div>
+
+<script>
+const COLOR_MAP = {
+  yellow: '#FFF59D', green: '#A5D6A7', blue: '#90CAF9', pink: '#F48FB1', orange: '#FFCC80',
+};
+
+let allHighlights = []; // flat list of { entry, urlKey }
+let activeFilter  = 'all';
+
+function load() {
+  chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: store }) => {
+    allHighlights = [];
+    for (const [urlKey, entries] of Object.entries(store)) {
+      for (const entry of entries) {
+        allHighlights.push({ entry, urlKey });
+      }
+    }
+    allHighlights.sort((a, b) => (b.entry.timestamp || 0) - (a.entry.timestamp || 0));
+    render();
+  });
+}
+
+function render() {
+  const list = document.getElementById('list');
+  const shown = activeFilter === 'all'
+    ? allHighlights
+    : allHighlights.filter(({ entry }) => entry.colorKey === activeFilter);
+
+  document.getElementById('countBadge').textContent =
+    shown.length + ' highlight' + (shown.length !== 1 ? 's' : '');
+
+  if (!shown.length) {
+    list.innerHTML = `<div class="empty">
+      <div class="empty-icon">✏️</div>
+      <p>No highlights yet.<br>
+      Hold <code>Ctrl</code> while selecting text on any page,<br>then pick a colour from the bubble.</p>
+    </div>`;
+    return;
+  }
+
+  list.innerHTML = '';
+  shown.forEach(({ entry, urlKey }) => {
+    const card = document.createElement('div');
+    card.className = 'hl-card';
+    card.style.borderLeftColor = COLOR_MAP[entry.colorKey] || entry.color || '#ccc';
+
+    const del = document.createElement('button');
+    del.className = 'hl-delete'; del.title = 'Delete highlight'; del.textContent = '×';
+    del.addEventListener('click', () => deleteEntry(entry.id, urlKey, card));
+
+    const text = document.createElement('div');
+    text.className = 'hl-text';
+    text.textContent = '"' + (entry.text || '').slice(0, 300) + (entry.text?.length > 300 ? '…' : '') + '"';
+
+    const meta = document.createElement('div');
+    meta.className = 'hl-meta';
+
+    const site = document.createElement('span');
+    site.className = 'hl-site';
+    site.textContent = entry.title || urlKey;
+    if (entry.url) {
+      site.style.cursor = 'pointer';
+      site.title = entry.url;
+      site.addEventListener('click', () => chrome.tabs.create({ url: entry.url }));
+    }
+
+    const date = document.createElement('span');
+    date.className = 'hl-date';
+    date.textContent = entry.timestamp ? new Date(entry.timestamp).toLocaleDateString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    }) : '';
+
+    meta.appendChild(site);
+    meta.appendChild(date);
+    card.appendChild(del);
+    card.appendChild(text);
+    card.appendChild(meta);
+    list.appendChild(card);
+  });
+}
+
+function deleteEntry(id, urlKey, cardEl) {
+  chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: store }) => {
+    if (store[urlKey]) {
+      store[urlKey] = store[urlKey].filter(e => e.id !== id);
+      if (!store[urlKey].length) delete store[urlKey];
+    }
+    chrome.storage.local.set({ sra_text_highlights: store }, () => {
+      allHighlights = allHighlights.filter(({ entry }) => entry.id !== id);
+      cardEl.style.transition = 'opacity 0.2s, max-height 0.25s';
+      cardEl.style.opacity = '0';
+      cardEl.style.overflow = 'hidden';
+      cardEl.style.maxHeight = cardEl.offsetHeight + 'px';
+      requestAnimationFrame(() => { cardEl.style.maxHeight = '0'; });
+      setTimeout(() => { render(); }, 280);
+    });
+  });
+}
+
+document.getElementById('clearAllBtn').addEventListener('click', () => {
+  if (!confirm('Delete all saved highlights? This cannot be undone.')) return;
+  chrome.storage.local.set({ sra_text_highlights: {} }, () => {
+    allHighlights = [];
+    render();
+  });
+});
+
+document.getElementById('controls').addEventListener('click', e => {
+  const btn = e.target.closest('[data-color]');
+  if (!btn) return;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  activeFilter = btn.dataset.color;
+  render();
+});
+
+load();
+</script>
+</body>
+</html>
