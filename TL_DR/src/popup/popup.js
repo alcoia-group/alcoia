@@ -36,6 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const upgradeBtn         = $('upgradeBtn');
   const notesBtn           = $('notesBtn');
   const sessionReportBtn   = $('sessionReportBtn');
+  const viewHighlightsBtn  = $('viewHighlightsBtn');
   const cameraDot          = $('cameraDot');
   const cameraStatus       = $('cameraStatus');
   const cogStateChip       = $('cogStateChip');
@@ -249,6 +250,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   sessionReportBtn.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/session-report.html') });
+  });
+
+  viewHighlightsBtn.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/highlights.html') });
   });
 
   upgradeBtn.addEventListener('click', () => {
