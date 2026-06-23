@@ -10,6 +10,24 @@
 .sra-calibration .sra-cal-point{position:absolute;width:18px;height:18px;background:var(--accent);border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 6px 14px rgba(0,0,0,0.15)}
 .sra-pptx-overlay{pointer-events:none}
 
+/* Word-lookup bubble (Ctrl+hover) */
+.sra-word-bubble{position:fixed;z-index:2147483646;max-width:260px;background:rgba(22,26,24,0.93);color:#e8e8e4;font-family:Georgia,serif;font-size:13px;line-height:1.55;border-radius:10px;padding:9px 13px;box-shadow:0 4px 18px rgba(0,0,0,0.28);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,0.08);pointer-events:none;opacity:0;transform:translateY(4px);transition:opacity 180ms ease,transform 180ms ease}
+.sra-word-bubble.show{opacity:1;transform:none}
+.sra-word-bubble strong{color:#7dd3b0;display:block;margin-bottom:5px;font-size:14px}
+.sra-word-loading{color:#888;font-style:italic;font-size:11px}
+
+/* Page-summary panel */
+.sra-page-summary-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2147483644;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px)}
+.sra-page-summary-panel{background:#FAFAF7;border-radius:16px;padding:28px 32px;max-width:600px;width:92vw;max-height:80vh;overflow-y:auto;box-shadow:0 12px 48px rgba(0,0,0,0.22);font-family:Georgia,serif;font-size:14px;line-height:1.7;color:#2c2c2a;position:relative}
+.sra-page-summary-panel h2{font-size:16px;font-weight:700;margin-bottom:14px;color:#1A7E5D}
+.sra-page-summary-panel .sra-ps-close{position:absolute;top:14px;right:16px;background:none;border:none;font-size:20px;cursor:pointer;color:#bbb;line-height:1}
+.sra-page-summary-panel .sra-ps-close:hover{color:#555}
+.sra-page-summary-body strong{color:#1A7E5D}
+.sra-page-summary-body ul,.sra-page-summary-body ol{margin:4px 0 8px 18px}
+
+/* Session-continuity toast (already inline-styled, just namespace it) */
+#sra-continuity-toast button:hover{opacity:0.8}
+
 /* Calibration overlay */
 .sra-cal-overlay{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.18);backdrop-filter:blur(6px) saturate(1.05);opacity:0;transition:opacity 220ms ease}
 .sra-cal-overlay.visible{opacity:1}

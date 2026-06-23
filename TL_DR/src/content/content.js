@@ -147,10 +147,12 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const ttsModule      = await loadModule('src/content/tts-handler.js');
   const rulerModule    = await loadModule('src/content/focus-ruler.js');
   const dyslexiaModule = await loadModule('src/content/dyslexia-utils.js');
+  const mapModule      = await loadModule('src/content/reading-map.js');
 
   const ttsHandler    = ttsModule.createTTSHandler();
   const focusRuler    = rulerModule.createFocusRuler();
   const dyslexiaUtils = dyslexiaModule;
+  const readingMap    = mapModule.createReadingMap();
   const sessionModule  = await loadModule('src/content/session-tracker.js');
   const sessionTracker = sessionModule.createSessionTracker();
 const comprehensionMonitor = compModule.createComprehensionMonitor({
@@ -468,6 +470,13 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         chrome.runtime.sendMessage({ action: 'openTab', url: chrome.runtime.getURL('src/popup/session-report.html') });
         return;
       }
+
+      // Alt+M: toggle reading map sidebar
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        readingMap.toggle();
+        return;
+      }
     });
   }
 
@@ -720,6 +729,85 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     return inCode || (str.match(/[{};]/g)||[]).length > 2 || (str.match(kw)||[]).length > 1;
   }
 
+  // ── Word lookup (Ctrl+hover) ───────────────────────────────────────────
+  let _ctrlHeld       = false;
+  let _wordBubble     = null;
+  let _wordTimer      = null;
+  let _lastHoveredWord = null;
+
+  document.addEventListener('keydown', e => { if (e.key === 'Control' || e.key === 'Meta') _ctrlHeld = true; });
+  document.addEventListener('keyup',   e => {
+    if (e.key === 'Control' || e.key === 'Meta') {
+      _ctrlHeld = false;
+      clearTimeout(_wordTimer);
+      hideWordBubble();
+    }
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!_ctrlHeld || !selectionEnabled) return;
+    clearTimeout(_wordTimer);
+    _wordTimer = setTimeout(() => {
+      const hit = getWordAtPoint(e.clientX, e.clientY);
+      if (!hit || hit.word === _lastHoveredWord) return;
+      _lastHoveredWord = hit.word;
+      triggerWordLookup(hit, e.clientX, e.clientY);
+    }, 380);
+  });
+
+  function getWordAtPoint(x, y) {
+    try {
+      const range = document.caretRangeFromPoint?.(x, y);
+      if (!range || range.startContainer?.nodeType !== Node.TEXT_NODE) return null;
+      const node   = range.startContainer;
+      const offset = range.startOffset;
+      const text   = node.textContent || '';
+      let start = offset, end = offset;
+      while (start > 0 && /[\w'-]/.test(text[start - 1])) start--;
+      while (end < text.length && /[\w'-]/.test(text[end])) end++;
+      const word = text.slice(start, end).replace(/[^a-zA-Z'-]/g, '');
+      if (!word || word.length < 2 || word.length > 45) return null;
+      // Surrounding sentence for context
+      const sentStart = Math.max(0, text.lastIndexOf('.', start) + 1);
+      const sentEnd   = text.indexOf('.', end);
+      const sentence  = text.slice(sentStart, sentEnd > 0 ? sentEnd + 1 : text.length).trim().slice(0, 300)
+                        || text.slice(Math.max(0, start - 80), end + 80).trim();
+      return { word, sentence };
+    } catch (_) { return null; }
+  }
+
+  async function triggerWordLookup({ word, sentence }, cx, cy) {
+    hideWordBubble();
+    const bubble = document.createElement('div');
+    bubble.className = 'sra-word-bubble';
+    bubble.innerHTML = `<strong>${esc(word)}</strong><span class="sra-word-loading">looking up…</span>`;
+    // Initial position near cursor
+    bubble.style.left = Math.min(cx + 14, window.innerWidth  - 280) + 'px';
+    bubble.style.top  = Math.min(cy + 14, window.innerHeight - 120) + 'px';
+    document.body.appendChild(bubble);
+    _wordBubble = bubble;
+    requestAnimationFrame(() => bubble.classList.add('show'));
+
+    const payload = `word: ${word}\nContext sentence: ${sentence}`;
+    const def = await fetchSummary(payload, 'define_word');
+
+    if (!_wordBubble || !document.contains(_wordBubble)) return;
+    if (def) {
+      bubble.innerHTML = `<strong>${esc(word)}</strong><div>${esc(def)}</div>`;
+      // Re-clamp after content change
+      const bw = bubble.offsetWidth || 260, bh = bubble.offsetHeight || 80;
+      bubble.style.left = clamp(cx + 14, 10, window.innerWidth  - bw - 10) + 'px';
+      bubble.style.top  = clamp(cy + 14, 10, window.innerHeight - bh - 10) + 'px';
+    } else {
+      hideWordBubble();
+    }
+  }
+
+  function hideWordBubble() {
+    if (_wordBubble) { _wordBubble.remove(); _wordBubble = null; }
+    _lastHoveredWord = null;
+  }
+
   // ── Selection TL;DR (or Ctrl+drag → colour highlight) ──────────────────
   document.addEventListener('mouseup', async (ev) => {
     if (!selectionEnabled) return;
@@ -771,6 +859,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       return;
     }
     renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text: selected, source: 'selection', mode });
+    readingMap.recordEvent('summarized', selected.slice(0, 40));
   });
 
   // ── Paragraph finder ───────────────────────────────────────────────────
@@ -821,6 +910,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source:'gaze', trigger:reason, triggerLabel });
       saveHighlight(text, summary, reason);
       sessionTracker.recordSignal('cognitive', reason, text.slice(0, 150));
+      readingMap.recordEvent(reason, text.slice(0, 40));
     } finally {
       if (_fp) inFlightFingerprints.delete(_fp);
     }
@@ -1007,8 +1097,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       lastCogState = smoothedLabel;
       chrome.storage.local.set({ sra_current_state: smoothedLabel });
       sessionTracker.recordState(smoothedLabel);
+      if (focusRulerEnabled) focusRuler.adaptToState(smoothedLabel);
       if (debugEnabled) _log(`State: ${smoothedLabel} (raw: ${label}, conf: ${(confidence*100).toFixed(0)}%, quality: ${(rawFeatures.gaze_quality*100).toFixed(0)}%)`);
-      // Update idle overlay (blinking edges when not looking at screen)
       if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
       else forceStopIdle();
 
@@ -1261,7 +1351,67 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       sendResponse({ state: lastCogState, cameraReady: cameraIsReady });
       return;
     }
+
+    if (msg.type === 'pageSummary') {
+      (async () => {
+        try {
+          const text = extractPageText();
+          if (!text) { sendResponse({ status: 'error', error: 'No readable text found.' }); return; }
+          const summary = await fetchSummary(text, 'page_summary');
+          if (summary) showPageSummaryPanel(summary);
+          sendResponse({ status: summary ? 'ok' : 'error' });
+        } catch (e) { sendResponse({ status: 'error', error: String(e) }); }
+      })();
+      return true;
+    }
   });
+
+  function extractPageText() {
+    const skip = new Set(['SCRIPT','STYLE','NOSCRIPT','NAV','FOOTER','HEADER']);
+    const els  = document.querySelectorAll('h1,h2,h3,h4,p,li,blockquote,td,th');
+    const parts = [];
+    let total = 0;
+    for (const el of els) {
+      if ([...el.closest ? [el] : []].some(n => {
+        let p = n; while (p) { if (skip.has(p.tagName) || p.classList?.contains('sra-popup') || p.classList?.contains('sra-sidebar')) return true; p = p.parentElement; } return false;
+      })) continue;
+      const t = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
+      if (!t || t.length < 10) continue;
+      const prefix = /^H[1-4]$/.test(el.tagName) ? '#'.repeat(+el.tagName[1]) + ' ' : '';
+      parts.push(prefix + t);
+      total += t.length;
+      if (total > 6000) break;
+    }
+    return parts.join('\n\n').slice(0, 6000);
+  }
+
+  function showPageSummaryPanel(markdownText) {
+    document.querySelector('.sra-page-summary-overlay')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'sra-page-summary-overlay';
+
+    const panel = document.createElement('div');
+    panel.className = 'sra-page-summary-panel';
+
+    // Convert **bold** and bullet • to simple HTML
+    const html = esc(markdownText)
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/^• /gm, '&bull; ')
+      .replace(/\n\n/g, '<br><br>')
+      .replace(/\n/g, '<br>');
+
+    panel.innerHTML = `
+      <button class="sra-ps-close" title="Close">×</button>
+      <h2>Page Overview</h2>
+      <div class="sra-page-summary-body">${html}</div>`;
+
+    panel.querySelector('.sra-ps-close').onclick = () => overlay.remove();
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+  }
 
   // ── SPA navigation: close unpinned popups, badge pinned ones as stale ────
   function onSpaNavigate() {
@@ -1319,13 +1469,77 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     });
   }
 
+  // ── Session continuity ────────────────────────────────────────────────
+  function saveLastVisit() {
+    try {
+      const scrollPct = window.scrollY /
+        Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+      chrome.storage.local.get({ sra_last_visit: {} }, ({ sra_last_visit: lv }) => {
+        lv[window.location.href] = {
+          title: document.title, scrollPct,
+          lastCogState, timestamp: Date.now(),
+        };
+        const keys = Object.keys(lv);
+        if (keys.length > 200) {
+          const oldest = keys.sort((a, b) => (lv[a].timestamp || 0) - (lv[b].timestamp || 0))[0];
+          delete lv[oldest];
+        }
+        chrome.storage.local.set({ sra_last_visit: lv });
+      });
+    } catch (_) {}
+  }
+
+  function checkLastVisit() {
+    chrome.storage.local.get({ sra_last_visit: {} }, ({ sra_last_visit: lv }) => {
+      const last = lv[window.location.href];
+      if (!last || Date.now() - last.timestamp > 7 * 86400000) return;
+      const mins = Math.round((Date.now() - last.timestamp) / 60000);
+      const ago  = mins < 60 ? `${mins}m ago` : mins < 1440
+        ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`;
+      const pct  = Math.round((last.scrollPct || 0) * 100);
+      const state = last.lastCogState || '';
+
+      const toast = document.createElement('div');
+      toast.id = 'sra-continuity-toast';
+      toast.style.cssText = [
+        'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);',
+        'background:rgba(26,30,28,0.92);color:#e8e8e4;font-family:Georgia,serif;',
+        'font-size:12px;padding:10px 16px;border-radius:12px;z-index:2147483640;',
+        'display:flex;align-items:center;gap:12px;box-shadow:0 4px 18px rgba(0,0,0,0.3);',
+        'max-width:480px;backdrop-filter:blur(6px);',
+      ].join('');
+
+      const stateTag = state
+        ? `<span style="background:rgba(26,126,93,0.3);padding:1px 7px;border-radius:4px;font-style:italic;">${state}</span>`
+        : '';
+      toast.innerHTML = `
+        <span>↩ Back ${ago}${stateTag ? ' · last state: ' + stateTag : ''}</span>
+        ${pct > 5 ? `<button id="sra-cont-restore" style="background:rgba(26,126,93,0.7);border:none;color:#fff;padding:4px 10px;border-radius:7px;cursor:pointer;font-family:inherit;font-size:11px;">Scroll to ${pct}%</button>` : ''}
+        <button id="sra-cont-dismiss" style="background:none;border:none;color:#aaa;cursor:pointer;font-size:16px;padding:0 2px;">×</button>`;
+
+      document.body.appendChild(toast);
+      setTimeout(() => toast.classList && (toast.style.opacity = '0', toast.style.transition = 'opacity 0.4s'), 7000);
+      setTimeout(() => { try { toast.remove(); } catch (_) {} }, 7500);
+
+      toast.querySelector('#sra-cont-dismiss')?.addEventListener('click', () => toast.remove());
+      toast.querySelector('#sra-cont-restore')?.addEventListener('click', () => {
+        const target = Math.round((last.scrollPct || 0) *
+          (document.documentElement.scrollHeight - window.innerHeight));
+        window.scrollTo({ top: target, behavior: 'smooth' });
+        toast.remove();
+      });
+    });
+  }
+
   // ── Boot ───────────────────────────────────────────────────────────────
   await detectAndInitHandlers();
   await startTracker();
   restoreHighlightMarkers();
   restoreTextHighlights();
+  checkLastVisit();
   window.addEventListener('beforeunload', () => {
     try { sessionTracker.save(); } catch (e) {}
+    saveLastVisit();
   });
 
   _log('Content script loaded ✓');
