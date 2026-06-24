@@ -210,6 +210,43 @@
     }
     .kbd-desc { color: var(--muted); }
 
+    /* ── Reading-mode personas ── */
+    .persona-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+    }
+    .persona-btn {
+      padding: 8px 10px; border-radius: 9px;
+      border: 1px solid var(--border); background: var(--surface);
+      color: var(--text); font-family: var(--serif); font-size: 11.5px;
+      cursor: pointer; transition: all 0.15s; line-height: 1.3; text-align: left;
+    }
+    .persona-btn:hover { background: rgba(26,126,93,0.09); border-color: rgba(26,126,93,0.28); color: var(--accent); }
+    .persona-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+    .persona-btn .p-name { display: block; font-weight: 700; font-size: 12px; }
+    .persona-btn .p-desc { display: block; font-size: 10px; font-style: italic; opacity: 0.75; margin-top: 1px; }
+    .persona-btn.active .p-desc { opacity: 0.85; }
+
+    /* ── Dark mode overrides for popup itself ── */
+    body.dark-mode {
+      --bg: #141918; --surface: rgba(255,255,255,0.05); --border: rgba(80,160,120,0.15);
+      --text: #e2e2dc; --muted: #7a7a72; --accent: #3dba8a; --accent2: #2d9c6e;
+    }
+    body.dark-mode .status-bar { background: rgba(255,255,255,0.04); }
+    body.dark-mode .field-input,
+    body.dark-mode .field-input-sm { background: #1e2422; color: #e2e2dc; border-color: rgba(80,160,120,0.2); }
+    body.dark-mode select.field-input option { background: #1e2422; }
+    body.dark-mode .kbd-table { background: rgba(80,160,120,0.06); border-color: rgba(80,160,120,0.12); }
+    body.dark-mode kbd { background: rgba(80,160,120,0.12); color: #3dba8a; }
+    body.dark-mode .toggle-cell { background: rgba(255,255,255,0.04); }
+    body.dark-mode .toggle-cell:hover { background: rgba(80,160,120,0.08); border-color: rgba(80,160,120,0.22); }
+    body.dark-mode .btn-ghost { background: rgba(80,160,120,0.07); color: #3dba8a; border-color: rgba(80,160,120,0.2); }
+    body.dark-mode .btn-ghost:hover { background: rgba(80,160,120,0.13); }
+    body.dark-mode .tab-btn { color: #666; }
+    body.dark-mode .tab-btn.active { color: #3dba8a; border-bottom-color: #3dba8a; }
+    body.dark-mode .persona-btn { background: rgba(255,255,255,0.04); border-color: rgba(80,160,120,0.15); color: #b8b8b2; }
+    body.dark-mode .persona-btn:hover { background: rgba(80,160,120,0.09); color: #3dba8a; }
+    body.dark-mode .persona-btn.active { background: #2a9e6e; color: white; border-color: #2a9e6e; }
+
     /* dyslexia sub-options */
     #dyslexiaOptions { padding: 4px 2px 2px 4px; }
 
@@ -264,6 +301,28 @@
   <!-- TAB 1: ASSIST                               -->
   <!-- ════════════════════════════════════════════ -->
   <div class="tab-panel active" id="tab-assist">
+
+    <div class="section">
+      <div class="section-label">Reading Mode</div>
+      <div class="persona-grid">
+        <button class="persona-btn" data-persona="research">
+          <span class="p-name">Research</span>
+          <span class="p-desc">Eye on · pin popups · comprehension</span>
+        </button>
+        <button class="persona-btn" data-persona="study">
+          <span class="p-name">Study</span>
+          <span class="p-desc">Eye on · TTS · auto-hide 10s</span>
+        </button>
+        <button class="persona-btn" data-persona="casual">
+          <span class="p-name">Casual</span>
+          <span class="p-desc">Eye off · selection only · minimal</span>
+        </button>
+        <button class="persona-btn" data-persona="speed">
+          <span class="p-name">Speed</span>
+          <span class="p-desc">Focus ruler · auto-hide 4s</span>
+        </button>
+      </div>
+    </div>
 
     <div class="section">
       <div class="section-label">Core Features</div>
@@ -346,6 +405,14 @@
             <label class="pill"><input type="checkbox" id="idleBlinkToggle" checked><span class="pill-track"></span></label>
           </div>
           <span class="toggle-cell-desc">Blink edges when you look away</span>
+        </label>
+
+        <label class="toggle-cell" for="darkModeToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Dark Mode</span>
+            <label class="pill"><input type="checkbox" id="darkModeToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Dark theme for popups &amp; sidebar</span>
         </label>
 
       </div>

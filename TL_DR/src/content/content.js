@@ -30,6 +30,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const openPopups          = new Map();
   // Fingerprints of paragraphs currently awaiting an AI response (race-condition guard)
   const inFlightFingerprints = new Set();
+  // Session-level cache: mode:fingerprint → summary text (cleared on page unload)
+  const _summaryCache        = new Map();
 
   // ── Runtime state ──────────────────────────────────────────────────────
   let backendUrl         = BACKEND_DEFAULT;
@@ -56,6 +58,7 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   // ── New feature flags ──────────────────────────────────────────────────
   let ttsEnabled          = false;
   let focusRulerEnabled   = false;
+  let darkModeEnabled     = false;
   let dyslexiaEnabled     = false;
   let dyslexiaColor       = 'rgba(255,243,180,0.12)';
   let bionicEnabled       = false;
@@ -174,7 +177,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     sra_pin_default: false, sra_debug: false, sra_idle_blink: true, sra_comprehension: true,
     sra_tts: false, sra_focus_ruler: false, sra_dyslexia: false,
     sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
-    sra_personal_baseline: null, sra_baseline_wpm: null,
+    sra_personal_baseline: null, sra_baseline_wpm: null, sra_dark_mode: false,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     eyeTrackingEnabled = res.sra_eye !== false;
@@ -194,12 +197,48 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (res.sra_baseline_wpm) comprehensionMonitor.seedWpmFromCalibration(res.sra_baseline_wpm);
     if (dyslexiaEnabled) dyslexiaUtils.applyDyslexiaCSS(dyslexiaColor);
     if (focusRulerEnabled) focusRuler.enable();
+    darkModeEnabled = !!res.sra_dark_mode;
+    if (darkModeEnabled) applyDarkMode(true);
   });
 
   // ── Utilities ──────────────────────────────────────────────────────────
   const esc   = (s = '') => s.replace(/[&<>"']/g, c =>
     ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  // ── Dark mode (in-page overlays) ───────────────────────────────────────
+  function applyDarkMode(enabled) {
+    const ID = 'sra-dark-styles';
+    if (!enabled) { document.getElementById(ID)?.remove(); return; }
+    if (document.getElementById(ID)) return;
+    const s = document.createElement('style');
+    s.id = ID;
+    s.textContent = `
+      .sra-popup { background: rgba(22,26,24,0.97) !important; color: #e2e2dc !important; border-color: rgba(80,160,120,0.18) !important; box-shadow: 0 8px 28px rgba(0,0,0,0.45) !important; }
+      .sra-popup .sra-state-badge { background: rgba(80,160,120,0.1) !important; color: #7dd3b0 !important; border-color: rgba(80,160,120,0.25) !important; }
+      .sra-popup .sra-popup-body { color: #e2e2dc !important; }
+      .sra-popup .sra-btn-primary  { background: #2a9e6e !important; }
+      .sra-popup .sra-btn-secondary{ background: #2563a8 !important; }
+      .sra-popup .sra-ctrl-btn     { color: #666 !important; }
+      .sra-popup-divider { background: rgba(80,160,120,0.12) !important; }
+      .sra-page-summary-panel  { background: #1a1e1c !important; color: #e2e2dc !important; }
+      .sra-page-summary-panel h2 { color: #7dd3b0 !important; }
+      .sra-page-summary-panel .sra-ps-close { color: #555 !important; }
+      .sra-page-summary-panel .sra-ps-close:hover { color: #aaa !important; }
+      .sra-page-summary-body strong { color: #7dd3b0 !important; }
+      #sra-reading-map { background: rgba(18,22,20,0.97) !important; border-color: rgba(80,160,120,0.12) !important; }
+      .sra-map-header  { color: #7a7a72 !important; border-color: rgba(80,160,120,0.1) !important; }
+      .sra-map-heading { color: #b8b8b2 !important; }
+      .sra-map-heading:hover   { background: rgba(80,160,120,0.07) !important; }
+      .sra-map-heading.current { color: #7dd3b0 !important; border-left-color: #7dd3b0 !important; }
+      .sra-map-event       { color: #888 !important; }
+      .sra-map-events-label{ color: #555 !important; }
+      .sra-map-divider     { background: rgba(80,160,120,0.1) !important; }
+      .sra-map-progress-bar{ background: rgba(80,160,120,0.12) !important; }
+      #sra-color-picker { background: #1e2422 !important; border-color: rgba(255,255,255,0.08) !important; }
+    `;
+    document.head.appendChild(s);
+  }
 
   // ── Paragraph highlight ────────────────────────────────────────────────
   function highlightElement(el, ms = 5000) {
@@ -215,6 +254,15 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   // ── AI fetch ───────────────────────────────────────────────────────────
   async function fetchSummary(text, mode = 'tldr', context = '') {
+    // Cache hit: serve instantly for repeated requests within the same session.
+    // page_summary is excluded — it depends on the full live page content.
+    if (mode !== 'page_summary') {
+      const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
+      if (_summaryCache.has(cacheKey)) {
+        _log(`Cache hit: ${mode}`);
+        return _summaryCache.get(cacheKey);
+      }
+    }
     try {
       const url = backendUrl || BACKEND_DEFAULT;
       _log(`Fetching ${url} mode=${mode} len=${text.length}`);
@@ -227,7 +275,14 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       });
       if (!resp.ok) { _warn(`Server ${resp.status}`); return null; }
       const j = await resp.json();
-      return j.summary || j.result || null;
+      const result = j.summary || j.result || null;
+      if (result && mode !== 'page_summary') {
+        const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
+        _summaryCache.set(cacheKey, result);
+        // Keep cache size bounded — drop oldest entry when over 100
+        if (_summaryCache.size > 100) _summaryCache.delete(_summaryCache.keys().next().value);
+      }
+      return result;
     } catch (e) {
       _warn('fetchSummary failed:', e.message);
       return null;
@@ -734,6 +789,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   let _wordBubble     = null;
   let _wordTimer      = null;
   let _lastHoveredWord = null;
+  let _imageDwellEl   = null;
+  let _imageDwellStart = 0;
 
   document.addEventListener('keydown', e => { if (e.key === 'Control' || e.key === 'Meta') _ctrlHeld = true; });
   document.addEventListener('keyup',   e => {
@@ -748,6 +805,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (!_ctrlHeld || !selectionEnabled) return;
     clearTimeout(_wordTimer);
     _wordTimer = setTimeout(() => {
+      // If hovering over an image, explain it instead of looking up a word
+      const topEl = document.elementFromPoint(e.clientX, e.clientY);
+      const imgEl = topEl?.tagName === 'IMG' ? topEl : null;
+      if (imgEl) {
+        const fp = 'img:' + (imgEl.src || '').slice(-60) + ':' + (imgEl.alt || '').slice(0, 20);
+        if (fp === _lastHoveredWord) return;
+        _lastHoveredWord = fp;
+        hideWordBubble();
+        triggerImageExplanation(imgEl, e.clientX, e.clientY, 'hover');
+        return;
+      }
       const hit = getWordAtPoint(e.clientX, e.clientY);
       if (!hit || hit.word === _lastHoveredWord) return;
       _lastHoveredWord = hit.word;
@@ -806,6 +874,64 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   function hideWordBubble() {
     if (_wordBubble) { _wordBubble.remove(); _wordBubble = null; }
     _lastHoveredWord = null;
+  }
+
+  // ── Image explanation (Ctrl+hover or gaze dwell while confused) ────────
+  function getImageContext(imgEl) {
+    let el = imgEl.parentElement;
+    for (let i = 0; i < 6 && el && el !== document.body; i++) {
+      const sibs = el.parentElement ? [...el.parentElement.children] : [];
+      const idx = sibs.indexOf(el);
+      for (const sib of [sibs[idx-1], sibs[idx+1], sibs[idx-2], sibs[idx+2]].filter(Boolean)) {
+        if (sib.contains(imgEl)) continue;
+        const t = (sib.innerText || sib.textContent || '').trim();
+        if (t.length > 50) return t.slice(0, 400);
+      }
+      el = el.parentElement;
+    }
+    return '';
+  }
+
+  async function triggerImageExplanation(imgEl, cx, cy, reason) {
+    const fp = 'img:' + (imgEl.src || '').slice(-60) + ':' + (imgEl.alt || '').slice(0, 20);
+    if (inFlightFingerprints.has(fp)) return;
+    inFlightFingerprints.add(fp);
+
+    const alt        = (imgEl.alt   || '').trim();
+    const titleAttr  = (imgEl.title || '').trim();
+    const figure     = imgEl.closest('figure');
+    const caption    = (figure?.querySelector('figcaption')?.textContent || '').trim();
+    const surrounding = getImageContext(imgEl);
+
+    const parts = [];
+    if (alt)                    parts.push(`Alt text: "${alt}"`);
+    if (titleAttr && titleAttr !== alt) parts.push(`Title: "${titleAttr}"`);
+    if (caption)                parts.push(`Caption: "${caption}"`);
+    if (surrounding)            parts.push(`Surrounding text:\n"${surrounding}"`);
+
+    if (!parts.length) { inFlightFingerprints.delete(fp); return; }
+
+    const payload = parts.join('\n');
+    const anchorRect = imgEl.getBoundingClientRect();
+
+    // Show a small loading bubble immediately so the user knows something is happening
+    const bubble = document.createElement('div');
+    bubble.className = 'sra-word-bubble';
+    bubble.style.cssText = `left:${Math.min(cx + 14, window.innerWidth - 280)}px;top:${Math.min(cy + 14, window.innerHeight - 120)}px;`;
+    bubble.innerHTML = '<strong>Image</strong><span class="sra-word-loading">analysing…</span>';
+    document.body.appendChild(bubble);
+    requestAnimationFrame(() => bubble.classList.add('show'));
+
+    try {
+      const summary = await fetchSummary(payload, 'image_context');
+      bubble.remove();
+      if (summary) {
+        const label = reason === 'hover' ? 'image · Ctrl+hover' : `image · ${reason}`;
+        renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text: payload, source: 'image', trigger: reason, triggerLabel: label });
+      }
+    } finally {
+      inFlightFingerprints.delete(fp);
+    }
   }
 
   // ── Selection TL;DR (or Ctrl+drag → colour highlight) ──────────────────
@@ -932,6 +1058,23 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     lastGazePt = pt;
     lastGazeReceivedAt = Date.now();
     featureExtractor.addPoint(pt);
+
+    // Image dwell: if gaze stays on the same image while confused/overloaded for >2s, explain it
+    const _gazeTopEl = document.elementFromPoint(pt.x, pt.y);
+    const _gazeImg   = _gazeTopEl?.tagName === 'IMG' ? _gazeTopEl
+      : (_gazeTopEl?.closest?.('figure')?.querySelector?.('img') || null);
+    if (_gazeImg) {
+      if (_gazeImg !== _imageDwellEl) { _imageDwellEl = _gazeImg; _imageDwellStart = Date.now(); }
+      else if (['confused', 'overloaded'].includes(lastCogState) && Date.now() - _imageDwellStart > 2000) {
+        const _ifp = 'img:' + (_gazeImg.src || '').slice(-60) + ':' + (_gazeImg.alt || '').slice(0, 20);
+        if (!inFlightFingerprints.has(_ifp)) {
+          _imageDwellStart = Date.now() + 30000; // suppress for 30s after trigger
+          triggerImageExplanation(_gazeImg, pt.x, pt.y, lastCogState);
+        }
+      }
+    } else {
+      _imageDwellEl = null;
+    }
 
     // Focus ruler follows gaze Y in real time
     if (focusRulerEnabled) focusRuler.update(pt.y);
@@ -1274,6 +1417,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
           : dyslexiaUtils.removeDyslexiaCSS();
       }
       if (msg.bionic        !== undefined) bionicEnabled = !!msg.bionic;
+      if (msg.darkMode      !== undefined) { darkModeEnabled = !!msg.darkMode; applyDarkMode(darkModeEnabled); }
       try { window.postMessage({ source:'sra-control', type:'setPredictionPoints', enabled:!!debugEnabled },'*'); } catch(e){}
       sendResponse({ status: 'ok' }); return;
     }

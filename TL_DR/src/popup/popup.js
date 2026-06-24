@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const viewHighlightsBtn  = $('viewHighlightsBtn');
   const exportBtn          = $('exportBtn');
   const pageSummaryBtn     = $('pageSummaryBtn');
+  const darkModeToggle     = $('darkModeToggle');
   const cameraDot          = $('cameraDot');
   const cameraStatus       = $('cameraStatus');
   const cogStateChip       = $('cogStateChip');
@@ -53,6 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sra_camera_ready: false, sra_camera_error: '', sra_current_state: '',
     sra_tts: false, sra_focus_ruler: false,
     sra_dyslexia: false, sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
+    sra_dark_mode: false, sra_active_persona: '',
   };
 
   chrome.storage.local.get(DEFAULTS, (res) => {
@@ -74,6 +76,14 @@ document.addEventListener('DOMContentLoaded', () => {
     dyslexiaOptions.style.display = res.sra_dyslexia ? 'block' : 'none';
     bionicToggle.checked       = !!res.sra_bionic;
     dyslexiaColorSelect.value  = res.sra_dyslexia_color || '';
+
+    darkModeToggle.checked = !!res.sra_dark_mode;
+    if (res.sra_dark_mode) document.body.classList.add('dark-mode');
+
+    if (res.sra_active_persona) {
+      document.querySelectorAll('.persona-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.persona === res.sra_active_persona));
+    }
 
     if (res.sra_camera_ready)       setCameraStatus('active', 'camera active');
     else if (res.sra_camera_error)  setCameraStatus('error',  'camera error — see console');
@@ -136,8 +146,10 @@ document.addEventListener('DOMContentLoaded', () => {
       sra_dyslexia:         dyslexiaToggle.checked,
       sra_dyslexia_color:   dyslexiaColorSelect.value,
       sra_bionic:           bionicToggle.checked,
+      sra_dark_mode:        darkModeToggle.checked,
     };
     chrome.storage.local.set(s);
+    document.body.classList.toggle('dark-mode', s.sra_dark_mode);
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (!tabs?.[0]) return;
       chrome.tabs.sendMessage(tabs[0].id, {
@@ -151,6 +163,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tts: s.sra_tts, focusRuler: s.sra_focus_ruler,
         dyslexia: s.sra_dyslexia, dyslexiaColor: s.sra_dyslexia_color,
         bionic: s.sra_bionic,
+        darkMode: s.sra_dark_mode,
       }, () => { if (chrome.runtime.lastError) {} });
       chrome.tabs.sendMessage(tabs[0].id, { type: 'debugToggle', enabled: s.sra_debug },
         () => { if (chrome.runtime.lastError) {} });
@@ -180,7 +193,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   [selToggle, highlightToggle, pinDefaultToggle, debugTogglePopup,
-   idleBlinkToggle, comprehensionToggle, ttsToggle, focusRulerToggle, bionicToggle]
+   idleBlinkToggle, comprehensionToggle, ttsToggle, focusRulerToggle, bionicToggle, darkModeToggle]
     .forEach(el => el.addEventListener('change', saveAndBroadcast));
   [backendUrlInput, autohideTimeout, dyslexiaColorSelect]
     .forEach(el => el.addEventListener('change', saveAndBroadcast));
@@ -278,6 +291,46 @@ document.addEventListener('DOMContentLoaded', () => {
   upgradeBtn.addEventListener('click', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/upgrade.html') });
   });
+
+  // ── Reading-mode personas ──────────────────────────────────────────────
+  const PERSONAS = {
+    research: { sra_eye: true,  sra_selection: true,  sra_highlight_para: true,  sra_comprehension: true,  sra_focus_ruler: true,  sra_autohide: false, sra_pin_default: true,  sra_idle_blink: true,  sra_tts: false },
+    study:    { sra_eye: true,  sra_selection: true,  sra_highlight_para: true,  sra_comprehension: true,  sra_focus_ruler: false, sra_autohide: true,  sra_autohide_timeout: 10, sra_pin_default: false, sra_idle_blink: true,  sra_tts: true  },
+    casual:   { sra_eye: false, sra_selection: true,  sra_highlight_para: false, sra_comprehension: false, sra_focus_ruler: false, sra_autohide: true,  sra_autohide_timeout: 6,  sra_pin_default: false, sra_idle_blink: false, sra_tts: false },
+    speed:    { sra_eye: true,  sra_selection: false, sra_highlight_para: false, sra_comprehension: false, sra_focus_ruler: true,  sra_autohide: true,  sra_autohide_timeout: 4,  sra_pin_default: false, sra_idle_blink: true,  sra_tts: false },
+  };
+
+  function applyPersona(key) {
+    const p = PERSONAS[key];
+    if (!p) return;
+    chrome.storage.local.set({ ...p, sra_active_persona: key });
+
+    // Sync all toggle UI elements to the persona's values
+    if (eyeToggle)            eyeToggle.checked            = !!p.sra_eye;
+    if (selToggle)            selToggle.checked            = !!p.sra_selection;
+    if (highlightToggle)      highlightToggle.checked      = !!p.sra_highlight_para;
+    if (comprehensionToggle)  comprehensionToggle.checked  = !!p.sra_comprehension;
+    if (focusRulerToggle)     focusRulerToggle.checked     = !!p.sra_focus_ruler;
+    if (autohideToggle)       autohideToggle.checked       = !!p.sra_autohide;
+    if (p.sra_autohide_timeout && autohideTimeout) autohideTimeout.value = p.sra_autohide_timeout;
+    if (pinDefaultToggle)     pinDefaultToggle.checked     = !!p.sra_pin_default;
+    if (idleBlinkToggle)      idleBlinkToggle.checked      = !!p.sra_idle_blink;
+    if (ttsToggle)            ttsToggle.checked            = !!p.sra_tts;
+    timeoutRow.style.display = p.sra_autohide ? 'flex' : 'none';
+
+    // Mark the active button
+    document.querySelectorAll('.persona-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.persona === key));
+
+    // Broadcast new settings to content script
+    saveAndBroadcast();
+
+    // Restart camera if eye tracking was just enabled
+    if (p.sra_eye) setCameraStatus('loading', 'starting…');
+  }
+
+  document.querySelectorAll('.persona-btn').forEach(btn =>
+    btn.addEventListener('click', () => applyPersona(btn.dataset.persona)));
 
   // ── Simulate state buttons ─────────────────────────────────────────────
   function simulateState(state) {
