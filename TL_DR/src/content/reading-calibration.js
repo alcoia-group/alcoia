@@ -89,7 +89,7 @@ export async function runReadingCalibration(opts = {}) {
       padding:      '36px 44px',
       maxWidth:     '640px',
       width:        '90vw',
-      fontFamily:   'Georgia, serif',
+      fontFamily:   "'Fraunces', Georgia, serif",
       boxShadow:    '0 24px 60px rgba(0,0,0,0.4)',
     });
 

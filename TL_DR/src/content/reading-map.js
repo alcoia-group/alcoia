@@ -38,7 +38,7 @@ export function createReadingMap() {
         box-shadow: -4px 0 20px rgba(0,0,0,0.08);
         z-index: 2147483635;
         display: flex; flex-direction: column;
-        font-family: Georgia, serif;
+        font-family: 'Fraunces', Georgia, serif;
         backdrop-filter: blur(6px);
         overflow: hidden;
       }
@@ -52,7 +52,7 @@ export function createReadingMap() {
         color: white; border: none; cursor: pointer;
         border-radius: 8px 0 0 8px;
         padding: 10px 5px; writing-mode: vertical-rl;
-        font-family: Georgia,serif; font-size: 10px; letter-spacing: 0.8px;
+        font-family: 'Fraunces', Georgia, serif; font-size: 10px; letter-spacing: 0.8px;
         z-index: 2147483636; box-shadow: -2px 0 8px rgba(0,0,0,0.12);
       }
       #${TAB_ID}.open { transform: translateY(-50%) translateX(-${WIDTH_PX}px); }

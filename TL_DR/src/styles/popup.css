@@ -1,10 +1,10 @@
 .cj {
-	font-family: 'Times New Roman', Times, serif;
+	font-family: 'Fraunces', Georgia, serif;
 	font-style: italic;
 	font-weight: bold;
 }
 .cj-brand-logo {
-	font-family: 'Times New Roman', Times, serif;
+	font-family: 'Fraunces', Georgia, serif;
 	font-style: italic;
 	font-weight: 900;
 	font-size: 12px;
@@ -15,23 +15,7 @@
 }
 :root{--bg:#FAFAF7;--text:#333333;--accent:#1A7E5D;--accent2:#3A82F7;--gold:#C8A54B}
 *{box-sizing:border-box}
-/* Local Merriweather font (vendored into src/libs/fonts) */
-@font-face{
-	font-family: 'MerriweatherLocal';
-	src: url('../libs/fonts/Merriweather-Regular.woff2') format('woff2');
-	font-weight: 400;
-	font-style: normal;
-	font-display: swap;
-}
-@font-face{
-	font-family: 'MerriweatherLocal';
-	src: url('../libs/fonts/Merriweather-Bold.woff2') format('woff2');
-	font-weight: 700;
-	font-style: normal;
-	font-display: swap;
-}
-
-body{margin:0;font-family:'MerriweatherLocal','Merriweather',Georgia,serif;background:var(--bg);color:var(--text);width:340px;height:480px}
+body{margin:0;font-family:'Fraunces',Georgia,serif;background:var(--bg);color:var(--text);width:340px;height:480px}
 .popup-root{padding:18px;display:flex;flex-direction:column;gap:14px;position:relative;min-height:480px}
 .top{display:flex;align-items:center;gap:12px}
 .logo{display:inline-flex;align-items:center}
