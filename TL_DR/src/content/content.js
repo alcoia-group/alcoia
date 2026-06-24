@@ -130,12 +130,18 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   // ── Module loader ──────────────────────────────────────────────────────
   const loadModule = (p) => import(chrome.runtime.getURL(p));
 
-  // ── Inject overlay CSS ─────────────────────────────────────────────────
+  // ── Inject overlay CSS + Fraunces font ────────────────────────────────
   if (!document.querySelector('[data-sra-css]')) {
     const l = document.createElement('link');
     l.rel = 'stylesheet'; l.dataset.sraCss = '1';
     l.href = chrome.runtime.getURL('src/styles/overlay.css');
     document.head.appendChild(l);
+  }
+  if (!document.querySelector('[data-sra-font]')) {
+    const f = document.createElement('link');
+    f.rel = 'stylesheet'; f.dataset.sraFont = '1';
+    f.href = 'https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,700;1,9..144,300;1,9..144,400&display=swap';
+    document.head.appendChild(f);
   }
 
   // ── Load modules ───────────────────────────────────────────────────────
@@ -559,7 +565,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       color:          'white',
       padding:        '9px 20px',
       borderRadius:   '8px',
-      fontFamily:     'Georgia, serif',
+      fontFamily:     "'Fraunces', Georgia, serif",
       fontSize:       '13px',
       fontStyle:      'italic',
       zIndex:         '2147483646',
@@ -591,7 +597,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       position:     'fixed', top: '14px', right: '14px',
       background:   '#2c2c2a', color: '#f0ede8',
       padding:      '9px 16px', borderRadius: '9px',
-      fontFamily:   'Georgia, serif', fontSize: '12px',
+      fontFamily:   "'Fraunces', Georgia, serif", fontSize: '12px',
       zIndex:       '2147483640', opacity: '0',
       transition:   'opacity 0.2s ease', pointerEvents: 'none',
       boxShadow:    '0 4px 14px rgba(0,0,0,0.25)', maxWidth: '240px', lineHeight: '1.5',
@@ -620,7 +626,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       padding: '8px 11px',
       display: 'flex', alignItems: 'center', gap: '7px',
       boxShadow: '0 6px 24px rgba(0,0,0,0.16)',
-      fontFamily: 'Georgia, serif',
+      fontFamily: "'Fraunces', Georgia, serif",
     });
 
     const label = document.createElement('span');
@@ -1647,7 +1653,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       toast.id = 'sra-continuity-toast';
       toast.style.cssText = [
         'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);',
-        'background:rgba(26,30,28,0.92);color:#e8e8e4;font-family:Georgia,serif;',
+        'background:rgba(26,30,28,0.92);color:#e8e8e4;font-family:Fraunces,Georgia,serif;',
         'font-size:12px;padding:10px 16px;border-radius:12px;z-index:2147483640;',
         'display:flex;align-items:center;gap:12px;box-shadow:0 4px 18px rgba(0,0,0,0.3);',
         'max-width:480px;backdrop-filter:blur(6px);',

@@ -42,7 +42,7 @@ export async function initPPTXHandler(opts = {}) {
         const xml = await zip.files[sf].async('string');
         const texts = Array.from(xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)).map(m=>m[1]);
         const joined = texts.join(' ');
-        const box = document.createElement('div'); box.className='sra-pptx-box'; box.style.position='absolute'; box.style.pointerEvents='auto'; box.style.left='8%'; box.style.top=(8 + id*100) + 'px'; box.style.width='84%'; box.style.padding='8px 12px'; box.style.borderRadius='12px'; box.style.background='transparent'; box.style.color='#222'; box.style.fontFamily='Merriweather, Georgia, serif'; box.textContent = joined.slice(0,400);
+        const box = document.createElement('div'); box.className='sra-pptx-box'; box.style.position='absolute'; box.style.pointerEvents='auto'; box.style.left='8%'; box.style.top=(8 + id*100) + 'px'; box.style.width='84%'; box.style.padding='8px 12px'; box.style.borderRadius='12px'; box.style.background='transparent'; box.style.color='#222'; box.style.fontFamily="'Fraunces', Georgia, serif"; box.textContent = joined.slice(0,400);
         overlayRoot.appendChild(box);
         await new Promise(r => requestAnimationFrame(r));
         const r = box.getBoundingClientRect(); overlays.push({ id:`pptx-${id++}`, text: joined, rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom } });
