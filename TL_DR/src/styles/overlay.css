@@ -12,7 +12,7 @@
   --tldr-accent:   #1A7E5D;
   --tldr-accent2:  #0f5c42;
   --tldr-gold:     #C8A54B;
-  --tldr-serif:    'Merriweather', 'Georgia', 'Times New Roman', serif;
+  --tldr-serif:    'Fraunces', 'Fraunces', Georgia, serif;
   --tldr-radius:   14px;
 }
 
@@ -181,7 +181,7 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  font-family: 'Merriweather', Georgia, serif;
+  font-family: 'Fraunces', 'Fraunces', Georgia, serif;
 }
 .sra-cal-top    { display: flex; align-items: center; gap: 10px; }
 .sra-cal-steps  { display: flex; gap: 5px; }
@@ -205,7 +205,7 @@
 }
 .sra-cal-retry {
   font-size: 11px;
-  font-family: Georgia, serif;
+  font-family: 'Fraunces', 'Fraunces', Georgia, serif;
   color: #1A7E5D;
   background: none;
   border: 1px solid rgba(26,126,93,0.3);

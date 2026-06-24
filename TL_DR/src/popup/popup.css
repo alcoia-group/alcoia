@@ -1,6 +1,6 @@
 :root{--bg:#FAFAF7;--text:#333333;--accent:#1A7E5D;--accent2:#3A82F7;--gold:#C8A54B}
 *{box-sizing:border-box}
-body{margin:0;font-family:'Merriweather',Georgia,serif;background:var(--bg);color:var(--text);width:320px;height:420px}
+body{margin:0;font-family:'Fraunces',Georgia,serif;background:var(--bg);color:var(--text);width:320px;height:420px}
 .popup-root{padding:14px;display:flex;flex-direction:column;gap:14px}
 .top{display:flex;align-items:center;gap:12px}
 .logo{font-size:22px}
