@@ -155,12 +155,14 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const { runReadingCalibration } = readCalModule;
   const ttsModule      = await loadModule('src/content/tts-handler.js');
   const rulerModule    = await loadModule('src/content/focus-ruler.js');
-  const dyslexiaModule = await loadModule('src/content/dyslexia-utils.js');
-  const mapModule      = await loadModule('src/content/reading-map.js');
+  const dyslexiaModule  = await loadModule('src/content/dyslexia-utils.js');
+  const langDetectModule = await loadModule('src/content/lang-detect.js');
+  const mapModule       = await loadModule('src/content/reading-map.js');
 
   const ttsHandler    = ttsModule.createTTSHandler();
   const focusRuler    = rulerModule.createFocusRuler();
   const dyslexiaUtils = dyslexiaModule;
+  const scriptInfo    = langDetectModule.detectScript();
   const readingMap    = mapModule.createReadingMap();
   const sessionModule  = await loadModule('src/content/session-tracker.js');
   const sessionTracker = sessionModule.createSessionTracker();
@@ -401,7 +403,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         <button class="sra-ctrl-btn sra-pin-btn" title="Pin">📌</button>
         <button class="sra-ctrl-btn sra-close-btn" title="Close">✕</button>
       </div>
-      <div class="sra-popup-body">${badge}${html}</div>
+      <div class="sra-popup-body" dir="auto">${badge}${html}</div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
         <button class="sra-btn sra-btn-primary  sra-explain-btn">Explain More</button>
@@ -1235,9 +1237,12 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         : rawFeatures;
 
       // Apply dyslexia threshold patch before classifying
-      const classFeatures = dyslexiaEnabled
+      const dyslexiaPatched = dyslexiaEnabled
         ? dyslexiaUtils.patchFeaturesForDyslexia(features)
         : features;
+
+      // Apply script-aware patch: flip regression_rate for RTL, scale fixation_ms for CJK
+      const classFeatures = langDetectModule.patchFeaturesForScript(dyslexiaPatched, scriptInfo);
 
       const { label, confidence } = classifyGazeState(classFeatures);
 
