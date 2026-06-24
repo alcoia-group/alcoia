@@ -156,6 +156,17 @@ Format your response EXACTLY like this — do not deviate:
 
 Page content:
 ${escaped}`,
+
+    image_context: `You are a reading assistant embedded in a browser. A reader is viewing an image on a web page and needs help understanding it.
+
+Based on the information below, explain in 2–3 sentences:
+1. What this image most likely shows or depicts
+2. How it connects to the surrounding text
+3. The key insight or point the image is making
+
+${escaped}
+
+Be specific. If it appears to be a chart or graph, describe what it measures and the main trend visible. If it's a diagram, describe the relationship shown. Maximum 70 words.`,
   };
 
   return (prompts[mode] || prompts.tldr) +
@@ -185,7 +196,7 @@ async function callGroq(prompt, mode) {
         { role: 'user', content: prompt },
       ],
       temperature: 0.25,
-      max_tokens:  mode === 'page_summary' ? 400 : mode === 'define_word' ? 80 : 220,
+      max_tokens:  mode === 'page_summary' ? 400 : mode === 'define_word' ? 80 : mode === 'image_context' ? 120 : 220,
       top_p:       0.9,
     }),
   });
@@ -206,7 +217,7 @@ app.post('/api/summarize', rateLimit, async (req, res) => {
     return res.status(400).json({ error: 'No text provided.' });
   }
 
-  const limit   = mode === 'page_summary' ? 6000 : 4000;
+  const limit   = mode === 'page_summary' ? 6000 : mode === 'image_context' ? 800 : 4000;
   const clipped = text.trim().slice(0, limit);
   const prompt  = buildPrompt(clipped, mode, context);
 
