@@ -162,7 +162,11 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const ttsHandler    = ttsModule.createTTSHandler();
   const focusRuler    = rulerModule.createFocusRuler();
   const dyslexiaUtils = dyslexiaModule;
-  const scriptInfo    = langDetectModule.detectScript();
+  let scriptInfo = langDetectModule.detectScript();
+  langDetectModule.watchScriptChanges(newInfo => {
+    scriptInfo = newInfo;
+    _log(`Script re-detected: RTL=${newInfo.isRTL} CJK=${newInfo.isCJK} lang="${newInfo.lang}"`);
+  });
   const readingMap    = mapModule.createReadingMap();
   const sessionModule  = await loadModule('src/content/session-tracker.js');
   const sessionTracker = sessionModule.createSessionTracker();
@@ -1326,15 +1330,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
                 chrome.storage.local.get({ sra_ever_calibrated: false }, r => resolve(r))
               );
               if (stored.sra_ever_calibrated) {
-                // Calibration offset is already loaded from storage in createGazeState().
-                // WebGazer keeps improving from continuous click recording as the user reads.
-                _log('Calibration persisted — skipping first-time sequence');
+                // Restore the saved regression model for a warm start, then let
+                // continuous click recording refine it for the current session.
+                _log('Calibration persisted — restoring model from previous session');
+                await gazeUtils.restoreWebgazerModel();
               } else {
                 _log('First-time calibration starting...');
                 const cal = await gazeUtils.runCalibrationSequence();
                 if (cal) {
                   await gazeUtils.setCalibration(cal);
                   chrome.storage.local.set({ sra_ever_calibrated: true });
+                  await gazeUtils.saveWebgazerModel();
                   _log('First-time calibration complete and saved');
                 }
               }
