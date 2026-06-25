@@ -112,6 +112,73 @@ export function normalizeWithBaseline(features, baseline) {
   return out;
 }
 
+// ── WEBGAZER MODEL PERSISTENCE ───────────────────────────────────────────────
+// Saves/restores the ridge regression training data via the postMessage bridge
+// to webgazer-bootstrap.js (MAIN world). The data is stored in chrome.storage.
+//
+// Why this helps even though face geometry changes between sessions:
+// The ridge regression keeps a rolling window of (eye-features → screen-pos) pairs.
+// Restoring it gives a warm start that is better than a cold start; the model
+// then corrects itself within the first few clicks of the new session.
+//
+// If webgazer.getData / webgazer.setData don't exist in the bundled build,
+// or if the serialised model exceeds 500 KB, we silently skip — the session
+// still works normally, just starting cold.
+
+const MODEL_SIZE_CAP = 500 * 1024; // 500 KB
+
+export function saveWebgazerModel() {
+  return new Promise(resolve => {
+    const id = Math.random().toString(36).slice(2);
+
+    const handler = (ev) => {
+      if (!ev.data || ev.source !== window) return;
+      if (ev.data.source !== 'sra-model-data' || ev.data.id !== id) return;
+      window.removeEventListener('message', handler);
+
+      const json = ev.data.modelData;
+      if (!json) { resolve(false); return; }
+      if (json.length > MODEL_SIZE_CAP) {
+        console.warn('[TL;DR] WebGazer model too large to persist:', Math.round(json.length / 1024), 'KB — skipping');
+        resolve(false);
+        return;
+      }
+      try {
+        chrome.storage.local.set({ sra_webgazer_model: json }, () => {
+          console.log('[TL;DR] WebGazer model saved:', Math.round(json.length / 1024), 'KB');
+          resolve(true);
+        });
+      } catch (e) { resolve(false); }
+    };
+
+    window.addEventListener('message', handler);
+    window.postMessage({ source: 'sra-save-model', id }, '*');
+    setTimeout(() => { window.removeEventListener('message', handler); resolve(false); }, 2000);
+  });
+}
+
+export function restoreWebgazerModel() {
+  return new Promise(resolve => {
+    try {
+      chrome.storage.local.get({ sra_webgazer_model: null }, ({ sra_webgazer_model: json }) => {
+        if (!json) { resolve(false); return; }
+
+        const id = Math.random().toString(36).slice(2);
+        const handler = (ev) => {
+          if (!ev.data || ev.source !== window) return;
+          if (ev.data.source !== 'sra-model-restored' || ev.data.id !== id) return;
+          window.removeEventListener('message', handler);
+          resolve(true);
+        };
+
+        window.addEventListener('message', handler);
+        window.postMessage({ source: 'sra-restore-model', id, modelData: json }, '*');
+        setTimeout(() => { window.removeEventListener('message', handler); resolve(false); }, 2000);
+      });
+    } catch (e) { resolve(false); }
+  });
+}
+
 // ── CLICK-BASED CALIBRATION ───────────────────────────────────────────────────
 //
 // The user sees a dot, clicks it, we call webgazer.recordScreenPosition().

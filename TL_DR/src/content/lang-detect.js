@@ -53,6 +53,55 @@ export function detectScript() {
   return { isRTL, isCJK: isCJK && !isRTL, lang };
 }
 
+// Watch for SPA navigation that changes the page language without a full reload.
+// Covers three signals:
+//   1. <html lang> or <html dir> attribute mutation (most SPAs update this)
+//   2. popstate / hashchange (history-based navigation)
+//   3. direct childList changes on <body> (major DOM rebuild = new page content)
+// Returns a cleanup function that disconnects all observers and listeners.
+export function watchScriptChanges(onChange) {
+  let current = detectScript();
+
+  let debounceTimer = null;
+  function schedule() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      const next = detectScript();
+      if (next.isRTL !== current.isRTL || next.isCJK !== current.isCJK || next.lang !== current.lang) {
+        current = next;
+        onChange(next);
+      }
+    }, 200);
+  }
+
+  // Signal 1 — <html> lang / dir attribute change
+  const attrObserver = new MutationObserver(schedule);
+  attrObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['lang', 'dir'],
+  });
+
+  // Signal 2 — direct children of <body> replaced (SPA page swap)
+  const bodyObserver = new MutationObserver(schedule);
+  const observeBody = () => {
+    if (document.body) bodyObserver.observe(document.body, { childList: true });
+  };
+  observeBody();
+  if (!document.body) document.addEventListener('DOMContentLoaded', observeBody, { once: true });
+
+  // Signal 3 — URL changes (back/forward, hash navigation)
+  window.addEventListener('popstate',   schedule);
+  window.addEventListener('hashchange', schedule);
+
+  return function cleanup() {
+    clearTimeout(debounceTimer);
+    attrObserver.disconnect();
+    bodyObserver.disconnect();
+    window.removeEventListener('popstate',   schedule);
+    window.removeEventListener('hashchange', schedule);
+  };
+}
+
 export function patchFeaturesForScript(features, scriptInfo) {
   if (!scriptInfo || (!scriptInfo.isRTL && !scriptInfo.isCJK)) return features;
 
