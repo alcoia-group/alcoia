@@ -12,11 +12,13 @@ The extension runs three systems simultaneously.
 
 The first is a gaze tracking layer built on WebGazer.js, which uses your laptop or desktop webcam to estimate where on the screen your eyes are pointing. Raw gaze coordinates are smoothed using an exponential moving average, filtered for velocity spikes, and passed through a DBSCAN noise filter that discards spatially isolated outlier points before any features are computed.
 
-The second is a cognitive state classifier. Every 2.5 seconds, nine statistical features are computed from the last window of gaze data: average fixation duration, fixation stability, regression rate, saccade length, saccade consistency, gaze drift, scroll delta, gaze velocity, and line re-read count. These nine numbers are fed into a Decision Tree classifier trained on a synthetic dataset of 2,500 labelled gaze samples. The tree — exported as plain JavaScript if/else code — runs in under one millisecond and returns one of five cognitive state labels: focused, skimming, confused, zoning out, or overloaded.
+The second is a cognitive state classifier. Every 3 seconds, nine statistical features are computed from a 2.5-second rolling window of gaze data: average fixation duration, fixation stability, regression rate, saccade length, saccade consistency, gaze drift, scroll delta, gaze velocity, and line re-read count. Before classification, the features are normalised against the user's personal reading baseline and patched for the page's script — regression rate is inverted on right-to-left pages (Arabic, Hebrew) and fixation durations are scaled on CJK pages, where longer fixations are normal rather than a sign of confusion. The adjusted features are fed into a Decision Tree classifier trained on a synthetic dataset of 4,000 labelled gaze samples. The tree — exported as plain JavaScript if/else code — runs in under one millisecond and returns one of five cognitive state labels: focused, skimming, confused, zoning out, or overloaded.
 
-The third is an AI response layer. When the classifier detects confusion or overload, the extension identifies the paragraph currently under the user's gaze, sends its text to a local Node.js server, and receives a Groq-generated response. Confused readers receive a deeper explanation of the paragraph. Overloaded readers receive a simplified rewrite. Zoning out triggers a visual highlight on the current paragraph with no AI call. Focused and skimming states produce no action.
+The third is an AI response layer. When the classifier detects confusion or overload, the extension identifies the paragraph currently under the user's gaze, sends its text to a local Node.js server, and receives a Groq-generated response. Confused readers receive a deeper explanation of the paragraph. Overloaded readers receive a simplified rewrite. Zoning out triggers a visual highlight on the current paragraph with no AI call. Focused and skimming states produce no action. Responses always come back in the same language as the text being read, and repeat requests for the same paragraph are served instantly from a session cache.
 
-Text selection also works independently of eye tracking. Selecting any text on any page triggers an AI summary popup immediately.
+Text selection also works independently of eye tracking. Selecting any text on any page triggers an AI summary popup immediately. Images get the same treatment: gazing at a figure for two seconds while confused — or Ctrl-hovering over any image — triggers an AI explanation of what the image shows and how it relates to the surrounding text.
+
+Beyond the core loop, the extension ships a comprehension monitor (flags dense paragraphs read too fast, or silent struggle read far below personal baseline), reading personas (one-click presets for research, study, casual, and speed reading), a collapsible reading map sidebar with progress and confusion events, dark mode across all UI, text-to-speech with word-level highlighting, a dyslexia mode with adapted fonts and softened classifier thresholds, and viewers for local PDF and PPTX files. The full feature reference is in [TL_DR/README.md](TL_DR/README.md).
 
 ---
 
@@ -50,11 +52,11 @@ The backend server exists because the Groq API key cannot be stored in the exten
 
 The Decision Tree was trained on a synthetic dataset generated from distributions derived from published reading research, primarily Rayner (1998), Just and Carpenter (1980), and Siegenthaler et al. (2011). Synthetic data was necessary because no public labelled gaze dataset exists for reading cognitive states.
 
-The dataset contains 2,500 rows across five classes, 500 per class. Each row represents 9 gaze features computed over a 2.5-second window. The tree is trained with a maximum depth of 7, minimum 16 samples per leaf, and balanced class weights. Test accuracy on a held-out 20% split is 88%.
+The dataset contains 4,000 training rows balanced across the five classes. Each row represents 9 gaze features computed over a 2.5-second window. The tree is trained with limited depth, a minimum leaf size, and balanced class weights to stay robust against webcam noise. Test accuracy on a held-out split is 85%.
 
 After training, the tree is exported from sklearn as a JavaScript function containing plain if/else conditions. This function runs in the browser without any machine learning library, with no external dependencies, in under one millisecond per classification.
 
-The training notebook is at `tools/tldr_classifier_training.ipynb`. Running all cells regenerates the dataset CSV, trains the model, produces evaluation charts, and exports a new `classifier.js`.
+The training notebook is at `tldr classifier/tldr_classifier_training.ipynb` (v2 at `tldr classifier/tldr_classifier_v2.ipynb`). Running all cells regenerates the dataset CSV, trains the model, produces evaluation charts, and exports a new `classifier.js`.
 
 The synthetic distributions were designed to be wider and more overlapping than lab-controlled data, reflecting the noise characteristics of consumer webcam gaze tracking. Real-world accuracy is estimated at 75 to 82%, lower than the synthetic test accuracy because webcam gaze data is noisier than the simulated distributions.
 
@@ -66,7 +68,9 @@ Consumer webcam eye tracking achieves approximately 80 to 200 pixels of residual
 
 The debug mode toggle in the extension popup shows WebGazer's raw prediction dot on screen. The shakiness of this dot is expected and reflects two separate sources of noise: natural micro-saccades that the eye makes continuously even during a stable fixation, and frame-to-frame variation in the webcam's iris detection. The DBSCAN filter in `gaze-features.js` removes spatial outliers before computing features, which improves regression rate and saccade detection without affecting the debug dot position, since the dot comes from WebGazer's raw output before any of the extension's processing.
 
-Calibration works by calling `webgazer.recordScreenPosition(x, y, 'click')` for each of 18 dot positions across two passes of a 9-point grid. Each call gives WebGazer one labelled training example for its internal ridge regression model. The accuracy of calibration depends entirely on clicking the centre of each dot accurately.
+Calibration works by calling `webgazer.recordScreenPosition(x, y, 'click')` for each of 18 dot positions across two passes of a 9-point grid. Each call gives WebGazer one labelled training example for its internal ridge regression model. The accuracy of calibration depends entirely on clicking the centre of each dot accurately. A second calibration mode highlights the words of a paragraph one by one at natural reading speed, recording ~80 training examples from the actual reading zone without any clicking.
+
+After any calibration, the regression model's training data is serialised and saved to extension storage, then restored on every subsequent page load. Combined with continuous click training (every click on any page is a labelled example), the tracker gets more accurate the longer the extension is used, rather than starting from scratch each session.
 
 Eye tracking requires a secure context: HTTPS or localhost. It will not start on plain HTTP pages. On pages with strict Content Security Policies that block `tfhub.dev` — including Wikipedia, GitHub, and MDN — WebGazer's face detection model cannot load. The extension detects this upfront and shows a clear message rather than failing silently. Text selection summaries work normally on all pages regardless of CSP.
 
@@ -101,7 +105,7 @@ Navigate to `chrome://extensions`, enable Developer Mode in the top right, click
 
 ```
 pip install numpy pandas scikit-learn matplotlib seaborn jupyter
-jupyter notebook tools/tldr_classifier_training.ipynb
+jupyter notebook "tldr classifier/tldr_classifier_v2.ipynb"
 ```
 
 Select Kernel then Restart and Run All. The notebook generates the dataset CSV, trains the decision tree, produces evaluation visualisations, and writes a new `classifier.js`. Copy the output file to `TL_DR/src/content/classifier.js` and reload the extension.
@@ -113,35 +117,52 @@ Select Kernel then Restart and Run All. The notebook generates the dataset CSV, 
 ```
 TL_DR/
   manifest.json
-  background.js
+  background.js               Service worker: message routing, file:// intercept
   assets/
     tldr.png
   src/
     content/
       content.js              Main orchestrator, runs on every page
-      webgazer-bootstrap.js   Loads WebGazer in page context, postMessage bridge
-      gaze-utils.js           Smoothing, calibration, velocity filter
+      webgazer-bootstrap.js   Loads WebGazer in page context, postMessage bridge, model save/restore
+      gaze-utils.js           Smoothing, calibration, velocity filter, model persistence
       gaze-features.js        9-feature extractor with DBSCAN noise filter
       classifier.js           Decision tree exported as JavaScript
-      overlay-utils.js        DOM block element finder
+      lang-detect.js          RTL/CJK script detection, SPA re-detection, feature patching
+      comprehension-monitor.js  WPM baseline, too-fast/too-slow detection, backtrack
+      reading-calibration.js  Word-by-word natural reading calibration
+      session-tracker.js      Per-session state durations and reports
+      tts-handler.js          Web Speech read-aloud with word highlighting
+      focus-ruler.js          Horizontal dim-band following gaze
+      dyslexia-utils.js       Dyslexia fonts, colour overlay, bionic reading, threshold patch
+      reading-map.js          Sidebar: progress, heading minimap, event log
       idle-overlay.js         Edge pulse when user looks away
+      overlay-utils.js        DOM block element finder
+      pdf-handler.js          PDF text extraction
+      pptx-handler.js         PPTX parsing via JSZip
     popup/
-      popup.html              Extension popup
-      popup.js                Popup controller
-      notes.html              Saved notes dashboard
-      notes.js                Notes dashboard logic
+      popup.html              Extension popup (Assist / Accessibility / Session tabs)
+      popup.js                Popup controller, personas, dark mode
+      notes.html / notes.js   Saved notes dashboard
+      session-report.html     Per-session reading report
+      highlights.html         Saved paragraph highlights
+      export.html             Session export
+    pdf-viewer/viewer.html    Extension-hosted PDF.js viewer
+    pptx-viewer/viewer.html   Extension-hosted PPTX viewer
     styles/
       overlay.css             Floating summary popup styles
     libs/
       webgazer.min.js         Bundled WebGazer
+      jszip.min.js            Bundled JSZip
+      pdfjs/                  Bundled PDF.js
   server/
     index.js                  Express server, Groq API proxy
     package.json
     .env                      API key, never committed
     .gitignore
-  tools/
-    tldr_classifier_training.ipynb
-    gaze_dataset_v2.csv
+tldr classifier/
+  tldr_classifier_training.ipynb   Training notebook (v1)
+  tldr_classifier_v2.ipynb         Training notebook (v2, current)
+  gaze_dataset_v2.csv              Synthetic training data
 ```
 
 ---
@@ -166,11 +187,11 @@ The classifier was trained on synthetic data. Until a real labelled gaze dataset
 
 ## Planned features
 
-Focus tunneling: a full-viewport overlay that dims everything except the currently gazed paragraph, implemented via a high z-index div with the target paragraph elevated above it.
-
 Auto-scroll: a `requestAnimationFrame` loop calling `window.scrollBy` at a speed derived from gaze position relative to the viewport, pausing automatically when the classifier detects confusion.
 
-Real gaze dataset: collecting and publishing a labelled dataset of real reading sessions to replace the synthetic training data and improve real-world accuracy.
+Real gaze dataset: collecting and publishing a labelled dataset of real reading sessions (including RTL and CJK readers) to replace the synthetic training data and improve real-world accuracy.
+
+Collaborative classroom mode: students' confusion events aggregated in real time into a heatmap the lecturer can see.
 
 VS Code extension: applying the same classifier to code reading via the VS Code WebView API.
 
