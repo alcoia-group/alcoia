@@ -1396,7 +1396,10 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   window.sra = window.sra || {};
   window.sra.runCalibration = async () => {
     const cal = await gazeUtils.runCalibrationSequence();
-    if (cal) await gazeUtils.setCalibration(cal);
+    if (cal) {
+      await gazeUtils.setCalibration(cal);
+      await gazeUtils.saveWebgazerModel();
+    }
     return cal;
   };
   window.sra.getState = () => lastCogState;
@@ -1440,7 +1443,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
     if (msg.type === 'runCalibration') {
       (async () => {
-        try { const cal = await gazeUtils.runCalibrationSequence(); if(cal) await gazeUtils.setCalibration(cal); sendResponse({status:'ok',calibration:cal}); }
+        try { const cal = await gazeUtils.runCalibrationSequence(); if(cal) { await gazeUtils.setCalibration(cal); await gazeUtils.saveWebgazerModel(); } sendResponse({status:'ok',calibration:cal}); }
         catch (e) { sendResponse({status:'error',error:String(e)}); }
       })(); return true;
     }
