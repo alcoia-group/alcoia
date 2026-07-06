@@ -153,6 +153,18 @@
       return;
     }
 
+    // Show/hide WebGazer's own camera feedback (video + face mesh + feedback box).
+    // Used during calibration so the user can confirm their face is detected and
+    // well-positioned — the biggest single factor in gaze accuracy.
+    if (d.source === 'sra-control' && d.type === 'setFeedback') {
+      try {
+        webgazer.showVideo(!!d.enabled);
+        webgazer.showFaceOverlay(!!d.enabled);
+        webgazer.showFaceFeedbackBox(!!d.enabled);
+      } catch (e) {}
+      return;
+    }
+
     // ── Model save/restore ────────────────────────────────────────────────
     if (d.source === 'sra-save-model' && d.id) {
       try {
@@ -169,9 +181,16 @@
     if (d.source === 'sra-restore-model' && d.id && d.modelData) {
       try {
         const parsed = typeof d.modelData === 'string' ? JSON.parse(d.modelData) : d.modelData;
-        if (typeof webgazer !== 'undefined' && webgazer.setData) {
+        // Only restore if the saved model actually contains training examples.
+        // An empty or malformed model would give WebGazer nothing useful and
+        // could bias predictions, so we skip it and let this session train fresh.
+        const hasData = Array.isArray(parsed) ? parsed.length > 0
+          : (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0);
+        if (hasData && typeof webgazer !== 'undefined' && webgazer.setData) {
           webgazer.setData(parsed);
           console.log('[TL;DR] WebGazer model restored from previous session');
+        } else {
+          console.log('[TL;DR] No usable saved model — training fresh this session');
         }
       } catch (e) {
         console.warn('[TL;DR] Model restore failed:', e.message);
