@@ -1443,8 +1443,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
     if (msg.type === 'runCalibration') {
       (async () => {
-        try { const cal = await gazeUtils.runCalibrationSequence(); if(cal) { await gazeUtils.setCalibration(cal); await gazeUtils.saveWebgazerModel(); } sendResponse({status:'ok',calibration:cal}); }
-        catch (e) { sendResponse({status:'error',error:String(e)}); }
+        try {
+          const cal = await gazeUtils.runCalibrationSequence();
+          if (cal) {
+            await gazeUtils.setCalibration(cal);
+            await gazeUtils.saveWebgazerModel();
+            // Mark calibrated so the auto-modal doesn't reappear on future pages
+            chrome.storage.local.set({ sra_ever_calibrated: true });
+          }
+          sendResponse({ status: 'ok', calibration: cal });
+        }
+        catch (e) { sendResponse({ status: 'error', error: String(e) }); }
       })(); return true;
     }
     if (msg.type === 'debugToggle') {
@@ -1475,6 +1484,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
             }
           });
           try { await gazeUtils.saveWebgazerModel(); } catch(e) {}
+          // Mark calibrated so the auto dot-calibration modal doesn't reappear
+          chrome.storage.local.set({ sra_ever_calibrated: true });
           sendResponse({ status: 'ok', result });
         } catch (e) {
           sendResponse({ status: 'error', error: String(e) });

@@ -241,6 +241,10 @@ export async function runCalibrationSequence() {
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.classList.add('visible'));
 
+    // Show WebGazer's camera feedback so the user can confirm their face is
+    // detected and centred — the single biggest factor in gaze accuracy.
+    try { window.postMessage({ source: 'sra-control', type: 'setFeedback', enabled: true }, '*'); } catch (e) {}
+
     const fill    = overlay.querySelector('#sra-cal-fill');
     const target  = overlay.querySelector('#sra-cal-target');
     const area    = overlay.querySelector('#sra-cal-area');
@@ -316,6 +320,8 @@ export async function runCalibrationSequence() {
 
     async function finish() {
       overlay.classList.remove('visible');
+      // Hide the camera feedback again now that positioning is done
+      try { window.postMessage({ source: 'sra-control', type: 'setFeedback', enabled: false }, '*'); } catch (e) {}
       setTimeout(async () => {
         try { overlay.remove(); } catch (e) {}
 
@@ -389,6 +395,7 @@ export async function runCalibrationSequence() {
       if (e.target === overlay) {
         cancelled = true;
         overlay.classList.remove('visible');
+        try { window.postMessage({ source: 'sra-control', type: 'setFeedback', enabled: false }, '*'); } catch (err) {}
         setTimeout(() => { try { overlay.remove(); } catch(e){} resolve({ dx: 0, dy: 0 }); }, 250);
       }
     });

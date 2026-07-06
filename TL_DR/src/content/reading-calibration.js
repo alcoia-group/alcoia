@@ -158,6 +158,9 @@ export async function runReadingCalibration(opts = {}) {
     document.body.appendChild(overlay);
     requestAnimationFrame(() => requestAnimationFrame(() => overlay.style.opacity = '1'));
 
+    // Show WebGazer's camera feedback so the user can confirm face detection
+    try { window.postMessage({ source: 'sra-control', type: 'setFeedback', enabled: true }, '*'); } catch (e) {}
+
     // ── Parse text into word spans ───────────────────────────────────────────
     const rawText = CALIBRATION_TEXTS[textIndex];
     const words   = rawText.trim().split(/\s+/).filter(w => w.length > 0);
@@ -185,6 +188,7 @@ export async function runReadingCalibration(opts = {}) {
       stopped = true;
       cancelAnimationFrame(animFrame);
       overlay.style.opacity = '0';
+      try { window.postMessage({ source: 'sra-control', type: 'setFeedback', enabled: false }, '*'); } catch (e) {}
 
       // Compute WPM from actual elapsed time during the highlight loop
       let wpm = null;
