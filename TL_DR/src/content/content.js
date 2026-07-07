@@ -280,13 +280,24 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       _log(`Fetching ${url} mode=${mode} len=${text.length}`);
       const body = { text: text.slice(0, 3500), mode };
       if (context) body.context = context.slice(0, 800);
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+
+      // Route the request through the background service worker rather than
+      // fetching directly. A direct fetch from a content script carries the
+      // host PAGE's origin (e.g. https://en.wikipedia.org), which the server's
+      // CORS policy correctly rejects. The background worker's fetch carries no
+      // page origin, so it passes CORS while keeping the server locked down to
+      // the extension only. Falls back to a direct fetch if messaging fails.
+      const j = await new Promise((resolve) => {
+        try {
+          chrome.runtime.sendMessage({ action: 'summarize', url, body }, (resp) => {
+            if (chrome.runtime.lastError || !resp) { resolve(null); return; }
+            if (!resp.ok) { _warn(`Server ${resp.status || ''} ${resp.error || ''}`); resolve(null); return; }
+            resolve(resp.data);
+          });
+        } catch (e) { resolve(null); }
       });
-      if (!resp.ok) { _warn(`Server ${resp.status}`); return null; }
-      const j = await resp.json();
+      if (!j) return null;
+
       const result = j.summary || j.result || null;
       if (result && mode !== 'page_summary') {
         const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
