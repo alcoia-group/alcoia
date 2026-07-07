@@ -23,7 +23,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const BACKEND_DEFAULT     = 'http://localhost:3000/api/summarize';
   const MIN_SELECTION_CHARS = 15;
   const CLASSIFY_INTERVAL   = 3000;  // classify every 3s — slightly less CPU, still responsive
-  const ACTION_COOLDOWN     = 20000;  // 20s between triggers — prevents feeling too aggressive
+  const ACTION_COOLDOWN     = 20000;  // 20s per-paragraph cooldown — same paragraph won't re-trigger
+  const GLOBAL_ACTION_SPACING = 15000; // min 15s between ANY two auto popups, even across paragraphs
   const POPUP_MARGIN        = 14;
   const MAX_POPUPS          = 5;   // hard cap before oldest unpinned is evicted
   // All currently open floating popups — keyed by paragraph fingerprint
@@ -1274,6 +1275,12 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       const action = COGNITIVE_STATE_ACTIONS[smoothedLabel];
       const now    = Date.now();
       if (action === 'none') return;
+
+      // Global spacing: never fire two auto popups closer than GLOBAL_ACTION_SPACING
+      // apart, even for different paragraphs. Without this, letting your gaze drift
+      // to another confusing paragraph pops a second card while you're still reading
+      // the first. The per-paragraph cooldown alone doesn't cover cross-paragraph.
+      if (now - lastActionAt < GLOBAL_ACTION_SPACING) return;
 
       // Per-paragraph cooldown: each paragraph has its own 8-second window
       const paraKey = currentParagraph && currentParagraph.type === 'dom' && currentParagraph.data
