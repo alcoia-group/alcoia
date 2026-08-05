@@ -22,7 +22,6 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   // ── Constants ──────────────────────────────────────────────────────────
   const BACKEND_DEFAULT     = 'http://localhost:3000/api/summarize';
   const MIN_SELECTION_CHARS = 15;
-  const CLASSIFY_INTERVAL   = 3000;  // classify every 3s — slightly less CPU, still responsive
   // Interruption cooldowns and budget now live in intervention-policy.js —
   // one place, applied to telemetry and gaze alike.
   // Popup geometry, the open-popup registry and the eviction cap now live in
@@ -43,7 +42,7 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let debugEnabled       = false;
   let lastCogState       = 'unknown';
   let lastActionAt       = 0;           // manual/simulate paths only; automatic ones use the policy
-  let classifyTimer      = null;
+  let orchestrator       = null;
   let currentParagraph   = null;
   let pdfHandler         = null;
   let pptxHandler        = null;
@@ -63,8 +62,6 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let prevParagraphText   = '';    // for AI context window
 
   // ── Gaze quality tracking ──────────────────────────────────────────────
-  let lowQualityStreak    = 0;
-  let lastQualityWarnAt   = 0;
 
   // ── Highlight persistence ──────────────────────────────────────────────
   function saveHighlight(text, summary, state) {
@@ -183,7 +180,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     // abstains rather than reporting a fraction it cannot compute.
     getContentRect: () => {
       try {
-        const el = paragraphTracker.getActive()?.el || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
+        const el = orchestrator?.getActiveParagraphEl()
+          || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
         return el ? el.getBoundingClientRect() : null;
       } catch (e) { return null; }
     },
@@ -207,173 +205,59 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     showNudge, showSimulateToast, showQualityToast,
   } = ui;
 
-  // ── Fusion engine ──────────────────────────────────────────────────────
-  // Telemetry and gaze used to fire their own popups independently, with no
-  // shared state and no shared budget. Both now feed one engine, and one
-  // subscriber below decides whether anything reaches the reader.
-  const engineModule = await loadModule('src/content/state-engine.js');
-  const policyModule = await loadModule('src/content/intervention-policy.js');
-  const stateEngine  = engineModule.createReadingStateEngine();
-  const interventionPolicy = policyModule.createInterventionPolicy();
-  const STATES = engineModule.STATES;
-
-  // ── Telemetry detectors ────────────────────────────────────────────────
-  // These need no permission and work with the camera off, which is the
-  // default. Paragraph tracking in particular used to hang off the gaze
-  // point, so none of this fired unless the webcam was running.
-  const paraTrackModule = await loadModule('src/content/telemetry/paragraph-tracker.js');
-  const regressionModule = await loadModule('src/content/telemetry/scroll-regression.js');
-  const interactionModule = await loadModule('src/content/telemetry/interaction-signals.js');
-  const dynamicsModule = await loadModule('src/content/telemetry/scroll-dynamics.js');
-
-  const cursorModule = await loadModule('src/content/telemetry/cursor-tracking.js');
-  const entropyModule = await loadModule('src/content/telemetry/progression-entropy.js');
-
-  const paragraphTracker = paraTrackModule.createParagraphTracker({ minWords: 20 });
-  const scrollRegression = regressionModule.createScrollRegressionDetector();
-  const interactionSignals = interactionModule.createInteractionSignals();
-  const scrollDynamics = dynamicsModule.createScrollDynamics();
-  const cursorTracker = cursorModule.createCursorTracker();
-  const progressionEntropy = entropyModule.createProgressionEntropy();
-
-  // Drains every detector and hands the batch over in one go, so the engine
-  // sees a whole moment rather than a sequence of unrelated nudges.
-  function pumpTelemetry(extra) {
-    const batch = [];
-    for (const s of [scrollRegression.signal(), scrollDynamics.signal(), progressionEntropy.signal()]) if (s) batch.push(s);
-    const interactions = interactionSignals.signal();
-    if (interactions) batch.push(...interactions);
-    if (extra) batch.push(extra);
-    if (!batch.length) return;
-    stateEngine.update({ telemetry: batch, gaze: currentGazeView(), idle: buildIdleView() });
-  }
-
-  // Viewport-driven paragraph tracking. Feeds the comprehension monitor's
-  // reading-rate maths and the regression detector's paragraph indices.
-  function syncParagraph() {
-    if (!comprehensionCheckEnabled) return;
-    let transition = null;
-    try {
-      // A reader tracking text with the mouse gives a measured reading
-      // position; fall back to the viewport heuristic when they aren't.
-      transition = paragraphTracker.update(cursorTracker.getPointerY());
-    } catch (e) { return; }
-    if (!transition) return;
-
-    let speedSignal = null;
-    if (transition.left) {
-      try { speedSignal = comprehensionMonitor.leaveParagraph(); } catch (e) {}
-      if (transition.left.el) {
-        prevParagraphText = (transition.left.el.innerText || transition.left.el.textContent || '')
-          .trim().slice(0, 800);
-      }
-    }
-    if (transition.entered?.el) {
-      try { comprehensionMonitor.enterParagraph(transition.entered.el); } catch (e) {}
-      currentParagraph = { type: 'dom', data: transition.entered.el };
-    }
-
-    try { scrollRegression.update(transition); } catch (e) {}
-    try { progressionEntropy.update(transition); } catch (e) {}
-    pumpTelemetry(speedSignal);
-  }
-
-  // Latest reading from the gaze pipeline, if any. Written by the classify
-  // loop, read whenever a telemetry signal arrives so the engine can consider
-  // both at once instead of them racing each other to the reader.
-  let lastGazeLabel   = null;
-  let lastGazeQuality = 0;
-
-  function currentGazeView() {
-    if (!eyeTrackingEnabled) return { enabled: false };
-    let presence = null;
-    try { presence = featureExtractor.presence(); } catch (e) {}
-    return {
-      enabled: true,
-      label: lastGazeLabel,
-      quality: lastGazeQuality,
-      lastSampleAt: lastGazeReceivedAt || null,
-      facePresent: presence ? presence.face_present : null,
-      onPageFraction: presence ? presence.on_page_fraction : null,
-    };
-  }
-
-  // Last deliberate input from the reader. Used only to spot someone who has
-  // stopped making progress — never stored, never sent anywhere.
-  let lastInputAt = Date.now();
-  const markInput = () => { lastInputAt = Date.now(); };
-  for (const ev of ['scroll', 'mousemove', 'keydown', 'wheel', 'touchstart']) {
-    window.addEventListener(ev, markInput, { passive: true });
-  }
-
-  function buildIdleView() {
-    let expectation = null;
-    try { expectation = comprehensionMonitor.getCurrentExpectation(); } catch (e) {}
-    if (!expectation) return null;
-    return {
-      pageFocused:  document.hasFocus(),
-      msSinceInput: Date.now() - lastInputAt,
-      expectedMs:   expectation.expectedMs,
-    };
-  }
-
-  // The only place an automatic interruption can reach the reader.
-  // The handler awaits, so guard against a second state arriving mid-render.
-  let interventionInFlight = false;
-
-  stateEngine.subscribe(async (state) => {
-    lastCogState = state.label;
-    try { chrome.storage.local.set({ sra_current_state: state.label }); } catch (e) {}
-    try { sessionTracker.recordState(state.label); } catch (e) {}
-    if (focusRulerEnabled) { try { focusRuler.adaptToState(state.label); } catch (e) {} }
-
-    const currentEl = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
-    const decision  = interventionPolicy.evaluate(state, { currentEl });
-
-    if (debugEnabled) {
-      _log(`State: ${state.label} (conf ${state.confidence.toFixed(2)}, camera ${state.cameraContribution.toFixed(2)}) — ${decision.allow ? 'ACT: ' + decision.action : 'hold: ' + decision.reason}`);
-    }
-    if (!decision.allow) return;
-    if (interventionInFlight) return;
-    interventionInFlight = true;
-
-    try {
-      // With the camera off there is no gaze point, so nothing has told us
-      // which paragraph the reader is on. Fall back to the middle of the
-      // viewport rather than dropping the interruption.
-      let target = currentEl;
-      if (!target) {
-        try {
-          const para = await findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
-          if (para?.type === 'dom') { currentParagraph = para; target = para.data; }
-        } catch (e) {}
-      }
-
-      let shown = false;
-      if (decision.action === 'nudge') {
-        showNudge(target);
-        if (target) highlightElement(target, 3000);
-        shown = true;
-      } else if (state.signal) {
+  // ── Detection pipeline ─────────────────────────────────────────────────
+  // orchestrator.js owns the detectors, the state engine and the interruption
+  // budget. It decides; this file renders. onIntervention returns whether
+  // anything actually reached the screen, and the budget is spent only on a
+  // yes — an offer that bails out here must not burn one of the reader's five.
+  const orchModule = await loadModule('src/content/orchestrator.js');
+  orchestrator = await orchModule.createOrchestrator({
+    loadModule,
+    comprehensionMonitor,
+    featureExtractor,
+    classifyGazeState,
+    getSmoothedState,
+    gazeUtils,
+    dyslexiaUtils,
+    langDetect: langDetectModule,
+    // Read live: the storage listener reassigns these at runtime.
+    settings: () => ({
+      comprehensionCheckEnabled, eyeTrackingEnabled, focusRulerEnabled,
+      debugEnabled, dyslexiaEnabled, personalBaseline, scriptInfo,
+    }),
+    host: {
+      sessionTracker,
+      focusRuler,
+      log: _log,
+      findParagraphAt: (x, y) => findParagraphAt(x, y),
+      getCurrentParagraph: () => currentParagraph,
+      setCurrentParagraph: (p) => { currentParagraph = p; },
+      setPrevParagraphText: (t) => { prevParagraphText = t; },
+      setCogState: (label) => { lastCogState = label; },
+      getLastGazePoint: () => lastGazePt,
+      getLastGazeReceivedAt: () => lastGazeReceivedAt,
+      onQualityWarning: () => showQualityToast(),
+      onGazeFeatures: (rawFeatures) => {
+        if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
+        else forceStopIdle();
+      },
+      onIntervention: async (decision, state, target) => {
+        if (decision.action === 'nudge') {
+          showNudge(target);
+          if (target) highlightElement(target, 3000);
+          return true;
+        }
         // A telemetry signal knows which paragraph it came from.
-        shown = await handleComprehensionSignal(state.signal, decision.evidence, target);
-      } else if (currentParagraph) {
-        await triggerAIForParagraph(currentParagraph, state.label);
-        shown = true;
-      }
-
-      // Budget is spent once, and only for something the reader actually saw.
-      // Recording before rendering would let a bailed-out offer burn one of
-      // the five they get per session.
-      if (shown) {
-        interventionPolicy.record(decision);
-        try { sessionTracker.recordSignal(state.label, decision.action, decision.evidence[0] || ''); } catch (e) {}
-      } else if (debugEnabled) {
-        _log(`Interruption dropped before render (${state.label}) — budget not spent`);
-      }
-    } finally {
-      interventionInFlight = false;
-    }
+        if (state.signal) {
+          return await handleComprehensionSignal(state.signal, decision.evidence, target);
+        }
+        if (currentParagraph) {
+          await triggerAIForParagraph(currentParagraph, state.label);
+          return true;
+        }
+        return false;
+      },
+    },
   });
 
   // ── Load settings ──────────────────────────────────────────────────────
@@ -1141,62 +1025,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     return `${observed}<div>Want a summary?</div>`;
   }
 
-  // ── Classification loop ────────────────────────────────────────────────
-  function startClassificationLoop() {
-    if (classifyTimer) clearInterval(classifyTimer);
-    _log('Classification loop started');
-    classifyTimer = setInterval(async () => {
-      if (!eyeTrackingEnabled || !lastGazePt) return;
-      const rawFeatures = featureExtractor.computeFeatures();
-      if (!rawFeatures) return;
-
-      // Quality gate: skip classification when webcam tracking is too noisy
-      // (poor lighting, glasses glare, face partially occluded)
-      if (rawFeatures.gaze_quality < 0.25) {
-        if (debugEnabled) _log(`Skipping classify — low gaze quality (${(rawFeatures.gaze_quality*100).toFixed(0)}%)`);
-        lowQualityStreak++;
-        if (lowQualityStreak >= 8 && Date.now() - lastQualityWarnAt > 60000) {
-          showQualityToast();
-          lastQualityWarnAt = Date.now();
-        }
-        return;
-      }
-      lowQualityStreak = 0;
-
-      // Normalize features against personal baseline so individual reading
-      // styles don't bias the fixed classifier thresholds
-      const features = personalBaseline
-        ? gazeUtils.normalizeWithBaseline(rawFeatures, personalBaseline)
-        : rawFeatures;
-
-      // Apply dyslexia threshold patch before classifying
-      const dyslexiaPatched = dyslexiaEnabled
-        ? dyslexiaUtils.patchFeaturesForDyslexia(features)
-        : features;
-
-      // Apply script-aware patch: flip regression_rate for RTL, scale fixation_ms for CJK
-      const classFeatures = langDetectModule.patchFeaturesForScript(dyslexiaPatched, scriptInfo);
-
-      const { label, confidence } = classifyGazeState(classFeatures);
-
-      // Smooth over 3 windows to prevent single-sample false triggers
-      const smoothedLabel = getSmoothedState(label);
-      lastGazeLabel   = smoothedLabel;
-      lastGazeQuality = rawFeatures.gaze_quality;
-
-      if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
-      else forceStopIdle();
-
-      // Gaze no longer fires anything by itself. It hands its reading to the
-      // engine, which will not turn it into an actionable state without
-      // telemetry backing it — see state-engine.js for why.
-      stateEngine.update({
-        gaze: currentGazeView(),
-        idle: buildIdleView(),
-      });
-    }, CLASSIFY_INTERVAL);
-  }
-
   // ── WebGazer bootstrap ─────────────────────────────────────────────────
   // CSP-safe: URL passed via data attribute, no inline scripts
   async function startTracker() {
@@ -1261,7 +1089,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
             } catch (e) {
               _warn('Calibration step failed (non-fatal):', e.message);
             }
-            startClassificationLoop();
+            orchestrator.startClassificationLoop();
           }, 800);
         }
 
@@ -1285,70 +1113,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       window.postMessage({ source: 'sra-cal-record', x: e.clientX, y: e.clientY }, '*');
     } catch (err) {}
   }, { passive: true, capture: false });
-
-  // Scroll backtrack detection (user scrolls back to re-read = comprehension signal)
-  window.addEventListener('scroll', () => {
-    if (!comprehensionCheckEnabled) return;
-    try {
-      scrollDynamics.update(window.scrollY);
-      syncParagraph();
-      const signal = comprehensionMonitor.onScroll();
-      if (signal) pumpTelemetry(signal);
-    } catch (e) {}
-  }, { passive: true });
-
-  // ── Telemetry event wiring ────────────────────────────────────────────
-  // Selection and copy are corroboration, never triggers — the selection
-  // summary feature already responds to the reader's own action, and firing
-  // an interruption on top of it would interrupt twice for one gesture.
-  // Cursor as a reading pointer. Most mouse movement is not reading, so the
-  // tracker decides for itself whether the behaviour qualifies.
-  window.addEventListener('mousemove', (e) => {
-    if (!comprehensionCheckEnabled) return;
-    try { cursorTracker.update(e.clientX, e.clientY); } catch (err) {}
-  }, { passive: true });
-
-  let selectionDebounce = null;
-  document.addEventListener('selectionchange', () => {
-    if (!comprehensionCheckEnabled) return;
-    clearTimeout(selectionDebounce);
-    selectionDebounce = setTimeout(() => {
-      try {
-        const text = String(window.getSelection?.() || '');
-        if (text.trim()) interactionSignals.update({ kind: 'selection', text });
-      } catch (e) {}
-    }, 400);
-  });
-
-  document.addEventListener('copy', () => {
-    if (!comprehensionCheckEnabled) return;
-    try {
-      const text = String(window.getSelection?.() || '');
-      if (text.trim()) interactionSignals.update({ kind: 'copy', text });
-    } catch (e) {}
-  });
-
-  // Blur/return: coming back to the same paragraph after a long absence is a
-  // confirmed loss of the thread. Carrying on forwards is not.
-  const activeParagraphIndex = () => paragraphTracker.getActive()?.index ?? null;
-  window.addEventListener('blur', () => {
-    try { interactionSignals.update({ kind: 'blur', paragraphIndex: activeParagraphIndex() }); } catch (e) {}
-  });
-  window.addEventListener('focus', () => {
-    if (!comprehensionCheckEnabled) return;
-    try {
-      syncParagraph();
-      interactionSignals.update({ kind: 'focus', paragraphIndex: activeParagraphIndex() });
-      pumpTelemetry();
-    } catch (e) {}
-  });
-
-  // Slow tick so a reader who has stopped scrolling is still observed —
-  // dwelling on one paragraph produces no events at all.
-  setInterval(() => {
-    if (!comprehensionCheckEnabled) return;
-    try { syncParagraph(); pumpTelemetry(); } catch (e) {}
-  }, 5000);
 
   // ── PDF/PPTX handlers ─────────────────────────────────────────────────
   async function detectAndInitHandlers() {
@@ -1654,9 +1418,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   if (eyeTrackingEnabled) await startTracker();
   else _log('Eye tracking off — tracker not started, camera untouched');
 
-  // Enter the first paragraph now, or nothing is timed until the reader
-  // scrolls — which loses the opening of every article.
-  try { paragraphTracker.rescan(); syncParagraph(); } catch (e) {}
+  orchestrator.installListeners();
+  orchestrator.primeParagraph();
 
   restoreHighlightMarkers();
   restoreTextHighlights();
