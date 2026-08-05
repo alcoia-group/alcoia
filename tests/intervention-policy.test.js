@@ -36,11 +36,24 @@ describe('what earns an interruption', () => {
     expect(p.evaluate({ label, confidence: 0.9, evidence: [] }).allow).toBe(false);
   });
 
-  it('allows an explanation when struggling', () => {
+  /* Questions, not summaries. Summarising removes the desirable difficulty
+   * that produces retention, and an answer is the only thing in this system
+   * that produces ground truth. Explanation is the fallback after a wrong
+   * answer, or when no question could be generated for the passage. */
+  it('asks a question when struggling rather than summarising', () => {
     const p = createInterventionPolicy({ now: fixedClock().now });
     const d = p.evaluate(struggling());
     expect(d.allow).toBe(true);
-    expect(d.action).toBe('explain');
+    expect(d.action).toBe('ask');
+  });
+
+  it('asks rather than summarising on dense skimmed text too', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate({
+      label: STATES.SKIMMING, confidence: 0.6, evidence: [],
+      signal: { text: 'p', readability: { grade: 'difficult' } },
+    });
+    expect(d.action).toBe('ask');
   });
 
   it('declines below the confidence floor', () => {

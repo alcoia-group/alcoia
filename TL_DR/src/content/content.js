@@ -205,6 +205,28 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     showNudge, showSimulateToast, showQualityToast,
   } = ui;
 
+  // ── Question layer ─────────────────────────────────────────────────────
+  const responseModule = await loadModule('src/content/telemetry/response-signals.js');
+  const cardModule     = await loadModule('src/content/question-card.js');
+  const responseSignals = responseModule.createResponseSignals();
+  const recallModule = await loadModule('src/content/telemetry/session-recall.js');
+  const sessionRecall = recallModule.createSessionRecall();
+  const questionCard = cardModule.createQuestionCard({
+    ui,
+    esc,
+    responseSignals,
+    // Scoped to the sentence the reader missed, not the whole paragraph.
+    fetchExplanation: (spanText) => fetchSummary(spanText, 'explain_more'),
+    onAnswered: (record) => {
+      // An answer outranks every telemetry signal — see state-engine.js.
+      try { orchestrator.pumpTelemetry(record); } catch (e) {}
+      try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
+      // A paragraph already answered correctly is a poor use of a recall slot.
+      if (record.paragraphKey) sessionRecall.recordAnswered(record.paragraphKey, record.correct);
+    },
+    onDismissed: () => { /* declining to be tested says nothing; record nothing */ },
+  });
+
   // ── Detection pipeline ─────────────────────────────────────────────────
   // orchestrator.js owns the detectors, the state engine and the interruption
   // budget. It decides; this file renders. onIntervention returns whether
@@ -237,6 +259,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       getLastGazePoint: () => lastGazePt,
       getLastGazeReceivedAt: () => lastGazeReceivedAt,
       onQualityWarning: () => showQualityToast(),
+      onParagraphRead: (text, dwellMs) => sessionRecall.recordRead(text, dwellMs),
+      onStruggle: (text) => sessionRecall.recordStruggle(text),
       onGazeFeatures: (rawFeatures) => {
         if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
         else forceStopIdle();
@@ -246,6 +270,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
           showNudge(target);
           if (target) highlightElement(target, 3000);
           return true;
+        }
+        if (decision.action === 'ask') {
+          return await handleAsk(decision, state, target);
         }
         // A telemetry signal knows which paragraph it came from.
         if (state.signal) {
@@ -393,6 +420,13 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         return;
       }
 
+      // Alt+R: review what you have read this session
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        runSessionRecall();
+        return;
+      }
+
       // Alt+N: open notes page
       if (e.key === 'n' || e.key === 'N') {
         e.preventDefault();
@@ -416,6 +450,119 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     });
   }
 
+
+  // ── Questions ──────────────────────────────────────────────────────────
+  // The primary intervention. Asking beats summarising because an answer is
+  // the only thing here that produces ground truth, and because summarising
+  // removes the difficulty that produces retention in the first place.
+  const questionsUrl = () => (backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/questions');
+
+  async function fetchQuestions(text, opts = {}) {
+    if (!text || text.trim().length < 120) return [];
+    try {
+      const resp = await fetch(questionsUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text.slice(0, 3500),
+          language: (document.documentElement.lang || '').slice(0, 5),
+          count: opts.count || 1,
+          kind: opts.kind || 'recall',
+        }),
+      });
+      if (!resp.ok) {
+        // 422 means nothing passed the server's citation check; 503 means no
+        // key. Both are ordinary outcomes and both fall back to explaining.
+        _log(`Questions unavailable (${resp.status})`);
+        return [];
+      }
+      const j = await resp.json();
+      return Array.isArray(j.questions) ? j.questions : [];
+    } catch (e) {
+      _warn('Question fetch failed:', e.message);
+      return [];
+    }
+  }
+
+  /* Returns true only if a card reached the screen. */
+  async function handleAsk(decision, state, target) {
+    const el = target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
+    const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
+    if (!text) return false;
+
+    const questions = await fetchQuestions(text);
+    if (!questions.length) {
+      // No question could be generated or none cited its evidence. Fall back
+      // to the explanation card rather than dropping the interruption.
+      if (state.signal) return await handleComprehensionSignal(state.signal, decision.evidence, el);
+      if (el) { await triggerAIForParagraph({ type: 'dom', data: el }, state.label); return true; }
+      return false;
+    }
+
+    let anchorRect = null;
+    try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
+    if (el) highlightElement(el, 4000);
+
+    return questionCard.show(questions[0], {
+      evidence: decision.evidence,
+      anchorRect,
+      paragraphKey: text.slice(0, 80).trim(),
+    });
+  }
+
+  // ── Session recall ─────────────────────────────────────────────────────
+  // Retrieval practice over what was actually read, weighted toward the
+  // paragraphs that gave the reader trouble. Reader-initiated only: this never
+  // fires on its own, and nothing about it is submitted anywhere.
+  let recallRunning = false;
+
+  async function runSessionRecall(count = 5) {
+    if (recallRunning) return;
+    const picked = sessionRecall.select(count);
+    if (!picked.length) {
+      showSimulateToast('Nothing read yet to review');
+      return;
+    }
+
+    recallRunning = true;
+    try {
+      const questions = [];
+      for (const entry of picked) {
+        const qs = await fetchQuestions(entry.text, { count: 1 });
+        if (qs.length) questions.push({ question: qs[0], paragraphKey: entry.text.slice(0, 80).trim() });
+        if (questions.length >= count) break;
+      }
+
+      if (!questions.length) {
+        showSimulateToast('Could not prepare a review right now');
+        return;
+      }
+
+      // One at a time. A wall of questions is a test; one question is a check.
+      for (const item of questions) {
+        const shown = questionCard.show(item.question, {
+          evidence: ['Reviewing what you read this session'],
+          paragraphKey: item.paragraphKey,
+        });
+        if (!shown) continue;
+        await waitForCardToClose();
+      }
+    } finally {
+      recallRunning = false;
+    }
+  }
+
+  function waitForCardToClose() {
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const tick = setInterval(() => {
+        const open = document.querySelector('.sra-popup .sra-q-options');
+        // Resolve on close, or bail out after two minutes so a forgotten card
+        // cannot wedge the run forever.
+        if (!open || Date.now() - started > 120000) { clearInterval(tick); resolve(); }
+      }, 400);
+    });
+  }
 
   // ── Text highlighting (Ctrl+drag to select) ────────────────────────────
   function showColorPicker(range, clientX, clientY) {
@@ -1217,6 +1364,15 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       window.__sra_tracker_started = false;
       try { await startTracker(); sendResponse({status:'ok'}); }
       catch (e) { sendResponse({status:'error',error:String(e)}); }
+      return true;
+    }
+    if (msg.action === 'sessionRecall') {
+      runSessionRecall(msg.count || 5);
+      sendResponse({ status: 'ok', stats: sessionRecall.stats() });
+      return true;
+    }
+    if (msg.action === 'recallStats') {
+      sendResponse({ status: 'ok', stats: sessionRecall.stats() });
       return true;
     }
     if (msg.type === 'simulateState') {
