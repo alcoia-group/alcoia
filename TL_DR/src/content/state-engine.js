@@ -57,6 +57,15 @@ function clamp01(n) { return n < 0 ? 0 : n > 1 ? 1 : n; }
 /* Base confidence per telemetry signal. These are deliberately not 1.0:
  * a speed measurement is evidence, not proof, and the number is shown to
  * nobody as an accuracy claim. */
+/* Reader responses sit above every other signal. Everything else infers
+ * comprehension from behaviour; an answer observes it. These confidences are
+ * deliberately higher than anything telemetry can produce, so that when a
+ * reader answers, their answer decides the state. */
+const RESPONSE_CONFIDENCE = Object.freeze({
+  incorrect: 0.95,
+  correct:   0.90,
+});
+
 const TELEMETRY_CONFIDENCE = Object.freeze({
   too_slow:     0.70,
   too_fast:     0.55,
@@ -111,6 +120,33 @@ function describeTooFast(sig) {
 /* Turn a comprehension-monitor signal into a state proposal. */
 function fromTelemetry(sig) {
   if (!sig || !sig.type) return null;
+
+  /* Ground truth. A wrong answer is a reader failing to retrieve something
+   * they have just read — not an inference about it. A correct answer says
+   * the reading that triggered the question was fine, and is exactly as
+   * informative; it resolves to on_pace, which earns no interruption and
+   * stops the system pressing. */
+  if (sig.type === 'response') {
+    if (sig.subtype === 'incorrect') {
+      return {
+        label: STATES.STRUGGLING,
+        confidence: RESPONSE_CONFIDENCE.incorrect,
+        evidence: ['You picked a different answer to the one in the passage'],
+        signal: sig,
+      };
+    }
+    if (sig.subtype === 'correct') {
+      return {
+        label: STATES.ON_PACE,
+        confidence: RESPONSE_CONFIDENCE.correct,
+        evidence: ['You answered that correctly'],
+        signal: sig,
+      };
+    }
+    // Dismissed without answering. A refusal to be tested is the reader's
+    // right and says nothing about their comprehension, so it asserts nothing.
+    return null;
+  }
 
   if (sig.type === 'speed_mismatch' && sig.subtype === 'too_slow') {
     return {

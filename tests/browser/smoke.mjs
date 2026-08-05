@@ -24,7 +24,35 @@ const HERE  = path.dirname(new URL(import.meta.url).pathname);
 // Serve the article over http — file:// needs a separate extension permission
 // toggle that would not reflect how the extension actually runs.
 const html = fs.readFileSync(path.join(HERE, 'article.html'), 'utf8');
+/* Also stands in for the backend, so the question path is exercised for real
+ * rather than only its fallback. The question cites a sentence that is
+ * genuinely in article.html — the server rejects spans that are not. */
+const CANNED_QUESTION = {
+  q: 'How is the relationship between eye position and attention described?',
+  options: ['Real but weak', 'Strong and direct', 'Entirely absent', 'Exact to the word'],
+  // WRONG=1 shifts the correct answer so the harness's click is wrong,
+  // exercising the explanation fallback.
+  answerIndex: process.env.WRONG === '1' ? 1 : 0,
+  explanation: 'The passage calls it real but weak.',
+  span: 'The relationship between where the eyes point and what the mind does is real but weak, and it becomes weaker as the measurement apparatus becomes cheaper and noisier than the laboratory equipment on which the original findings were established.',
+};
+
+const apiHits = { questions: 0, summarize: 0 };
+
 const server = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url.startsWith('/api/')) {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      const isQuestions = req.url.includes('/api/questions');
+      if (isQuestions) apiHits.questions++; else apiHits.summarize++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(isQuestions
+        ? { questions: [CANNED_QUESTION], cached: false }
+        : { summary: 'A canned explanation for the smoke test.' }));
+    });
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(html);
 }).listen(8731);
@@ -54,6 +82,7 @@ await cfg.goto(`chrome-extension://${extId}/src/popup/popup.html`);
 const CAM_ON = process.env.CAM === 'on';
 await cfg.evaluate((camOn) => new Promise((r) => chrome.storage.local.set({
   sra_eye: camOn, sra_comprehension: true, sra_debug: true, sra_idle_blink: false,
+  sra_backend_url: 'http://localhost:8731/api/summarize',
 }, r)), CAM_ON);
 const stored = await cfg.evaluate(() => new Promise((r) => chrome.storage.local.get(null, r)));
 console.log('camera setting (sra_eye):', stored.sra_eye);
@@ -120,6 +149,32 @@ findings.getUserMedia = gum;
 
 const popups = await page.evaluate(() => document.querySelectorAll('.sra-popup').length);
 
+// Answer the question if one was asked, and confirm the card grades it.
+const questionCard = await page.evaluate(() => {
+  const opts = document.querySelectorAll('.sra-q-option');
+  if (!opts.length) return { shown: false };
+  const qText = document.querySelector('.sra-q-text')?.textContent || '';
+  opts[0].click();
+  return { shown: true, question: qText, optionCount: opts.length };
+});
+if (questionCard.shown) await page.waitForTimeout(1200);
+const graded = questionCard.shown
+  ? await page.evaluate(() => ({
+      marked: !!document.querySelector('.sra-q-correct'),
+      result: document.querySelector('.sra-q-result')?.textContent?.trim().slice(0, 60) || null,
+      disabled: [...document.querySelectorAll('.sra-q-option')].every((b) => b.disabled),
+    }))
+  : null;
+
+// Session recall: reader-initiated review of what was actually read.
+const beforeRecall = apiHits.questions;
+await page.keyboard.down('Alt'); await page.keyboard.press('KeyR'); await page.keyboard.up('Alt');
+await page.waitForTimeout(2500);
+const recall = {
+  questionsFetched: apiHits.questions - beforeRecall,
+  cardOnScreen: await page.evaluate(() => !!document.querySelector('.sra-q-options')),
+};
+
 console.log('\n================ RESULTS ================');
 console.log('content script injected :', injected.contentScript);
 console.log('page errors             :', findings.pageErrors.length, findings.pageErrors.slice(0, 5));
@@ -127,6 +182,10 @@ console.log('console errors          :', findings.consoleErrors.length, findings
 console.log('getUserMedia calls      :', findings.getUserMedia.length, findings.getUserMedia);
 console.log('image/video in requests :', findings.mediaRequests.length, findings.mediaRequests.slice(0, 3));
 console.log('popups rendered         :', popups);
+console.log('api hits                :', JSON.stringify(apiHits));
+console.log('question card           :', JSON.stringify(questionCard));
+console.log('after answering         :', JSON.stringify(graded));
+console.log('session recall (Alt+R)  :', JSON.stringify(recall));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));

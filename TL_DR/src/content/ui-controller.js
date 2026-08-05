@@ -358,6 +358,11 @@ export function applyDarkMode(enabled) {
       .sra-map-divider     { background: rgba(80,160,120,0.1) !important; }
       .sra-map-progress-bar{ background: rgba(80,160,120,0.12) !important; }
       #sra-color-picker { background: #1e2422 !important; border-color: rgba(255,255,255,0.08) !important; }
+      .sra-q-option { background: rgba(255,255,255,0.05) !important; border-color: rgba(255,255,255,0.12) !important; color: #e2e2dc !important; }
+      .sra-q-option:hover:not(:disabled) { background: rgba(80,160,120,0.14) !important; }
+      .sra-q-option.sra-q-correct { background: rgba(80,160,120,0.22) !important; border-color: rgba(80,160,120,0.6) !important; }
+      .sra-q-option.sra-q-wrong   { background: rgba(200,90,80,0.18) !important; border-color: rgba(200,90,80,0.5) !important; }
+      .sra-q-span { color: #9a9a92 !important; border-left-color: rgba(80,160,120,0.4) !important; }
     `;
   document.head.appendChild(s);
 }

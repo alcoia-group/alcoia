@@ -136,6 +136,10 @@ export async function createOrchestrator(deps) {
       if (transition.left.el) {
         const text = (transition.left.el.innerText || transition.left.el.textContent || '');
         host.setPrevParagraphText(text.trim().slice(0, 800));
+        // Session recall needs to know what was read and for how long.
+        if (host.onParagraphRead) {
+          try { host.onParagraphRead(text.trim(), transition.left.dwellMs); } catch (e) {}
+        }
       }
     }
     if (transition.entered?.el) {
@@ -159,6 +163,11 @@ export async function createOrchestrator(deps) {
 
     const currentParagraph = host.getCurrentParagraph();
     const currentEl = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
+
+    if (state.label === 'struggling' && host.onStruggle) {
+      const t = state.signal?.text || (currentEl && (currentEl.innerText || currentEl.textContent)) || '';
+      if (t) { try { host.onStruggle(t.trim()); } catch (e) {} }
+    }
     const decision  = interventionPolicy.evaluate(state, { currentEl });
 
     if (s().debugEnabled) {
