@@ -25,10 +25,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const CLASSIFY_INTERVAL   = 3000;  // classify every 3s — slightly less CPU, still responsive
   // Interruption cooldowns and budget now live in intervention-policy.js —
   // one place, applied to telemetry and gaze alike.
-  const POPUP_MARGIN        = 14;
-  const MAX_POPUPS          = 5;   // hard cap before oldest unpinned is evicted
-  // All currently open floating popups — keyed by paragraph fingerprint
-  const openPopups          = new Map();
+  // Popup geometry, the open-popup registry and the eviction cap now live in
+  // ui-controller.js — it owns everything the reader sees.
   // Fingerprints of paragraphs currently awaiting an AI response (race-condition guard)
   const inFlightFingerprints = new Set();
   // Session-level cache: mode:fingerprint → summary text (cleared on page unload)
@@ -47,7 +45,6 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let lastActionAt       = 0;           // manual/simulate paths only; automatic ones use the policy
   let classifyTimer      = null;
   let currentParagraph   = null;
-  let lastHighlighted    = null;
   let pdfHandler         = null;
   let pptxHandler        = null;
   let cameraIsReady      = false;
@@ -192,6 +189,23 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     },
   });
   const { classifyGazeState, COGNITIVE_STATE_ACTIONS } = classModule;
+
+  // ── UI ─────────────────────────────────────────────────────────────────
+  const uiModule = await loadModule('src/content/ui-controller.js');
+  const { esc, clamp, applyDarkMode } = uiModule;
+  const ui = uiModule.createUIController({
+    // Read through a getter: the storage listener reassigns these at runtime
+    // and a captured copy would go stale.
+    getSettings: () => ({
+      highlightEnabled, pinDefault, autohideEnabled, autohideTimeoutSec,
+    }),
+    fetchSummary: (...a) => fetchSummary(...a),
+  });
+  const {
+    openPopups, highlightElement, closePopup, flashPopup, hidePopup,
+    reservePopup, showPopup, renderPopup,
+    showNudge, showSimulateToast, showQualityToast,
+  } = ui;
 
   // ── Fusion engine ──────────────────────────────────────────────────────
   // Telemetry and gaze used to fire their own popups independently, with no
@@ -401,55 +415,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   });
 
   // ── Utilities ──────────────────────────────────────────────────────────
-  const esc   = (s = '') => s.replace(/[&<>"']/g, c =>
-    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-
-  // ── Dark mode (in-page overlays) ───────────────────────────────────────
-  function applyDarkMode(enabled) {
-    const ID = 'sra-dark-styles';
-    if (!enabled) { document.getElementById(ID)?.remove(); return; }
-    if (document.getElementById(ID)) return;
-    const s = document.createElement('style');
-    s.id = ID;
-    s.textContent = `
-      .sra-popup { background: rgba(22,26,24,0.97) !important; color: #e2e2dc !important; border-color: rgba(80,160,120,0.18) !important; box-shadow: 0 8px 28px rgba(0,0,0,0.45) !important; }
-      .sra-popup .sra-state-badge { background: rgba(80,160,120,0.1) !important; color: #7dd3b0 !important; border-color: rgba(80,160,120,0.25) !important; }
-      .sra-popup .sra-popup-body { color: #e2e2dc !important; }
-      .sra-popup .sra-btn-primary  { background: #2a9e6e !important; }
-      .sra-popup .sra-btn-secondary{ background: #2563a8 !important; }
-      .sra-popup .sra-ctrl-btn     { color: #666 !important; }
-      .sra-popup-divider { background: rgba(80,160,120,0.12) !important; }
-      .sra-page-summary-panel  { background: #1a1e1c !important; color: #e2e2dc !important; }
-      .sra-page-summary-panel h2 { color: #7dd3b0 !important; }
-      .sra-page-summary-panel .sra-ps-close { color: #555 !important; }
-      .sra-page-summary-panel .sra-ps-close:hover { color: #aaa !important; }
-      .sra-page-summary-body strong { color: #7dd3b0 !important; }
-      #sra-reading-map { background: rgba(18,22,20,0.97) !important; border-color: rgba(80,160,120,0.12) !important; }
-      .sra-map-header  { color: #7a7a72 !important; border-color: rgba(80,160,120,0.1) !important; }
-      .sra-map-heading { color: #b8b8b2 !important; }
-      .sra-map-heading:hover   { background: rgba(80,160,120,0.07) !important; }
-      .sra-map-heading.current { color: #7dd3b0 !important; border-left-color: #7dd3b0 !important; }
-      .sra-map-event       { color: #888 !important; }
-      .sra-map-events-label{ color: #555 !important; }
-      .sra-map-divider     { background: rgba(80,160,120,0.1) !important; }
-      .sra-map-progress-bar{ background: rgba(80,160,120,0.12) !important; }
-      #sra-color-picker { background: #1e2422 !important; border-color: rgba(255,255,255,0.08) !important; }
-    `;
-    document.head.appendChild(s);
-  }
-
-  // ── Paragraph highlight ────────────────────────────────────────────────
-  function highlightElement(el, ms = 5000) {
-    if (!highlightEnabled || !el || el === document.body || el === document.documentElement) return;
-    clearHighlight();
-    el.classList.add('sra-para-highlight');
-    lastHighlighted = el;
-    setTimeout(clearHighlight, ms);
-  }
-  function clearHighlight() {
-    if (lastHighlighted) { lastHighlighted.classList.remove('sra-para-highlight'); lastHighlighted = null; }
-  }
+  // esc and clamp live in ui-controller.js, imported above with the rest of it.
 
   // ── AI fetch ───────────────────────────────────────────────────────────
   async function fetchSummary(text, mode = 'tldr', context = '') {
@@ -488,174 +454,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
   }
 
-  // ── Popup positioning ──────────────────────────────────────────────────
-  function placePopup(root, anchorRect, avoidRects) {
-    root.style.visibility = 'hidden';
-    root.style.display    = 'block';
-    const pw = root.offsetWidth  || 360;
-    const ph = root.offsetHeight || 150;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const m  = POPUP_MARGIN;
-    const a  = anchorRect || { left: vw/2-100, right: vw/2+100, top: vh/2-30, bottom: vh/2+30 };
-    const av = avoidRects || [];
-
-    function overlaps(cx, cy) {
-      return av.some(r =>
-        cx < r.right + m && cx + pw > r.left - m &&
-        cy < r.bottom + m && cy + ph > r.top - m
-      );
-    }
-
-    // Shift a candidate down past any blocking popup, up to 6 attempts
-    function settle(left, top) {
-      for (let i = 0; i < 6; i++) {
-        if (!overlaps(left, top)) return { left, top };
-        const blocker = av.find(r =>
-          left < r.right + m && left + pw > r.left - m &&
-          top  < r.bottom + m && top  + ph > r.top - m
-        );
-        if (!blocker || blocker.bottom + m + ph > vh - m) return null;
-        top = blocker.bottom + m;
-      }
-      return null;
-    }
-
-    const candidates = [];
-    if (a.right  + m + pw <= vw - m)  candidates.push({ left: a.right + m,      top: clamp(a.top, m, vh - ph - m) });
-    if (a.left   - m - pw >= m)        candidates.push({ left: a.left - m - pw,   top: clamp(a.top, m, vh - ph - m) });
-    if (a.bottom + m + ph <= vh - m)   candidates.push({ left: clamp(a.left, m, vw - pw - m), top: a.bottom + m });
-    if (a.top    - m - ph >= m)        candidates.push({ left: clamp(a.left, m, vw - pw - m), top: a.top - m - ph });
-
-    let chosen = null;
-    for (const c of candidates) {
-      chosen = settle(c.left, c.top);
-      if (chosen) break;
-    }
-    if (!chosen) chosen = { left: vw - pw - m, top: m };
-
-    root.style.left       = clamp(chosen.left, m, vw - pw - m) + 'px';
-    root.style.top        = clamp(chosen.top,  m, vh - ph - m) + 'px';
-    root.style.position   = 'fixed';
-    root.style.visibility = '';
-  }
-
-  function closePopup(el, fingerprint) {
-    if (fingerprint) openPopups.delete(fingerprint);
-    clearTimeout(el._hideT);
-    el.classList.remove('show');
-    setTimeout(() => { try { el.remove(); } catch (_) {} }, 250);
-  }
-
-  function flashPopup(el) {
-    const orig = el.style.boxShadow;
-    el.style.transition = 'box-shadow 0.12s';
-    el.style.boxShadow  = '0 0 0 3px rgba(26,126,93,0.65)';
-    setTimeout(() => { el.style.boxShadow = orig; }, 500);
-  }
-
-  // ── Render popup (multi-popup: each paragraph gets its own card) ────────
-  function renderPopup(anchorRect, html, meta = {}) {
-    // Fix: no text → no dedup key and no meaningful content; bail immediately
-    if (!meta.text || !meta.text.trim()) return;
-
-    const fingerprint = meta.text.slice(0, 80).trim();
-
-    // Dedup: same paragraph already has a visible popup — just flash it
-    if (openPopups.has(fingerprint)) {
-      const entry = openPopups.get(fingerprint);
-      if (entry.el && document.contains(entry.el)) { flashPopup(entry.el); return; }
-      openPopups.delete(fingerprint);
-    }
-
-    // Fix: enforce MAX_POPUPS cap — evict the oldest unpinned popup first
-    if (openPopups.size >= MAX_POPUPS) {
-      for (const [fp, { el }] of openPopups.entries()) {
-        if (!el || !document.contains(el)) { openPopups.delete(fp); break; }
-        if (el.dataset.pinned !== 'true') { closePopup(el, fp); break; }
-      }
-      // If every open popup is pinned and we're at the cap, don't create another
-      if (openPopups.size >= MAX_POPUPS) return;
-    }
-
-    const root = document.createElement('div');
-    root.className = 'sra-popup';
-    document.body.appendChild(root);
-    openPopups.set(fingerprint, { el: root });
-
-    const badge = meta.trigger
-      ? `<div class="sra-state-badge">${esc(meta.triggerLabel || meta.trigger)}</div>`
-      : meta.source === 'selection'
-        ? `<div class="sra-state-badge">selected text</div>`
-        : '';
-
-    root.innerHTML = `
-      <div class="sra-controls">
-        <button class="sra-ctrl-btn sra-pin-btn" title="Pin">📌</button>
-        <button class="sra-ctrl-btn sra-close-btn" title="Close">✕</button>
-      </div>
-      <div class="sra-popup-body" dir="auto">${badge}${html}</div>
-      <div class="sra-popup-divider"></div>
-      <div class="sra-actions">
-        <button class="sra-btn sra-btn-primary  sra-explain-btn">Explain More</button>
-        <button class="sra-btn sra-btn-secondary sra-note-btn">Save Note</button>
-      </div>`;
-
-    root.querySelector('.sra-close-btn').onclick = () => closePopup(root, fingerprint);
-
-    const pinBtn = root.querySelector('.sra-pin-btn');
-    if (pinDefault) { root.dataset.pinned = 'true'; pinBtn.classList.add('active'); }
-    pinBtn.onclick = () => {
-      const pinned = root.dataset.pinned !== 'true';
-      root.dataset.pinned = pinned.toString();
-      pinBtn.classList.toggle('active', pinned);
-      clearTimeout(root._hideT);
-      if (!pinned) {
-        // Fix: unpin always starts a countdown — autohide time if enabled, else a
-        // generous 60 s fallback so forgotten unpinned cards don't accumulate forever
-        const secs = autohideEnabled ? Math.max(3, autohideTimeoutSec) : 60;
-        root._hideT = setTimeout(() => closePopup(root, fingerprint), secs * 1000);
-      }
-    };
-
-    root.querySelector('.sra-explain-btn').onclick = async () => {
-      const btn = root.querySelector('.sra-explain-btn');
-      btn.disabled = true; btn.textContent = 'Thinking…';
-      const s = await fetchSummary(meta.text || '', 'explain_more');
-      const body = root.querySelector('.sra-popup-body');
-      if (body && s) body.innerHTML = badge + `<div>${esc(s)}</div>`;
-      btn.textContent = 'Explain More'; btn.disabled = false;
-      // Fix: reset the autohide timer so the user has time to read the expanded content
-      clearTimeout(root._hideT);
-      if (autohideEnabled && root.dataset.pinned !== 'true')
-        root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
-    };
-
-    root.querySelector('.sra-note-btn').onclick = () => {
-      chrome.runtime.sendMessage({ action: 'saveNote', note: { text: meta.text || '', meta } });
-      const btn = root.querySelector('.sra-note-btn');
-      btn.textContent = 'Saved ✓'; btn.disabled = true;
-    };
-
-    const avoidRects = [...openPopups.values()]
-      .filter(e => e.el !== root && document.contains(e.el) && e.el.classList.contains('show'))
-      .map(e => e.el.getBoundingClientRect());
-
-    placePopup(root, anchorRect, avoidRects);
-    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
-
-    clearTimeout(root._hideT);
-    if (autohideEnabled && root.dataset.pinned !== 'true')
-      root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
-  }
-
-  // Close all unpinned popups (Esc)
-  function hidePopup() {
-    for (const [fp, { el }] of [...openPopups.entries()]) {
-      if (!el || !document.contains(el)) { openPopups.delete(fp); continue; }
-      if (el.dataset.pinned !== 'true') closePopup(el, fp);
-    }
-  }
 
   if (!window.__sra_esc_installed) {
     window.__sra_esc_installed = true;
@@ -734,75 +532,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     });
   }
 
-  // ── Simulate toast — small on-screen indicator ─────────────────────────
-  function showSimulateToast(state) {
-    const existing = document.getElementById('sra-sim-toast');
-    if (existing) existing.remove();
-
-    const labels = {
-      confused:   '🤔 Simulating: Confused  (Alt+1)',
-      overloaded: '🧠 Simulating: Overloaded (Alt+2)',
-      zoning_out: '💤 Simulating: Zoning Out (Alt+3)',
-      skimming:   '⚡ Simulating: Skimming   (Alt+4)',
-      focused:    '✅ Simulating: Focused    (Alt+5)',
-    };
-
-    const toast = document.createElement('div');
-    toast.id = 'sra-sim-toast';
-    Object.assign(toast.style, {
-      position:       'fixed',
-      bottom:         '24px',
-      left:           '50%',
-      transform:      'translateX(-50%)',
-      background:     '#1A7E5D',
-      color:          'white',
-      padding:        '9px 20px',
-      borderRadius:   '8px',
-      fontFamily:     "'Fraunces', Georgia, serif",
-      fontSize:       '13px',
-      fontStyle:      'italic',
-      zIndex:         '2147483646',
-      opacity:        '0',
-      transition:     'opacity 0.2s ease',
-      pointerEvents:  'none',
-      whiteSpace:     'nowrap',
-      boxShadow:      '0 4px 16px rgba(0,0,0,0.2)',
-    });
-    toast.textContent = labels[state] || state;
-    document.body.appendChild(toast);
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => { toast.style.opacity = '1'; });
-    });
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      setTimeout(() => { try { toast.remove(); } catch(e){} }, 250);
-    }, 1800);
-  }
-
-  // ── Gaze quality toast ─────────────────────────────────────────────────
-  function showQualityToast() {
-    const existing = document.getElementById('sra-quality-toast');
-    if (existing) existing.remove();
-    const toast = document.createElement('div');
-    toast.id = 'sra-quality-toast';
-    Object.assign(toast.style, {
-      position:     'fixed', top: '14px', right: '14px',
-      background:   '#2c2c2a', color: '#f0ede8',
-      padding:      '9px 16px', borderRadius: '9px',
-      fontFamily:   "'Fraunces', Georgia, serif", fontSize: '12px',
-      zIndex:       '2147483640', opacity: '0',
-      transition:   'opacity 0.2s ease', pointerEvents: 'none',
-      boxShadow:    '0 4px 14px rgba(0,0,0,0.25)', maxWidth: '240px', lineHeight: '1.5',
-    });
-    toast.textContent = 'Low camera quality — move to better lighting or centre your face in frame.';
-    document.body.appendChild(toast);
-    requestAnimationFrame(() => requestAnimationFrame(() => { toast.style.opacity = '1'; }));
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      setTimeout(() => { try { toast.remove(); } catch(e){} }, 250);
-    }, 5000);
-  }
 
   // ── Text highlighting (Ctrl+drag to select) ────────────────────────────
   function showColorPicker(range, clientX, clientY) {
@@ -960,13 +689,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       }
       return;
     }
-  }
-
-  // ── Focus nudge ────────────────────────────────────────────────────────
-  function showNudge(el) {
-    if (!el) return;
-    el.classList.add('sra-nudge-highlight');
-    setTimeout(() => el.classList.remove('sra-nudge-highlight'), 3500);
   }
 
   // ── Code detection ─────────────────────────────────────────────────────
@@ -1326,17 +1048,12 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
 
     const fingerprint = 'comp-' + text.slice(0, 80).trim();
-    if (openPopups.has(fingerprint)) {
-      const entry = openPopups.get(fingerprint);
-      // Already on screen — flash it, but do not charge the reader again.
-      if (entry.el && document.contains(entry.el)) { flashPopup(entry.el); return false; }
-      openPopups.delete(fingerprint);
-    }
-
-    const root = document.createElement('div');
-    root.className = 'sra-popup';
-    document.body.appendChild(root);
-    openPopups.set(fingerprint, { el: root });
+    // reservePopup handles both dedup (flashes the existing card) and the
+    // MAX_POPUPS cap. This renderer used to do the first and not the second,
+    // so a page full of pinned cards could still stack another one on top.
+    // Null means nothing was shown, and the caller must not spend the budget.
+    const root = reservePopup(fingerprint);
+    if (!root) return false;
 
     const offerHtml = buildComprehensionOfferHtml(signal, evidence);
 
@@ -1372,17 +1089,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       }
     };
 
-    const avoidRects = [...openPopups.values()]
-      .filter(e => e.el !== root && document.contains(e.el) && e.el.classList.contains('show'))
-      .map(e => e.el.getBoundingClientRect());
-
-    placePopup(root, anchorRect, avoidRects);
-    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
-
-    clearTimeout(root._hideT);
-    if (autohideEnabled && root.dataset.pinned !== 'true')
-      root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
-
+    showPopup(root, anchorRect);
     return true;
   }
 
@@ -1871,26 +1578,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     window.addEventListener('popstate', onSpaNavigate);
   }
 
-  // ── Resize: re-clamp all visible popups to the new viewport bounds ───────
-  if (!window.__sra_resize_watcher) {
-    window.__sra_resize_watcher = true;
-    let _resizeTimer;
-    window.addEventListener('resize', () => {
-      clearTimeout(_resizeTimer);
-      _resizeTimer = setTimeout(() => {
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        const m  = POPUP_MARGIN;
-        for (const [, { el }] of openPopups.entries()) {
-          if (!el || !document.contains(el) || !el.classList.contains('show')) continue;
-          const pw = el.offsetWidth  || 360;
-          const ph = el.offsetHeight || 150;
-          el.style.left = clamp(parseFloat(el.style.left) || 0, m, vw - pw - m) + 'px';
-          el.style.top  = clamp(parseFloat(el.style.top)  || 0, m, vh - ph - m) + 'px';
-        }
-      }, 150);
-    });
-  }
+  // Resize re-clamping lives in ui-controller.js — it is popup geometry.
+  ui.installResizeWatcher();
 
   // ── Session continuity ────────────────────────────────────────────────
   function saveLastVisit() {
