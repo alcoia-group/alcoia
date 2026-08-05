@@ -61,13 +61,19 @@ export function createFeatureExtractor(opts = {}) {
   const EPS        = opts.dbscanEps   || 80;
   const MIN_PTS    = opts.dbscanMinPts|| 4;
 
+  // Optional. Returns the rect of the text column the reader should be looking
+  // at. Without it on_page_fraction abstains rather than inventing a number.
+  const getContentRect = opts.getContentRect || null;
+
   const buffer = [];
   let lastScrollY = window.scrollY;
   let scrollDelta = 0;
   let lineVisits  = {};
+  let lastPointAt = 0;
 
   function addPoint(pt) {
     const now = performance.now();
+    lastPointAt = Date.now();
     buffer.push({ x: pt.x, y: pt.y, t: now });
 
     const currentScroll = window.scrollY;
@@ -165,6 +171,11 @@ export function createFeatureExtractor(opts = {}) {
     const gazeQuality = candidates.length / buffer.length;
 
     return {
+      // Presence measures. These need almost no spatial precision, which is
+      // the point — they are the only gaze questions a ~180px-error tracker
+      // can answer honestly, and they are what the state engine actually uses.
+      on_page_fraction:  onPageFraction(),
+      face_present:      true,          // computeFeatures only runs with samples in hand
       avg_fixation_ms:   avgFixationMs,
       fixation_std:      fixationStd,
       regression_rate:   regressionRate,
@@ -178,12 +189,45 @@ export function createFeatureExtractor(opts = {}) {
     };
   }
 
+  /* Proportion of samples falling inside the text column, generously padded —
+   * the tracker's error is around 180px, so a tight rect would report nobody
+   * as ever looking at the text. Null when there is nothing to compare
+   * against; callers must treat that as "don't know", not as zero. */
+  function onPageFraction() {
+    if (!getContentRect || !buffer.length) return null;
+    let rect;
+    try { rect = getContentRect(); } catch (e) { return null; }
+    if (!rect || !Number.isFinite(rect.top) || !Number.isFinite(rect.bottom)) return null;
+
+    const pad = 180;
+    let inside = 0;
+    for (const p of buffer) {
+      if (p.x >= rect.left - pad && p.x <= rect.right + pad &&
+          p.y >= rect.top  - pad && p.y <= rect.bottom + pad) inside++;
+    }
+    return inside / buffer.length;
+  }
+
+  /* Presence, reported whether or not there are enough samples to classify.
+   * computeFeatures() returns null below MIN_POINTS, so absence has to be
+   * observable somewhere else or it can never be observed at all. */
+  function presence() {
+    const age = lastPointAt ? Date.now() - lastPointAt : Infinity;
+    return {
+      face_present: lastPointAt > 0 && age <= WINDOW_MS * 2,
+      sample_count: buffer.length,
+      last_sample_at: lastPointAt || null,
+      on_page_fraction: onPageFraction(),
+    };
+  }
+
   function reset() {
     buffer.length = 0;
     scrollDelta   = 0;
     lineVisits    = {};
     lastScrollY   = window.scrollY;
+    lastPointAt   = 0;
   }
 
-  return { addPoint, computeFeatures, reset };
+  return { addPoint, computeFeatures, presence, reset };
 }

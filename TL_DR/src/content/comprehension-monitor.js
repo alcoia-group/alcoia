@@ -13,39 +13,23 @@
    WPM constants. Stored in chrome.storage so it persists across sessions.
    Can also be seeded from the reading calibration (see content.js).
 
-   Non-English pages: Flesch-Kincaid is English-only, so FK-based signals are
-   skipped on non-English pages. Scroll backtrack works for all languages.
+   Non-English pages: Flesch-Kincaid is English-only. Difficulty on those pages
+   now comes from syntactic structure instead (clause length, sentence length,
+   subordination) via text-difficulty.js, so speed signals work there too.
+   Previously every FK-based check was skipped and those pages produced nothing
+   but scroll backtrack.
+
+   Thresholds: once ~8 paragraphs of history exist, "too fast" and "too slow"
+   are judged against the reader's own distribution of reading-rate residuals
+   rather than fixed ratios. A reader who consistently runs at 0.6x the model
+   is not struggling on every paragraph, and a fixed cutoff would say they are.
 */
 
-// ── Syllable / readability ─────────────────────────────────────────────────────
-function countSyllables(word) {
-  word = word.toLowerCase().replace(/[^a-z]/g, '');
-  if (word.length <= 3) return 1;
-  word = word.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '');
-  word = word.replace(/^y/, '');
-  const m = word.match(/[aeiouy]{1,2}/g);
-  return m ? m.length : 1;
-}
-
-function fleschKincaid(text) {
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
-  const words     = text.split(/\s+/).filter(w => w.trim().length > 0);
-  if (!sentences.length || !words.length) return { score: 60, grade: 'standard', wordCount: 0 };
-
-  const syllables = words.reduce((a, w) => a + countSyllables(w), 0);
-  const wps  = words.length / sentences.length;
-  const spw  = syllables / words.length;
-  const raw  = 206.835 - 1.015 * wps - 84.6 * spw;
-  const score = Math.max(0, Math.min(100, raw));
-
-  let grade;
-  if (score >= 80)      grade = 'easy';
-  else if (score >= 60) grade = 'standard';
-  else if (score >= 40) grade = 'difficult';
-  else                  grade = 'very_difficult';
-
-  return { score, grade, wps, spw, wordCount: words.length };
-}
+// ── Readability ────────────────────────────────────────────────────────────────
+// Flesch-Kincaid plus syntactic proxies. The syntactic half is what makes
+// non-English pages produce a difficulty signal at all — see text-difficulty.js.
+import { analyzeDifficulty, fleschKincaid } from './telemetry/text-difficulty.js';
+import { ResidualDistribution } from './telemetry/residual-distribution.js';
 
 // Generic WPM for typical readers (used before personal baseline is established)
 const GENERIC_WPM = { easy: 260, standard: 220, difficult: 160, very_difficult: 110 };
@@ -114,10 +98,14 @@ export function createComprehensionMonitor(opts = {}) {
   const BACKTRACK_WINDOW   = opts.backtrackWindow || 4000;
   const COOLDOWN_MS        = opts.cooldown        || 30000;
 
+  const Z_FAST = opts.zFast ?? -1.3;   // unusually quick for this reader
+  const Z_SLOW = opts.zSlow ??  1.3;   // unusually slow for this reader
+
   let lastOfferAt    = 0;
   let paragraphEntry = null;
   let recentScrollY  = [];
   let lastScrollY    = window.scrollY;
+  const residuals    = new ResidualDistribution(opts.minResiduals ?? 8);
 
   // Load persisted WPM baseline
   let wpmBaseline = new WpmBaseline(null);
@@ -131,7 +119,7 @@ export function createComprehensionMonitor(opts = {}) {
     if (!el) return;
     const text = (el.innerText || el.textContent || '').trim();
     if (!text || text.split(/\s+/).length < MIN_WORD_COUNT) return;
-    const readability = fleschKincaid(text);
+    const readability = analyzeDifficulty(text, { isEnglish: isEnglishPage() });
     paragraphEntry = { el, text, readability, enteredAt: Date.now() };
   }
 
@@ -148,20 +136,29 @@ export function createComprehensionMonitor(opts = {}) {
       wpmBaseline.add(wpm, r.grade);
     }
 
-    // FK-based signals only on English pages
-    if (!isEnglishPage()) return null;
-    if (Date.now() - lastOfferAt < COOLDOWN_MS) return null;
-
     const expected = expectedReadingMs(r, wpmBaseline.get());
     if (expected <= 0) return null;
     const ratio = elapsed / expected;
 
+    // Record the residual before any early return, so the distribution keeps
+    // learning during cooldowns and on paragraphs that trigger nothing.
+    residuals.add(ratio);
+
+    if (Date.now() - lastOfferAt < COOLDOWN_MS) return null;
+
+    // Once there is enough history, ask whether this paragraph was unusual for
+    // this reader rather than comparing against a constant. Someone who always
+    // reads at 0.6x the model is not struggling on every paragraph.
+    const z = residuals.zScore(ratio);
+    const unusuallyFast = z != null ? z <= Z_FAST : ratio < SPEED_RATIO_FAST;
+    const unusuallySlow = z != null ? z >= Z_SLOW : null;
+
     // Too fast through difficult text
-    if (r.score < MIN_DIFFICULTY && ratio < SPEED_RATIO_FAST && r.wordCount >= MIN_WORD_COUNT) {
+    if (r.score < MIN_DIFFICULTY && unusuallyFast && r.wordCount >= MIN_WORD_COUNT) {
       return {
         type: 'speed_mismatch', subtype: 'too_fast',
         el: entry.el, text: entry.text, readability: r,
-        ratio, elapsed, expected,
+        ratio, elapsed, expected, z,
       };
     }
 
@@ -170,11 +167,12 @@ export function createComprehensionMonitor(opts = {}) {
       const baseWpm     = wpmBaseline.get();
       const actualWpm   = (r.wordCount / elapsed) * 60000;
       const slowRatio   = actualWpm / baseWpm;
-      if (slowRatio < SPEED_RATIO_SLOW && r.grade !== 'very_difficult') {
+      const isSlow      = unusuallySlow != null ? unusuallySlow : slowRatio < SPEED_RATIO_SLOW;
+      if (isSlow && r.grade !== 'very_difficult') {
         return {
           type: 'speed_mismatch', subtype: 'too_slow',
           el: entry.el, text: entry.text, readability: r,
-          ratio: slowRatio, actualWpm: Math.round(actualWpm), baselineWpm: baseWpm,
+          ratio: slowRatio, actualWpm: Math.round(actualWpm), baselineWpm: baseWpm, z,
         };
       }
     }
@@ -225,5 +223,6 @@ export function createComprehensionMonitor(opts = {}) {
     enterParagraph, leaveParagraph, onScroll, markOfferShown,
     seedWpmFromCalibration, fleschKincaid, getCurrentExpectation,
     getBaselineWpm: () => wpmBaseline.get(),
+    getResidualStats: () => residuals.stats(),
   };
 }
