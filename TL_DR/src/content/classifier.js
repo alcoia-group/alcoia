@@ -10,17 +10,11 @@
 //   added to each feature, giving 5000 rows. An 80/20 split yields 4000 train,
 //   1000 test. No human ever produced any of it.
 //
-// Held-out synthetic test accuracy: 0.851.
-//   This number measures how well the tree recovers the rules of the generator
-//   that produced its own training data. It says nothing about reading, and it
-//   must not be cited as an accuracy figure for this product.
-//   It is also inflated by construction: the augmented copies are noise-perturbed
-//   duplicates of the clean rows, and the split is random, so a row's own noisy
-//   twin can sit in the test set while the original sits in train. That is train
-//   /test leakage. The true synthetic-generalisation number is lower by an
-//   unmeasured amount.
-//
-// NO REAL-PARTICIPANT EVALUATION HAS BEEN PERFORMED.
+// Trained on SYNTHETIC data with Gaussian-noise row duplication and a random
+// 80/20 split — a row's noisy twin can appear in test while the original is in
+// train. The 0.851 figure is inflated by leakage on top of being synthetic.
+// It measures neither reading behaviour nor honest generator recovery.
+// No real-participant evaluation has been performed. Do not cite as accuracy.
 //
 // Input: 9-feature object (avg_fixation_ms, fixation_std, regression_rate,
 //        saccade_length, saccade_std, gaze_drift_px, scroll_delta_px,
