@@ -228,6 +228,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   }
 
   // The only place an automatic interruption can reach the reader.
+  // The handler awaits, so guard against a second state arriving mid-render.
+  let interventionInFlight = false;
+
   stateEngine.subscribe(async (state) => {
     lastCogState = state.label;
     try { chrome.storage.local.set({ sra_current_state: state.label }); } catch (e) {}
@@ -241,24 +244,55 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       _log(`State: ${state.label} (conf ${state.confidence.toFixed(2)}, camera ${state.cameraContribution.toFixed(2)}) — ${decision.allow ? 'ACT: ' + decision.action : 'hold: ' + decision.reason}`);
     }
     if (!decision.allow) return;
+    if (interventionInFlight) return;
+    interventionInFlight = true;
 
-    // Budget is spent here, once, for every kind of interruption.
-    interventionPolicy.record(decision);
-    try { sessionTracker.recordSignal(state.label, decision.action, decision.evidence[0] || ''); } catch (e) {}
+    try {
+      // With the camera off there is no gaze point, so nothing has told us
+      // which paragraph the reader is on. Fall back to the middle of the
+      // viewport rather than dropping the interruption.
+      let target = currentEl;
+      if (!target) {
+        try {
+          const para = await findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
+          if (para?.type === 'dom') { currentParagraph = para; target = para.data; }
+        } catch (e) {}
+      }
 
-    if (decision.action === 'nudge') {
-      showNudge(currentEl);
-      if (currentEl) highlightElement(currentEl, 3000);
-      return;
+      let shown = false;
+      if (decision.action === 'nudge') {
+        showNudge(target);
+        if (target) highlightElement(target, 3000);
+        shown = true;
+      } else if (state.signal) {
+        // A telemetry signal knows which paragraph it came from.
+        shown = await handleComprehensionSignal(state.signal, decision.evidence, target);
+      } else if (currentParagraph) {
+        await triggerAIForParagraph(currentParagraph, state.label);
+        shown = true;
+      }
+
+      // Budget is spent once, and only for something the reader actually saw.
+      // Recording before rendering would let a bailed-out offer burn one of
+      // the five they get per session.
+      if (shown) {
+        interventionPolicy.record(decision);
+        try { sessionTracker.recordSignal(state.label, decision.action, decision.evidence[0] || ''); } catch (e) {}
+      } else if (debugEnabled) {
+        _log(`Interruption dropped before render (${state.label}) — budget not spent`);
+      }
+    } finally {
+      interventionInFlight = false;
     }
-
-    // A telemetry signal knows which paragraph it came from and renders the
-    // offer card. Anything else falls back to the paragraph in view.
-    if (state.signal) await handleComprehensionSignal(state.signal, decision.evidence);
-    else if (currentParagraph) await triggerAIForParagraph(currentParagraph, state.label);
   });
 
   // ── Load settings ──────────────────────────────────────────────────────
+  // Boot waits on this. Settings load asynchronously, and starting the tracker
+  // before they arrive means booting the camera on the `sra_eye: true` default
+  // regardless of what the reader actually chose.
+  let settingsLoaded;
+  const settingsReady = new Promise((resolve) => { settingsLoaded = resolve; });
+
   chrome.storage.local.get({
     sra_backend_url: BACKEND_DEFAULT, sra_eye: true, sra_selection: true,
     sra_highlight_para: true, sra_autohide: false, sra_autohide_timeout: 12,
@@ -287,6 +321,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (focusRulerEnabled) focusRuler.enable();
     darkModeEnabled = !!res.sra_dark_mode;
     if (darkModeEnabled) applyDarkMode(true);
+    settingsLoaded();
   });
 
   // ── Utilities ──────────────────────────────────────────────────────────
@@ -1193,21 +1228,24 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   // Renderer only. It no longer decides whether to interrupt — the state engine
   // produces the state and intervention-policy decides. Call it from the engine
   // subscriber, never directly from a detector.
-  async function handleComprehensionSignal(signal, evidence = []) {
-    if (!comprehensionCheckEnabled) return;
+  // Returns true only if an offer actually reached the screen. The caller uses
+  // that to decide whether to spend the interruption budget — an offer that
+  // bailed out here must not count against the reader's five.
+  async function handleComprehensionSignal(signal, evidence = [], targetEl = null) {
+    if (!comprehensionCheckEnabled) return false;
 
     // Keeps the monitor's own 30s cooldown honest. The session record is
     // written by the engine subscriber, which sees every interruption.
     comprehensionMonitor.markOfferShown();
 
-    const el = (signal.type === 'speed_mismatch') ? signal.el
-              : (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
+    const el = (signal.type === 'speed_mismatch' && signal.el) ? signal.el
+              : (currentParagraph?.type === 'dom' ? currentParagraph.data : targetEl);
 
     if (el) highlightElement(el, 4000);
 
     let text = signal.text || '';
     if (!text && el) text = (el.innerText || el.textContent || '').trim();
-    if (!text) return;
+    if (!text) return false;
 
     let anchorRect = null;
     try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
@@ -1215,7 +1253,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     const fingerprint = 'comp-' + text.slice(0, 80).trim();
     if (openPopups.has(fingerprint)) {
       const entry = openPopups.get(fingerprint);
-      if (entry.el && document.contains(entry.el)) { flashPopup(entry.el); return; }
+      // Already on screen — flash it, but do not charge the reader again.
+      if (entry.el && document.contains(entry.el)) { flashPopup(entry.el); return false; }
       openPopups.delete(fingerprint);
     }
 
@@ -1268,6 +1307,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     clearTimeout(root._hideT);
     if (autohideEnabled && root.dataset.pinned !== 'true')
       root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
+
+    return true;
   }
 
   // Every interruption has to show the reader what was actually observed —
@@ -1785,7 +1826,14 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   // ── Boot ───────────────────────────────────────────────────────────────
   await detectAndInitHandlers();
-  await startTracker();
+
+  // Never boot the camera unless the reader turned it on. webgazer.begin()
+  // calls getUserMedia, so starting the tracker speculatively would prompt for
+  // the webcam on a page the reader only wanted read. Telemetry detection below
+  // runs either way — it never needed the camera.
+  await settingsReady;
+  if (eyeTrackingEnabled) await startTracker();
+  else _log('Eye tracking off — tracker not started, camera untouched');
   restoreHighlightMarkers();
   restoreTextHighlights();
   checkLastVisit();
