@@ -1,0 +1,14 @@
+{
+  "name": "tldr-extension",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "TL;DR browser extension — tests and tooling. The extension itself lives in TL_DR/ and ships unbundled.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}

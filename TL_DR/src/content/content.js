@@ -23,7 +23,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   const BACKEND_DEFAULT     = 'http://localhost:3000/api/summarize';
   const MIN_SELECTION_CHARS = 15;
   const CLASSIFY_INTERVAL   = 3000;  // classify every 3s — slightly less CPU, still responsive
-  const ACTION_COOLDOWN     = 20000;  // 20s between triggers — prevents feeling too aggressive
+  // Interruption cooldowns and budget now live in intervention-policy.js —
+  // one place, applied to telemetry and gaze alike.
   const POPUP_MARGIN        = 14;
   const MAX_POPUPS          = 5;   // hard cap before oldest unpinned is evicted
   // All currently open floating popups — keyed by paragraph fingerprint
@@ -42,9 +43,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let autohideTimeoutSec = 12;
   let pinDefault         = false;
   let debugEnabled       = false;
-  let lastCogState       = 'focused';
-  let lastActionAt       = 0;           // global fallback
-  const paraActionAt     = new Map();   // per-paragraph cooldown: fingerprint -> timestamp
+  let lastCogState       = 'unknown';
+  let lastActionAt       = 0;           // manual/simulate paths only; automatic ones use the policy
   let classifyTimer      = null;
   let currentParagraph   = null;
   let lastHighlighted    = null;
@@ -181,6 +181,82 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   const featureExtractor = featModule.createFeatureExtractor({ windowMs: 2500, minPoints: 15 });
   const { classifyGazeState, COGNITIVE_STATE_ACTIONS } = classModule;
+
+  // ── Fusion engine ──────────────────────────────────────────────────────
+  // Telemetry and gaze used to fire their own popups independently, with no
+  // shared state and no shared budget. Both now feed one engine, and one
+  // subscriber below decides whether anything reaches the reader.
+  const engineModule = await loadModule('src/content/state-engine.js');
+  const policyModule = await loadModule('src/content/intervention-policy.js');
+  const stateEngine  = engineModule.createReadingStateEngine();
+  const interventionPolicy = policyModule.createInterventionPolicy();
+  const STATES = engineModule.STATES;
+
+  // Latest reading from the gaze pipeline, if any. Written by the classify
+  // loop, read whenever a telemetry signal arrives so the engine can consider
+  // both at once instead of them racing each other to the reader.
+  let lastGazeLabel   = null;
+  let lastGazeQuality = 0;
+
+  function currentGazeView() {
+    if (!eyeTrackingEnabled) return { enabled: false };
+    return {
+      enabled: true,
+      label: lastGazeLabel,
+      quality: lastGazeQuality,
+      lastSampleAt: lastGazeReceivedAt || null,
+    };
+  }
+
+  // Last deliberate input from the reader. Used only to spot someone who has
+  // stopped making progress — never stored, never sent anywhere.
+  let lastInputAt = Date.now();
+  const markInput = () => { lastInputAt = Date.now(); };
+  for (const ev of ['scroll', 'mousemove', 'keydown', 'wheel', 'touchstart']) {
+    window.addEventListener(ev, markInput, { passive: true });
+  }
+
+  function buildIdleView() {
+    let expectation = null;
+    try { expectation = comprehensionMonitor.getCurrentExpectation(); } catch (e) {}
+    if (!expectation) return null;
+    return {
+      pageFocused:  document.hasFocus(),
+      msSinceInput: Date.now() - lastInputAt,
+      expectedMs:   expectation.expectedMs,
+    };
+  }
+
+  // The only place an automatic interruption can reach the reader.
+  stateEngine.subscribe(async (state) => {
+    lastCogState = state.label;
+    try { chrome.storage.local.set({ sra_current_state: state.label }); } catch (e) {}
+    try { sessionTracker.recordState(state.label); } catch (e) {}
+    if (focusRulerEnabled) { try { focusRuler.adaptToState(state.label); } catch (e) {} }
+
+    const currentEl = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
+    const decision  = interventionPolicy.evaluate(state, { currentEl });
+
+    if (debugEnabled) {
+      _log(`State: ${state.label} (conf ${state.confidence.toFixed(2)}, camera ${state.cameraContribution.toFixed(2)}) — ${decision.allow ? 'ACT: ' + decision.action : 'hold: ' + decision.reason}`);
+    }
+    if (!decision.allow) return;
+
+    // Budget is spent here, once, for every kind of interruption.
+    interventionPolicy.record(decision);
+    try { sessionTracker.recordSignal(state.label, decision.action, decision.evidence[0] || ''); } catch (e) {}
+
+    if (decision.action === 'nudge') {
+      showNudge(currentEl);
+      if (currentEl) highlightElement(currentEl, 3000);
+      return;
+    }
+
+    // A telemetry signal knows which paragraph it came from and renders the
+    // offer card. Anything else falls back to the paragraph in view.
+    if (state.signal) await handleComprehensionSignal(state.signal, decision.evidence);
+    else if (currentParagraph) await triggerAIForParagraph(currentParagraph, state.label);
+  });
 
   // ── Load settings ──────────────────────────────────────────────────────
   chrome.storage.local.get({
@@ -1099,7 +1175,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         if (!isPopup) {
           if (comprehensionCheckEnabled && f.type === 'dom' && f.data !== (currentParagraph && currentParagraph.data)) {
             const signal = comprehensionMonitor.leaveParagraph();
-            if (signal) handleComprehensionSignal(signal);
+            if (signal) stateEngine.update({ telemetry: signal, gaze: currentGazeView() });
             // Save text of departing paragraph as context for the next AI call
             if (currentParagraph?.type === 'dom' && currentParagraph.data) {
               prevParagraphText = (currentParagraph.data.innerText || currentParagraph.data.textContent || '')
@@ -1114,11 +1190,15 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   }
 
   // ── Comprehension signal handler ──────────────────────────────────────────
-  async function handleComprehensionSignal(signal) {
+  // Renderer only. It no longer decides whether to interrupt — the state engine
+  // produces the state and intervention-policy decides. Call it from the engine
+  // subscriber, never directly from a detector.
+  async function handleComprehensionSignal(signal, evidence = []) {
     if (!comprehensionCheckEnabled) return;
 
+    // Keeps the monitor's own 30s cooldown honest. The session record is
+    // written by the engine subscriber, which sees every interruption.
     comprehensionMonitor.markOfferShown();
-    sessionTracker.recordSignal(signal.type, signal.subtype || '', signal.text || '');
 
     const el = (signal.type === 'speed_mismatch') ? signal.el
               : (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
@@ -1144,7 +1224,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     document.body.appendChild(root);
     openPopups.set(fingerprint, { el: root });
 
-    const offerHtml = buildComprehensionOfferHtml(signal);
+    const offerHtml = buildComprehensionOfferHtml(signal, evidence);
 
     root.innerHTML = `
       <div class="sra-controls">
@@ -1190,26 +1270,52 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
   }
 
-  function buildComprehensionOfferHtml(signal) {
-    if (signal.type === 'speed_mismatch') {
-      const r = signal.readability;
-      const pct = Math.round(signal.ratio * 100);
-      const secActual   = Math.round(signal.elapsed / 1000);
-      const secExpected = Math.round(signal.expected / 1000);
+  // Every interruption has to show the reader what was actually observed —
+  // that turns an inference into an observation they can disagree with.
+  // The evidence strings come from the state engine.
+  function buildComprehensionOfferHtml(signal, evidence = []) {
+    const observed = evidence.length
+      ? `<div style="line-height:1.7"><strong>${esc(evidence[0])}.</strong></div>`
+      : '';
+
+    if (signal.type === 'speed_mismatch' && signal.subtype === 'too_slow') {
+      const detail = (signal.actualWpm && signal.baselineWpm)
+        ? `You read this stretch at about ${signal.actualWpm} words per minute; your usual pace is
+           around ${signal.baselineWpm}.`
+        : 'You spent noticeably longer here than you usually do.';
       return `<div class="sra-state-badge" style="color:#a06000;border-color:rgba(160,96,0,0.3);background:rgba(160,96,0,0.06)">
         reading pace check</div>
-        <div style="line-height:1.7">That was a <strong>complex paragraph</strong>
-        (readability score ${r.score.toFixed(0)}/100) but you moved through it
-        in ${secActual}s — expected at least ${secExpected}s for text this dense.
+        ${observed}
+        <div style="line-height:1.7">${detail}
+        <br><em style="color:var(--muted)">Want a hand with it?</em></div>`;
+    }
+
+    if (signal.type === 'speed_mismatch') {
+      const r = signal.readability;
+      // elapsed/expected are only present on the too_fast signal — guard rather
+      // than rendering NaN, which is what the previous version did for too_slow.
+      const haveTiming = Number.isFinite(signal.elapsed) && Number.isFinite(signal.expected);
+      const timing = haveTiming
+        ? `you moved through it in ${Math.round(signal.elapsed / 1000)}s — expected at least
+           ${Math.round(signal.expected / 1000)}s for text this dense.`
+        : 'you moved through it faster than text this dense usually takes.';
+      const score = r && Number.isFinite(r.score) ? ` (readability score ${r.score.toFixed(0)}/100)` : '';
+      return `<div class="sra-state-badge" style="color:#a06000;border-color:rgba(160,96,0,0.3);background:rgba(160,96,0,0.06)">
+        reading pace check</div>
+        ${observed}
+        <div style="line-height:1.7">That was a <strong>complex paragraph</strong>${score} but ${timing}
         <br><em style="color:var(--muted)">Want a quick summary?</em></div>`;
     }
+
     if (signal.type === 'backtrack') {
       return `<div class="sra-state-badge" style="color:#5a3e8a;border-color:rgba(90,62,138,0.3);background:rgba(90,62,138,0.06)">
         scroll backtrack</div>
-        <div style="line-height:1.7">You scrolled back — looks like something might not have
-        landed clearly.<br><em style="color:var(--muted)">Want a summary of what you just passed?</em></div>`;
+        ${observed}
+        <div style="line-height:1.7">Looks like something might not have landed clearly.
+        <br><em style="color:var(--muted)">Want a summary of what you just passed?</em></div>`;
     }
-    return '<div>Want a summary?</div>';
+
+    return `${observed}<div>Want a summary?</div>`;
   }
 
   // ── Classification loop ────────────────────────────────────────────────
@@ -1252,34 +1358,19 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
       // Smooth over 3 windows to prevent single-sample false triggers
       const smoothedLabel = getSmoothedState(label);
-      lastCogState = smoothedLabel;
-      chrome.storage.local.set({ sra_current_state: smoothedLabel });
-      sessionTracker.recordState(smoothedLabel);
-      if (focusRulerEnabled) focusRuler.adaptToState(smoothedLabel);
-      if (debugEnabled) _log(`State: ${smoothedLabel} (raw: ${label}, conf: ${(confidence*100).toFixed(0)}%, quality: ${(rawFeatures.gaze_quality*100).toFixed(0)}%)`);
+      lastGazeLabel   = smoothedLabel;
+      lastGazeQuality = rawFeatures.gaze_quality;
+
       if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
       else forceStopIdle();
 
-      const action = COGNITIVE_STATE_ACTIONS[smoothedLabel];
-      const now    = Date.now();
-      if (action === 'none') return;
-
-      // Per-paragraph cooldown: each paragraph has its own 8-second window
-      const paraKey = currentParagraph && currentParagraph.type === 'dom' && currentParagraph.data
-        ? (currentParagraph.data.innerText || '').slice(0, 80).trim()
-        : 'global';
-      const lastFiredForThisPara = paraActionAt.get(paraKey) || 0;
-      if (now - lastFiredForThisPara < ACTION_COOLDOWN) return;
-
-      paraActionAt.set(paraKey, now);
-      lastActionAt = now;
-      // Clean old entries (keep map small)
-      if (paraActionAt.size > 50) {
-        const oldest = [...paraActionAt.entries()].sort((a,b)=>a[1]-b[1])[0][0];
-        paraActionAt.delete(oldest);
-      }
-      if (action === 'explain' || action === 'simplify') await triggerAIForParagraph(currentParagraph, smoothedLabel);
-      else if (action === 'nudge') { const el = currentParagraph?.type==='dom'?currentParagraph.data:null; showNudge(el); if(el) highlightElement(el,3000); }
+      // Gaze no longer fires anything by itself. It hands its reading to the
+      // engine, which will not turn it into an actionable state without
+      // telemetry backing it — see state-engine.js for why.
+      stateEngine.update({
+        gaze: currentGazeView(),
+        idle: buildIdleView(),
+      });
     }, CLASSIFY_INTERVAL);
   }
 
@@ -1377,7 +1468,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (!comprehensionCheckEnabled) return;
     try {
       const signal = comprehensionMonitor.onScroll();
-      if (signal) handleComprehensionSignal(signal);
+      if (signal) stateEngine.update({ telemetry: signal, gaze: currentGazeView() });
     } catch (e) {}
   }, { passive: true });
 
