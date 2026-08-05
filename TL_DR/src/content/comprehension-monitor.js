@@ -210,9 +210,20 @@ export function createComprehensionMonitor(opts = {}) {
 
   function seedWpmFromCalibration(wpm) { wpmBaseline.seedFromCalibration(wpm); }
 
+  // How long the paragraph currently being read should take, and when the
+  // reader arrived at it. The state engine needs both to tell "still reading"
+  // apart from "stopped", which is the one question it asks the camera.
+  function getCurrentExpectation() {
+    if (!paragraphEntry) return null;
+    return {
+      expectedMs: expectedReadingMs(paragraphEntry.readability, wpmBaseline.get()),
+      enteredAt:  paragraphEntry.enteredAt,
+    };
+  }
+
   return {
     enterParagraph, leaveParagraph, onScroll, markOfferShown,
-    seedWpmFromCalibration, fleschKincaid,
+    seedWpmFromCalibration, fleschKincaid, getCurrentExpectation,
     getBaselineWpm: () => wpmBaseline.get(),
   };
 }
