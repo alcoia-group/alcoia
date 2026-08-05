@@ -1,10 +1,39 @@
 // classifier.js — Decision Tree for TL;DR
-// Auto-generated — do not edit by hand. Retrain via tldr_classifier_training.ipynb.
-// Webcam-noise-robust | Samples: 4000 train | Test accuracy: 0.851
+// Auto-generated — do not edit by hand.
+// Regenerate via: tldr classifier/tldr_classifier_training(1).ipynb
+//   (NOT tldr_classifier_v2.ipynb — that notebook exports a different tree.
+//    The body of this file matches the export in tldr classifier/classifier(1).js.)
+//
+// TRAINING DATA — SYNTHETIC. NOT READING BEHAVIOUR.
+//   Generated from hand-written normal distributions, 500 rows per class across
+//   5 classes = 2500 clean rows. Every row is then duplicated with Gaussian noise
+//   added to each feature, giving 5000 rows. An 80/20 split yields 4000 train,
+//   1000 test. No human ever produced any of it.
+//
+// Held-out synthetic test accuracy: 0.851.
+//   This number measures how well the tree recovers the rules of the generator
+//   that produced its own training data. It says nothing about reading, and it
+//   must not be cited as an accuracy figure for this product.
+//   It is also inflated by construction: the augmented copies are noise-perturbed
+//   duplicates of the clean rows, and the split is random, so a row's own noisy
+//   twin can sit in the test set while the original sits in train. That is train
+//   /test leakage. The true synthetic-generalisation number is lower by an
+//   unmeasured amount.
+//
+// NO REAL-PARTICIPANT EVALUATION HAS BEEN PERFORMED.
+//
 // Input: 9-feature object (avg_fixation_ms, fixation_std, regression_rate,
 //        saccade_length, saccade_std, gaze_drift_px, scroll_delta_px,
 //        velocity_mean, line_reread_count)
 // Output: { label: string, confidence: float }
+//
+// WARNING — missing keys do not throw. Every branch below is a `<=` comparison,
+// and `undefined <= x` is false. Drop a feature from the extractor without
+// retraining and this file will silently route down one branch forever while
+// still returning confident-looking labels. Retrain first, regenerate, then
+// change the extractor. See the project notes § THE TRAP.
+//
+// Note: the root split is scroll_delta_px — a telemetry feature, not a gaze one.
 
 export function classifyGazeState(f) {
   if (f.scroll_delta_px <= 16.6988) {
