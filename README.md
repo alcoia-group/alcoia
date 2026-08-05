@@ -1,10 +1,10 @@
-# <img src="TL_DR/assets/tldr.png" width="5%" />  TL;DR    
-               
+# <img src="TL_DR/assets/tldr.png" width="5%" />  TL;DR     
+                           
 TL;DR is a Chrome extension that reads how you read. It uses your webcam to track your eye movements in real time, analyses those movements every 2.5 seconds to determine your cognitive state, and automatically delivers AI-generated assistance — summaries, explanations, or simplifications — for the exact paragraph you are struggling with.  
-    
-Unlike a traditional AI assistant that waits for you to ask for help, TL;DR detects when you need it and acts before you consciously decide to ask.
-
----  
+      
+Unlike a traditional AI assistant that waits for you to ask for help, TL;DR detects when you need it and acts before you consciously decide to ask. 
+ 
+---   
  
 ## How it works
 
@@ -52,13 +52,29 @@ The backend server exists because the Groq API key cannot be stored in the exten
 
 The Decision Tree was trained on a synthetic dataset generated from distributions derived from published reading research, primarily Rayner (1998), Just and Carpenter (1980), and Siegenthaler et al. (2011). Synthetic data was necessary because no public labelled gaze dataset exists for reading cognitive states.
 
+<<<<<<< HEAD
 The dataset contains 4,000 training rows balanced across the five classes. Each row represents 9 gaze features computed over a 2.5-second window. The tree is trained with limited depth, a minimum leaf size, and balanced class weights to stay robust against webcam noise. Test accuracy on a held-out split is 85%.
 
 After training, the tree is exported from sklearn as a JavaScript function containing plain if/else conditions. This function runs in the browser without any machine learning library, with no external dependencies, in under one millisecond per classification.
 
 The training notebook is at `tldr classifier/tldr_classifier_training.ipynb` (v2 at `tldr classifier/tldr_classifier_v2.ipynb`). Running all cells regenerates the dataset CSV, trains the model, produces evaluation charts, and exports a new `classifier.js`.
+=======
+The dataset contains 2,500 rows across five classes, 500 per class. Each row represents 9 gaze features computed over a 2.5-second window. Every row is then duplicated with Gaussian noise added to each feature, giving 5,000 rows in total. The tree is trained with a maximum depth of 7 and balanced class weights.
 
-The synthetic distributions were designed to be wider and more overlapping than lab-controlled data, reflecting the noise characteristics of consumer webcam gaze tracking. Real-world accuracy is estimated at 75 to 82%, lower than the synthetic test accuracy because webcam gaze data is noisier than the simulated distributions.
+After training, the tree is exported from sklearn as a JavaScript function containing plain if/else conditions. This function runs in the browser without any machine learning library, with no external dependencies, in under one millisecond per classification.
+
+The notebook that produced the tree currently shipping is `tldr classifier/tldr_classifier_training(1).ipynb`. Running all cells regenerates the dataset CSV, trains the model, produces evaluation charts, and exports a new `classifier.js`. A second notebook, `tldr_classifier_v2.ipynb`, exports a different tree that is not the one in the extension.
+>>>>>>> cc088c25e13510bb50454dc15e5e38ec9eadc397
+
+### On accuracy
+
+**No real-participant evaluation of this classifier has been performed, and no accuracy figure for it should be treated as meaningful.**
+
+The training data is synthetic throughout — hand-written normal distributions, not recordings of anyone reading. A test score against a held-out slice of that data measures how well the tree recovers the rules of the generator that produced its own training set. It does not measure reading. The score is also inflated by construction: the noise-augmented copies are perturbed duplicates of the clean rows and the train/test split is random, so a row's own noisy twin can land in the test set while the original sits in training.
+
+The figure recorded in the header of `src/content/classifier.js` is kept there for provenance, with that context attached. It is not a claim about how well this extension detects anything. Earlier drafts of this README carried an 88% test figure and a "75 to 82% real-world" estimate; both have been removed. The second was never measured against anything at all.
+
+Establishing an honest number means running the pipeline against real gaze data with comprehension outcomes — the WebQAmGaze and OneStop corpora are the obvious starting points — and then against real participants. None of that has been done yet.
 
 ---
 
