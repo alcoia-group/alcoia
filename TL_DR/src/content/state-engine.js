@@ -73,12 +73,23 @@ const TELEMETRY_CONFIDENCE = Object.freeze({
  * quote and highlight as well as when stuck, and the extension already opens a
  * summary on selection — asserting on it too would interrupt twice for one
  * action. */
-const CORROBORATING_TYPES = Object.freeze(['selection', 'copy', 'scroll_jerk']);
+const CORROBORATING_TYPES = Object.freeze([
+  'selection', 'copy', 'scroll_jerk', 'progression', 'cursor_reading',
+]);
 
 const CORROBORATION = Object.freeze({
   selection:   { states: [STATES.STRUGGLING], bonus: 0.10, evidence: 'You selected part of this passage' },
   copy:        { states: [STATES.STRUGGLING], bonus: 0.12, evidence: 'You copied a phrase from it' },
   scroll_jerk: { states: [STATES.SKIMMING, STATES.STRUGGLING], bonus: 0.08, evidence: 'Your scrolling became uneven here' },
+  progression: { states: [STATES.SKIMMING], bonus: 0.08, evidence: 'You have been moving evenly and quickly through the page' },
+});
+
+/* Extra conditions before a corroborating signal counts. Without these,
+ * "your scrolling became uneven" would be attached to perfectly smooth
+ * scrolling, which is worse than saying nothing. */
+const CORROBORATION_GUARD = Object.freeze({
+  scroll_jerk: (sig) => sig.subtype === 'hunting',
+  progression: (sig) => sig.subtype === 'skimming',
 });
 
 function describeTooSlow(sig) {
@@ -279,7 +290,8 @@ export function createReadingStateEngine(config = {}) {
       for (const sig of corroborating) {
         const rule = CORROBORATION[sig.type];
         if (!rule || !rule.states.includes(proposal.label)) continue;
-        if (sig.type === 'scroll_jerk' && sig.subtype !== 'hunting') continue;
+        const guard = CORROBORATION_GUARD[sig.type];
+        if (guard && !guard(sig)) continue;
         proposal.confidence = clamp01(proposal.confidence + rule.bonus);
         proposal.evidence   = [...proposal.evidence, rule.evidence];
       }
