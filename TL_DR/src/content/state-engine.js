@@ -58,10 +58,27 @@ function clamp01(n) { return n < 0 ? 0 : n > 1 ? 1 : n; }
  * a speed measurement is evidence, not proof, and the number is shown to
  * nobody as an accuracy claim. */
 const TELEMETRY_CONFIDENCE = Object.freeze({
-  too_slow:  0.70,
-  too_fast:  0.55,
-  backtrack: 0.60,
-  idle:      0.50,
+  too_slow:     0.70,
+  too_fast:     0.55,
+  backtrack:    0.60,
+  idle:         0.50,
+  fast_return:  0.72,   // returned mid-thought — still in trouble
+  return:       0.58,
+  slow_return:  0.40,   // deliberate consolidation; not a problem to solve
+  blur_return:  0.68,
+});
+
+/* Signals that may only raise confidence in a state something else asserted.
+ * A reader selecting text is doing something deliberate, but people select to
+ * quote and highlight as well as when stuck, and the extension already opens a
+ * summary on selection — asserting on it too would interrupt twice for one
+ * action. */
+const CORROBORATING_TYPES = Object.freeze(['selection', 'copy', 'scroll_jerk']);
+
+const CORROBORATION = Object.freeze({
+  selection:   { states: [STATES.STRUGGLING], bonus: 0.10, evidence: 'You selected part of this passage' },
+  copy:        { states: [STATES.STRUGGLING], bonus: 0.12, evidence: 'You copied a phrase from it' },
+  scroll_jerk: { states: [STATES.SKIMMING, STATES.STRUGGLING], bonus: 0.08, evidence: 'Your scrolling became uneven here' },
 });
 
 function describeTooSlow(sig) {
@@ -112,7 +129,56 @@ function fromTelemetry(sig) {
     };
   }
 
+  if (sig.type === 'regression') {
+    const paras = sig.distance === 1 ? 'a paragraph' : `${sig.distance} paragraphs`;
+
+    // A slow return is a reader who finished a thought and went back to check
+    // something. That is competent reading, and reporting it as struggling
+    // would be both wrong and rude. Observed, not actionable.
+    if (sig.subtype === 'slow_return') {
+      return {
+        label: STATES.ON_PACE,
+        confidence: TELEMETRY_CONFIDENCE.slow_return,
+        evidence: [`You went back ${paras} to review`],
+        signal: sig,
+      };
+    }
+
+    const evidence = sig.subtype === 'fast_return'
+      ? [`You jumped straight back ${paras}`]
+      : [`You went back ${paras} to re-read`];
+
+    return {
+      label: STATES.STRUGGLING,
+      confidence: TELEMETRY_CONFIDENCE[sig.subtype] ?? TELEMETRY_CONFIDENCE.return,
+      evidence,
+      signal: sig,
+    };
+  }
+
+  if (sig.type === 'blur_return') {
+    const mins = Math.round((sig.blurMs || 0) / 60000);
+    const away = mins >= 1 ? `${mins} minute${mins === 1 ? '' : 's'}` : 'a while';
+    return {
+      label: STATES.STRUGGLING,
+      confidence: TELEMETRY_CONFIDENCE.blur_return,
+      evidence: [`You came back to this paragraph after ${away} away`],
+      signal: sig,
+    };
+  }
+
   return null;
+}
+
+/* Pick the strongest thing telemetry is willing to assert. */
+function strongestAssertion(signals) {
+  let best = null;
+  for (const sig of signals) {
+    const proposal = fromTelemetry(sig);
+    if (!proposal) continue;
+    if (!best || proposal.confidence > best.confidence) best = proposal;
+  }
+  return best;
 }
 
 /* Idle-with-focus is the one genuinely ambiguous case: someone thinking hard
@@ -191,16 +257,33 @@ export function createReadingStateEngine(config = {}) {
     return current;
   }
 
-  /* input: { telemetry, gaze, idle } — any may be absent. */
+  /* input: { telemetry, gaze, idle } — any may be absent.
+   * `telemetry` may be a single signal or an array of them. */
   function update(input = {}) {
     const at       = now();
     const gazeView = readGaze(input.gaze, at, opts);
 
+    const all = input.telemetry
+      ? (Array.isArray(input.telemetry) ? input.telemetry.filter(Boolean) : [input.telemetry])
+      : [];
+    const asserting   = all.filter((s) => s && !CORROBORATING_TYPES.includes(s.type));
+    const corroborating = all.filter((s) => s && CORROBORATING_TYPES.includes(s.type));
+
     // 1. Telemetry gets first refusal on the label.
-    let proposal = fromTelemetry(input.telemetry);
+    let proposal = strongestAssertion(asserting);
     let cameraContribution = 0;
 
     if (proposal) {
+      // Other telemetry that agrees raises confidence and adds its own
+      // observation. A corroborating signal alone never gets this far.
+      for (const sig of corroborating) {
+        const rule = CORROBORATION[sig.type];
+        if (!rule || !rule.states.includes(proposal.label)) continue;
+        if (sig.type === 'scroll_jerk' && sig.subtype !== 'hunting') continue;
+        proposal.confidence = clamp01(proposal.confidence + rule.bonus);
+        proposal.evidence   = [...proposal.evidence, rule.evidence];
+      }
+
       // Gaze may only corroborate here — never override, never veto.
       if (gazeView.usable && gazeView.state === proposal.label) {
         proposal.confidence = clamp01(proposal.confidence + opts.corroborationBonus);
