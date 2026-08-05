@@ -54,9 +54,12 @@ export function createParagraphTracker(opts = {}) {
     lastScan = now();
   }
 
-  function elementAtReadingLine() {
+  /* `overrideY` is a measured reading position — currently the cursor, when the
+   * reader is using it as a pointer. It beats the viewport heuristic outright
+   * because it is an observation rather than an assumption. */
+  function elementAtReadingLine(overrideY) {
     if (!paragraphs.length) return null;
-    const line = viewportH() * readingLine;
+    const line = Number.isFinite(overrideY) ? overrideY : viewportH() * readingLine;
     let best = null;
     let bestDist = Infinity;
 
@@ -75,10 +78,10 @@ export function createParagraphTracker(opts = {}) {
   }
 
   /* Call on scroll and on a slow interval. Returns a transition or null. */
-  function update() {
+  function update(overrideY) {
     if (!paragraphs.length || now() - lastScan > 10000) scan();
 
-    const next = elementAtReadingLine();
+    const next = elementAtReadingLine(overrideY);
     const nextEl = next ? next.el : null;
     const activeEl = active ? active.el : null;
     if (nextEl === activeEl) return null;

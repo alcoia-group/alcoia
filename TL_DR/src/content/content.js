@@ -201,16 +201,21 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   const interactionModule = await loadModule('src/content/telemetry/interaction-signals.js');
   const dynamicsModule = await loadModule('src/content/telemetry/scroll-dynamics.js');
 
+  const cursorModule = await loadModule('src/content/telemetry/cursor-tracking.js');
+  const entropyModule = await loadModule('src/content/telemetry/progression-entropy.js');
+
   const paragraphTracker = paraTrackModule.createParagraphTracker({ minWords: 20 });
   const scrollRegression = regressionModule.createScrollRegressionDetector();
   const interactionSignals = interactionModule.createInteractionSignals();
   const scrollDynamics = dynamicsModule.createScrollDynamics();
+  const cursorTracker = cursorModule.createCursorTracker();
+  const progressionEntropy = entropyModule.createProgressionEntropy();
 
   // Drains every detector and hands the batch over in one go, so the engine
   // sees a whole moment rather than a sequence of unrelated nudges.
   function pumpTelemetry(extra) {
     const batch = [];
-    for (const s of [scrollRegression.signal(), scrollDynamics.signal()]) if (s) batch.push(s);
+    for (const s of [scrollRegression.signal(), scrollDynamics.signal(), progressionEntropy.signal()]) if (s) batch.push(s);
     const interactions = interactionSignals.signal();
     if (interactions) batch.push(...interactions);
     if (extra) batch.push(extra);
@@ -223,7 +228,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   function syncParagraph() {
     if (!comprehensionCheckEnabled) return;
     let transition = null;
-    try { transition = paragraphTracker.update(); } catch (e) { return; }
+    try {
+      // A reader tracking text with the mouse gives a measured reading
+      // position; fall back to the viewport heuristic when they aren't.
+      transition = paragraphTracker.update(cursorTracker.getPointerY());
+    } catch (e) { return; }
     if (!transition) return;
 
     let speedSignal = null;
@@ -240,6 +249,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
 
     try { scrollRegression.update(transition); } catch (e) {}
+    try { progressionEntropy.update(transition); } catch (e) {}
     pumpTelemetry(speedSignal);
   }
 
@@ -1569,6 +1579,13 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   // Selection and copy are corroboration, never triggers — the selection
   // summary feature already responds to the reader's own action, and firing
   // an interruption on top of it would interrupt twice for one gesture.
+  // Cursor as a reading pointer. Most mouse movement is not reading, so the
+  // tracker decides for itself whether the behaviour qualifies.
+  window.addEventListener('mousemove', (e) => {
+    if (!comprehensionCheckEnabled) return;
+    try { cursorTracker.update(e.clientX, e.clientY); } catch (err) {}
+  }, { passive: true });
+
   let selectionDebounce = null;
   document.addEventListener('selectionchange', () => {
     if (!comprehensionCheckEnabled) return;
