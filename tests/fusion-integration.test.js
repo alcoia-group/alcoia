@@ -5,7 +5,7 @@
  * one reader could be interrupted twice for the same moment of difficulty.
  * These tests pin the fix.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createReadingStateEngine, STATES } from '../TL_DR/src/content/state-engine.js';
 import { createInterventionPolicy } from '../TL_DR/src/content/intervention-policy.js';
 

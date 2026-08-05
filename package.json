@@ -5,11 +5,14 @@
   "type": "module",
   "description": "TL;DR browser extension \u2014 tests and tooling. The extension itself lives in TL_DR/ and ships unbundled.",
   "scripts": {
+    "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "node tests/browser/smoke.mjs"
   },
   "devDependencies": {
+    "eslint": "^10.8.0",
+    "globals": "^17.9.0",
     "playwright": "^1.62.1",
     "vitest": "^3.2.4"
   }

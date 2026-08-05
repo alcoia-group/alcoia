@@ -118,10 +118,6 @@ await page.waitForTimeout(3000);
 const gum = await page.evaluate(() => window.__gumCalls || []);
 findings.getUserMedia = gum;
 
-const state = await page.evaluate(() => new Promise((r) => {
-  try { chrome.storage?.local?.get?.({ sra_current_state: null }, r); } catch (e) { r({ unavailable: true }); }
-})).catch(() => ({ unreachable: true }));
-
 const popups = await page.evaluate(() => document.querySelectorAll('.sra-popup').length);
 
 console.log('\n================ RESULTS ================');
