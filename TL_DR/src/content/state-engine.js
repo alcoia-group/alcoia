@@ -209,10 +209,18 @@ function fromIdle(idle, gazeView, opts) {
     };
   }
   if (gazeView.present === true) {
+    // on_page_fraction is the one spatial question a ~180px tracker can answer:
+    // roughly, is the reader looking at the text at all. Someone overdue whose
+    // gaze has left the column is elsewhere; someone overdue still on the text
+    // may well be thinking, so claim less.
+    const onPage = gazeView.onPageFraction;
+    const lookedAway = onPage != null && onPage < 0.4;
     return {
       label: STATES.DRIFTING,
-      confidence: TELEMETRY_CONFIDENCE.idle,
-      evidence: ['You have been on this paragraph a while without moving on'],
+      confidence: lookedAway ? 0.62 : TELEMETRY_CONFIDENCE.idle,
+      evidence: [lookedAway
+        ? 'You have been away from the text for a while'
+        : 'You have been on this paragraph a while without moving on'],
       cameraUsed: true,
     };
   }
@@ -227,8 +235,13 @@ function fromIdle(idle, gazeView, opts) {
 
 /* Reduce a raw gaze reading to what gaze is actually allowed to say. */
 function readGaze(gaze, nowMs, opts) {
-  const view = { present: null, state: null, quality: 0, usable: false };
+  const view = { present: null, state: null, quality: 0, usable: false, onPageFraction: null };
   if (!gaze || !gaze.enabled) return view;
+
+  view.onPageFraction = typeof gaze.onPageFraction === 'number' ? gaze.onPageFraction : null;
+
+  // An explicit "no face" beats any staleness heuristic.
+  if (gaze.facePresent === false) { view.present = false; return view; }
 
   const stale = gaze.lastSampleAt != null &&
                 (nowMs - gaze.lastSampleAt) > opts.gazeStaleMs;

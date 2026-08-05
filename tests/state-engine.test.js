@@ -272,6 +272,34 @@ describe('idle disambiguation — the one place the camera changes an answer', (
     expect(s.confidence).toBe(0);
   });
 
+  it('is more confident when gaze has left the text column', () => {
+    const onText = engineAt(fixedClock()).update({
+      idle, gaze: goodGaze('focused', { onPageFraction: 0.9 }),
+    });
+    const lookedAway = engineAt(fixedClock()).update({
+      idle, gaze: goodGaze('focused', { onPageFraction: 0.1 }),
+    });
+    expect(onText.label).toBe(STATES.DRIFTING);
+    expect(lookedAway.label).toBe(STATES.DRIFTING);
+    expect(lookedAway.confidence).toBeGreaterThan(onText.confidence);
+    expect(lookedAway.evidence[0]).toMatch(/away from the text/);
+  });
+
+  it('claims no more than before when on_page_fraction is unavailable', () => {
+    const withoutMeasure = engineAt(fixedClock()).update({ idle, gaze: goodGaze('focused') });
+    const onText = engineAt(fixedClock()).update({
+      idle, gaze: goodGaze('focused', { onPageFraction: 0.9 }),
+    });
+    expect(withoutMeasure.confidence).toBe(onText.confidence);
+  });
+
+  it('treats an explicit missing face as absent regardless of sample age', () => {
+    const s = engineAt(fixedClock()).update({
+      gaze: { enabled: true, label: 'focused', quality: 0.9, lastSampleAt: 1_000_000, facePresent: false },
+    });
+    expect(s.label).toBe(STATES.ABSENT);
+  });
+
   it('does not fire while the reader is still within expected reading time', () => {
     const s = engineAt(fixedClock()).update({
       idle: { pageFocused: true, msSinceInput: 5_000, expectedMs: 20_000 },
