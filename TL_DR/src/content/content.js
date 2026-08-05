@@ -372,6 +372,30 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     setTimeout(() => { try { el.remove(); } catch (_) {} }, 250);
   }
 
+  // (Re)arm the autohide countdown for a popup. The timer only runs when
+  // autohide is on, the popup isn't pinned, and the user is NOT currently
+  // interacting with it (mouse hovering or gaze resting on it). This makes
+  // the countdown start only once the user has finished reading/interacting.
+  function armAutohide(el, fingerprint) {
+    clearTimeout(el._hideT);
+    if (autohideEnabled && el.dataset.pinned !== 'true' && !el._mouseOver && !el._gazeOver) {
+      el._hideT = setTimeout(() => closePopup(el, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
+    }
+  }
+
+  // True when the current gaze point rests inside any open popup — used to
+  // avoid firing a new cognitive-state action while the user reads a popup.
+  function isGazeOverAnyPopup() {
+    if (!lastGazePt) return false;
+    for (const { el } of openPopups.values()) {
+      if (!el || !document.contains(el)) continue;
+      const r = el.getBoundingClientRect();
+      if (lastGazePt.x >= r.left && lastGazePt.x <= r.right &&
+          lastGazePt.y >= r.top  && lastGazePt.y <= r.bottom) return true;
+    }
+    return false;
+  }
+
   function flashPopup(el) {
     const orig = el.style.boxShadow;
     el.style.transition = 'box-shadow 0.12s';
@@ -450,10 +474,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       const body = root.querySelector('.sra-popup-body');
       if (body && s) body.innerHTML = badge + `<div>${esc(s)}</div>`;
       btn.textContent = 'Explain More'; btn.disabled = false;
-      // Fix: reset the autohide timer so the user has time to read the expanded content
-      clearTimeout(root._hideT);
-      if (autohideEnabled && root.dataset.pinned !== 'true')
-        root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
+      // Reset the autohide timer so the user has time to read the expanded content
+      armAutohide(root, fingerprint);
     };
 
     root.querySelector('.sra-note-btn').onclick = () => {
@@ -469,9 +491,12 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     placePopup(root, anchorRect, avoidRects);
     requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
 
-    clearTimeout(root._hideT);
-    if (autohideEnabled && root.dataset.pinned !== 'true')
-      root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
+    // Pause the autohide countdown while the user hovers the popup; restart it
+    // (from full duration) once the pointer leaves.
+    root.addEventListener('mouseenter', () => { root._mouseOver = true; clearTimeout(root._hideT); });
+    root.addEventListener('mouseleave', () => { root._mouseOver = false; armAutohide(root, fingerprint); });
+
+    armAutohide(root, fingerprint);
   }
 
   // Close all unpinned popups (Esc)
@@ -494,7 +519,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       const simState = stateMap[e.key];
       if (simState) {
         e.preventDefault();
-        showSimulateToast(simState);
+        // TEMP (do not commit): "Simulating: <state>" toast disabled for testing — restore this line
+        // showSimulateToast(simState);
         lastActionAt = 0;
         lastCogState = simState;
         chrome.storage.local.set({ sra_current_state: simState });
@@ -1083,6 +1109,20 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     lastGazeReceivedAt = Date.now();
     featureExtractor.addPoint(pt);
 
+    // Pause autohide for any popup the gaze is resting on; restart it when the
+    // gaze leaves. Combined with mouse hover, this means the countdown only runs
+    // once the user has stopped looking at / interacting with the card.
+    if (openPopups.size) {
+      for (const [fp, entry] of openPopups) {
+        const el = entry.el;
+        if (!el || !document.contains(el)) continue;
+        const r = el.getBoundingClientRect();
+        const over = pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
+        if (over && !el._gazeOver) { el._gazeOver = true; clearTimeout(el._hideT); }
+        else if (!over && el._gazeOver) { el._gazeOver = false; armAutohide(el, fp); }
+      }
+    }
+
     // Image dwell: if gaze stays on the same image while confused/overloaded for >2s, explain it
     const _gazeTopEl = document.elementFromPoint(pt.x, pt.y);
     const _gazeImg   = _gazeTopEl?.tagName === 'IMG' ? _gazeTopEl
@@ -1197,9 +1237,10 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     placePopup(root, anchorRect, avoidRects);
     requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
 
-    clearTimeout(root._hideT);
-    if (autohideEnabled && root.dataset.pinned !== 'true')
-      root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
+    root.addEventListener('mouseenter', () => { root._mouseOver = true; clearTimeout(root._hideT); });
+    root.addEventListener('mouseleave', () => { root._mouseOver = false; armAutohide(root, fingerprint); });
+
+    armAutohide(root, fingerprint);
   }
 
   function buildComprehensionOfferHtml(signal) {
@@ -1275,6 +1316,10 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       const action = COGNITIVE_STATE_ACTIONS[smoothedLabel];
       const now    = Date.now();
       if (action === 'none') return;
+
+      // Don't trigger a new state action while the user is reading an open popup —
+      // gaze resting on the card shouldn't be treated as fresh confusion.
+      if (isGazeOverAnyPopup()) return;
 
       // Global spacing: never fire two auto popups closer than GLOBAL_ACTION_SPACING
       // apart, even for different paragraphs. Without this, letting your gaze drift
