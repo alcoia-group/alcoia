@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "TL;DR browser extension \u2014 tests and tooling. The extension itself lives in TL_DR/ and ships unbundled.",
+  "description": "TL;DR browser extension — tests and tooling. The extension itself lives in TL_DR/ and ships unbundled.",
   "scripts": {
     "lint": "eslint .",
     "test": "vitest run",
@@ -13,6 +13,7 @@
   "devDependencies": {
     "eslint": "^10.8.0",
     "globals": "^17.9.0",
+    "jsdom": "^30.0.1",
     "playwright": "^1.62.1",
     "vitest": "^3.2.4"
   }
