@@ -179,7 +179,18 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 });
   const classModule  = await loadModule('src/content/classifier.js');
 
-  const featureExtractor = featModule.createFeatureExtractor({ windowMs: 2500, minPoints: 15 });
+  const featureExtractor = featModule.createFeatureExtractor({
+    windowMs: 2500, minPoints: 15,
+    // The paragraph being read defines the text column for on_page_fraction.
+    // Returns null before anything is being tracked, and the extractor then
+    // abstains rather than reporting a fraction it cannot compute.
+    getContentRect: () => {
+      try {
+        const el = paragraphTracker.getActive()?.el || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
+        return el ? el.getBoundingClientRect() : null;
+      } catch (e) { return null; }
+    },
+  });
   const { classifyGazeState, COGNITIVE_STATE_ACTIONS } = classModule;
 
   // ── Fusion engine ──────────────────────────────────────────────────────
@@ -261,11 +272,15 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   function currentGazeView() {
     if (!eyeTrackingEnabled) return { enabled: false };
+    let presence = null;
+    try { presence = featureExtractor.presence(); } catch (e) {}
     return {
       enabled: true,
       label: lastGazeLabel,
       quality: lastGazeQuality,
       lastSampleAt: lastGazeReceivedAt || null,
+      facePresent: presence ? presence.face_present : null,
+      onPageFraction: presence ? presence.on_page_fraction : null,
     };
   }
 
