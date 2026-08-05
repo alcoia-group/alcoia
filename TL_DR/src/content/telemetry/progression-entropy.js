@@ -17,7 +17,6 @@
  */
 
 export function createProgressionEntropy(opts = {}) {
-  const now         = opts.now || (() => Date.now());
   const minParagraphs = opts.minParagraphs ?? 5;
   const skimDwellMs = opts.skimDwellMs ?? 3000;
 
