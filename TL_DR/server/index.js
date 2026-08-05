@@ -6,6 +6,7 @@ const express = require('express');
 const cors    = require('cors');
 const path    = require('path');
 const fs      = require('fs');
+const Q       = require('./questions');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -46,6 +47,19 @@ function rateLimit(req, res, next) {
   next();
 }
 
+// Questions are more expensive than summaries and are asked far less often,
+// so they get their own, tighter bucket rather than sharing the summary one.
+const _qRlMap = new Map();
+function questionRateLimit(req, res, next) {
+  const ip  = req.ip || '0.0.0.0';
+  const now = Date.now();
+  const ts  = (_qRlMap.get(ip) || []).filter(t => now - t < 60000);
+  if (ts.length >= 10) return res.status(429).json({ error: 'Question rate limit exceeded. Try again in a minute.' });
+  ts.push(now);
+  _qRlMap.set(ip, ts);
+  next();
+}
+
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL   = process.env.GROQ_MODEL   || 'llama-3.1-8b-instant';
 
@@ -73,7 +87,7 @@ Write 2–3 sentences that capture the core point. Start directly — no preambl
 Text:
 ${escaped}`,
 
-    explain_more: `You are a reading assistant. The reader's eye movements indicate they are confused by this passage — they are re-reading it repeatedly and making no progress through the page.
+    explain_more: `You are a reading assistant. The reader has slowed down or gone back over this passage, which suggests it did not land the first time.
 
 Explain this passage clearly. Your response must:
 - Open with the single most important idea in one plain sentence
@@ -86,7 +100,7 @@ ${ctxBlock}
 Passage:
 ${escaped}`,
 
-    simplify: `You are a reading assistant. The reader's eye movements show they are cognitively overloaded — their eyes keep jumping back to the start of lines and they cannot move forward.
+    simplify: `You are a reading assistant. The reader is making little progress through this passage and has been re-reading parts of it.
 
 Rewrite this passage in plain language. Your response must:
 - Use short sentences (max 15 words each)
@@ -175,7 +189,7 @@ Be specific. If it appears to be a chart or graph, describe what it measures and
 
 // ── Groq call ──────────────────────────────────────────────────────────────
 async function callGroq(prompt, mode) {
-  const smartModes = new Set(['deep_explain', 'page_summary']);
+  const smartModes = new Set(['deep_explain', 'page_summary', 'questions']);
   const model = smartModes.has(mode)
     ? (process.env.GROQ_SMART_MODEL || 'llama-3.3-70b-versatile')
     : GROQ_MODEL;
@@ -195,8 +209,8 @@ async function callGroq(prompt, mode) {
         },
         { role: 'user', content: prompt },
       ],
-      temperature: 0.25,
-      max_tokens:  mode === 'page_summary' ? 400 : mode === 'define_word' ? 80 : mode === 'image_context' ? 120 : 220,
+      temperature: mode === 'questions' ? 0.1 : 0.25,
+      max_tokens:  mode === 'questions' ? 900 : mode === 'page_summary' ? 400 : mode === 'define_word' ? 80 : mode === 'image_context' ? 120 : 220,
       top_p:       0.9,
     }),
   });
@@ -235,6 +249,49 @@ app.post('/api/summarize', rateLimit, async (req, res) => {
   } catch (err) {
     console.error('[TL;DR] Groq error:', err.message);
     res.status(500).json({ error: 'AI request failed', detail: err.message });
+  }
+});
+
+// ── Questions ──────────────────────────────────────────────────────────────
+// The primary intervention. A question the reader has to answer is the only
+// thing in this system that produces ground truth about comprehension.
+const questionCache = Q.createQuestionCache();
+
+app.post('/api/questions', questionRateLimit, async (req, res) => {
+  const { text = '', language = '', difficulty = '', count = 2, kind = 'recall' } = req.body || {};
+
+  if (!text || text.trim().length < 120) {
+    // Too short to ask anything meaningful about.
+    return res.status(400).json({ error: 'Passage too short for a question.' });
+  }
+
+  const opts = { count: Q.clampCount(count), kind, language };
+  const key = Q.contentHash(text, opts);
+
+  const cached = questionCache.get(key);
+  if (cached) return res.json({ questions: cached, cached: true });
+
+  if (!GROQ_API_KEY) {
+    return res.status(503).json({ error: 'No API key configured; question generation unavailable.' });
+  }
+
+  try {
+    const prompt = Q.buildQuestionPrompt(text, opts);
+    const raw = await callGroq(prompt, 'questions');
+    const questions = Q.parseQuestions(raw, text, opts);
+
+    // Every question must cite a sentence that is actually in the passage.
+    // When none survive that check we say so rather than shipping the model's
+    // best guess — the client falls back to an explanation.
+    if (!questions.length) {
+      return res.status(422).json({ error: 'No question passed validation for this passage.' });
+    }
+
+    questionCache.set(key, questions);
+    res.json({ questions, cached: false });
+  } catch (err) {
+    console.error('[TL;DR] Question generation failed:', err.message);
+    res.status(500).json({ error: 'Question generation failed', detail: err.message });
   }
 });
 

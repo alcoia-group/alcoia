@@ -18,14 +18,16 @@ import { STATES } from './state-engine.js';
 
 /* What each state earns, when it earns anything at all.
  *
- * P3 replaces `explain` with `ask` — a retrieval question, with explanation
- * demoted to the fallback after a wrong answer. Until the question endpoint
- * exists, `explain` is what we have. Do not read this table as a decision
- * that summarising is the right intervention; it isn't. */
+ * `ask` is a retrieval question about the passage. It is the primary
+ * intervention, not a summary: summarising removes the desirable difficulty
+ * that produces retention, and an answer is the only thing in this system that
+ * produces ground truth. Explanation is the fallback after a wrong answer, and
+ * the renderer also falls back to it when no question can be generated for a
+ * passage — see `handleAsk` in content.js. */
 export const STATE_ACTIONS = Object.freeze({
-  [STATES.STRUGGLING]: 'explain',
+  [STATES.STRUGGLING]: 'ask',
   [STATES.DRIFTING]:   'nudge',
-  [STATES.SKIMMING]:   'explain',
+  [STATES.SKIMMING]:   'ask',
   [STATES.ON_PACE]:    'none',
   [STATES.ABSENT]:     'none',
   [STATES.UNKNOWN]:    'none',
