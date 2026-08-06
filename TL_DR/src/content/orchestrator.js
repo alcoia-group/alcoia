@@ -366,6 +366,11 @@ export async function createOrchestrator(deps) {
     stopClassificationLoop,
     stop,
     getState: () => stateEngine.getState(),
+    // Aggregates for the receipt. Aggregates only — there is deliberately no
+    // accessor here that reaches a raw sample buffer.
+    progressionStats: () => progressionEntropy.stats(),
+    regressionStats: () => scrollRegression.stats(),
+    interactionStats: () => interactionSignals.stats(),
     getActiveParagraphEl: () => paragraphTracker.getActive()?.el || null,
     // Exposed for the popup's manual paths and for tests.
     stateEngine,

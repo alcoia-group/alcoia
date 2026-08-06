@@ -23,6 +23,7 @@ export function createScrollRegressionDetector(opts = {}) {
   let lastLeftAt      = new Map();   // paragraph index -> when the reader last left it
   let pending         = null;
   let lastEmitAt      = 0;
+  let regressionCount = 0;
 
   /* Feed it paragraph_change transitions from paragraph-tracker. */
   function update(transition) {
@@ -51,6 +52,7 @@ export function createScrollRegressionDetector(opts = {}) {
     else if (latencyMs != null && latencyMs >= SLOW_RETURN_MS) subtype = 'slow_return';
 
     lastEmitAt = t;
+    regressionCount += 1;
     pending = {
       type: 'regression',
       subtype,
@@ -68,7 +70,7 @@ export function createScrollRegressionDetector(opts = {}) {
   return {
     update,
     signal,
-    stats: () => ({ maxIndexReached }),
-    reset() { maxIndexReached = -1; lastLeftAt = new Map(); pending = null; lastEmitAt = 0; },
+    stats: () => ({ maxIndexReached, regressions: regressionCount }),
+    reset() { maxIndexReached = -1; lastLeftAt = new Map(); pending = null; lastEmitAt = 0; regressionCount = 0; },
   };
 }
