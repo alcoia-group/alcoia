@@ -85,8 +85,13 @@ section and a DPA both become blockers, not niceties.
 1. Does the backend log request bodies? If yes, paragraph text is retained server-side and
    §2 and §6 must say so.
 2. `chrome.storage.local` or `chrome.storage.sync`? Sync means data leaves the device.
-3. Does the receipt feature (planned, `the project notes` P4) transmit anything? If it is ever
-   shared with a lecturer, that is a disclosure and probably a DPA.
+3. **The receipt exists now (P4) and needs covering.** Verified behaviour, still to be
+   written up by a human: it is built only when the reader presses Alt+I or triggers it
+   from the popup; the full contents are shown before any copy, download or sign action;
+   it contains a hash of the URL rather than the URL; `auditReceipt()` refuses raw sensor
+   fields. The only thing that leaves the device is a signing request the reader clicks,
+   which returns the receipt and stores nothing server-side. If receipts are ever shared
+   with an institution, that is a disclosure and probably needs a DPA.
 4. Is there a paid tier with accounts? Then billing data, auth identifiers, and the
    payment processor all need covering — and `the project notes` requires human approval for
    anything touching payments or PII.
