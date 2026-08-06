@@ -52,19 +52,11 @@ The backend server exists because the Groq API key cannot be stored in the exten
 
 The Decision Tree was trained on a synthetic dataset generated from distributions derived from published reading research, primarily Rayner (1998), Just and Carpenter (1980), and Siegenthaler et al. (2011). Synthetic data was necessary because no public labelled gaze dataset exists for reading cognitive states.
 
-<<<<<<< HEAD
-The dataset contains 4,000 training rows balanced across the five classes. Each row represents 9 gaze features computed over a 2.5-second window. The tree is trained with limited depth, a minimum leaf size, and balanced class weights to stay robust against webcam noise. Test accuracy on a held-out split is 85%.
-
-After training, the tree is exported from sklearn as a JavaScript function containing plain if/else conditions. This function runs in the browser without any machine learning library, with no external dependencies, in under one millisecond per classification.
-
-The training notebook is at `tldr classifier/tldr_classifier_training.ipynb` (v2 at `tldr classifier/tldr_classifier_v2.ipynb`). Running all cells regenerates the dataset CSV, trains the model, produces evaluation charts, and exports a new `classifier.js`.
-=======
-The dataset contains 2,500 rows across five classes, 500 per class. Each row represents 9 gaze features computed over a 2.5-second window. Every row is then duplicated with Gaussian noise added to each feature, giving 5,000 rows in total. The tree is trained with a maximum depth of 7 and balanced class weights.
+The dataset contains 2,500 rows across five classes, 500 per class. Each row represents 9 gaze features computed over a 2.5-second window. Every row is then duplicated with Gaussian noise added to each feature, giving 5,000 rows in total. The tree is trained with a maximum depth of 7, a minimum leaf size, and balanced class weights, on 4,000 of those rows with the remaining 1,000 held out.
 
 After training, the tree is exported from sklearn as a JavaScript function containing plain if/else conditions. This function runs in the browser without any machine learning library, with no external dependencies, in under one millisecond per classification.
 
 The notebook that produced the tree currently shipping is `tldr classifier/tldr_classifier_training(1).ipynb`. Running all cells regenerates the dataset CSV, trains the model, produces evaluation charts, and exports a new `classifier.js`. A second notebook, `tldr_classifier_v2.ipynb`, exports a different tree that is not the one in the extension.
->>>>>>> cc088c25e13510bb50454dc15e5e38ec9eadc397
 
 ### On accuracy
 
