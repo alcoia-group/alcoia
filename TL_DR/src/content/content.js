@@ -211,6 +211,43 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   const responseSignals = responseModule.createResponseSignals();
   const recallModule = await loadModule('src/content/telemetry/session-recall.js');
   const sessionRecall = recallModule.createSessionRecall();
+
+  // ── Receipt ────────────────────────────────────────────────────────────
+  // Reader-generated only. Nothing below runs on a timer, and nothing leaves
+  // the machine without a click in the preview panel.
+  const receiptModule = await loadModule('src/content/receipt.js');
+  const receiptPanel = receiptModule.createReceiptPanel({
+    esc,
+    signReceipt: async (receipt) => {
+      const url = (backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/receipt/sign');
+      const j = await new Promise((resolve) => {
+        try {
+          chrome.runtime.sendMessage({ action: 'apiPost', url, body: { receipt } }, (resp) => {
+            if (chrome.runtime.lastError || !resp || !resp.ok) { resolve(null); return; }
+            resolve(resp.data);
+          });
+        } catch (e) { resolve(null); }
+      });
+      return j && j.receipt ? j.receipt : null;
+    },
+  });
+
+  function buildCurrentReceipt() {
+    const paragraphs = document.querySelectorAll('p, li, blockquote').length;
+    const wordCount = (document.body.innerText || '').trim().split(/\s+/).length;
+    return receiptModule.buildReceipt({
+      session: sessionTracker.snapshot(),
+      recall: responseSignals.stats(),
+      recallItems: responseSignals.history(),
+      reading: sessionRecall.stats(),
+      progression: orchestrator.progressionStats(),
+      regressions: orchestrator.regressionStats(),
+      interaction: orchestrator.interactionStats(),
+      document: { title: document.title, url: window.location.href, wordCount, paragraphs },
+    });
+  }
+
+  function showReceipt() { receiptPanel.show(buildCurrentReceipt()); }
   const questionCard = cardModule.createQuestionCard({
     ui,
     esc,
@@ -431,6 +468,13 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         focusRulerEnabled ? focusRuler.enable() : focusRuler.disable();
         chrome.storage.local.set({ sra_focus_ruler: focusRulerEnabled });
         showSimulateToast(focusRulerEnabled ? '👁 Focus Ruler on  (Alt+F)' : '👁 Focus Ruler off (Alt+F)');
+        return;
+      }
+
+      // Alt+I: show the reading receipt for this session
+      if (e.key === 'i' || e.key === 'I') {
+        e.preventDefault();
+        showReceipt();
         return;
       }
 
@@ -1404,6 +1448,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (msg.action === 'sessionRecall') {
       runSessionRecall(msg.count || 5);
       sendResponse({ status: 'ok', stats: sessionRecall.stats() });
+      return true;
+    }
+    if (msg.action === 'showReceipt') {
+      showReceipt();
+      sendResponse({ status: 'ok' });
       return true;
     }
     if (msg.action === 'recallStats') {
