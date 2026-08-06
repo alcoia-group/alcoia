@@ -7,6 +7,7 @@ const cors    = require('cors');
 const path    = require('path');
 const fs      = require('fs');
 const Q       = require('./questions');
+const Sig     = require('./receipt-signing');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -293,6 +294,47 @@ app.post('/api/questions', questionRateLimit, async (req, res) => {
     console.error('[TL;DR] Question generation failed:', err.message);
     res.status(500).json({ error: 'Question generation failed', detail: err.message });
   }
+});
+
+// ── Receipts ───────────────────────────────────────────────────────────────
+// Signing only. Nothing is stored: the receipt goes back to the reader who
+// sent it, and the server keeps no copy. Storing them would make this a
+// record-keeping system about people's reading, which is not what it is.
+const RECEIPT_SECRET = process.env.RECEIPT_SECRET || '';
+
+if (!RECEIPT_SECRET) {
+  console.warn('  RECEIPT_SECRET not set — receipt signing disabled (receipts still generate, unsigned)');
+}
+
+app.post('/api/receipt/sign', rateLimit, (req, res) => {
+  const receipt = req.body && req.body.receipt;
+  if (!receipt || typeof receipt !== 'object') {
+    return res.status(400).json({ error: 'No receipt provided.' });
+  }
+  if (!RECEIPT_SECRET) {
+    return res.status(503).json({ error: 'Signing is not configured on this server.' });
+  }
+  try {
+    res.json({ receipt: Sig.sign(receipt, RECEIPT_SECRET) });
+  } catch (err) {
+    res.status(500).json({ error: 'Signing failed', detail: err.message });
+  }
+});
+
+app.post('/api/receipt/verify', rateLimit, (req, res) => {
+  const receipt = req.body && req.body.receipt;
+  if (!receipt || typeof receipt !== 'object') {
+    return res.status(400).json({ error: 'No receipt provided.' });
+  }
+  const result = Sig.verify(receipt, RECEIPT_SECRET);
+  // A valid signature means the artifact is unaltered. It is not evidence that
+  // the reading happened — the figures come from the reader's own browser.
+  res.json({
+    ...result,
+    means: result.valid
+      ? 'This receipt is unchanged since the server issued it. It is not proof that the reading occurred as described.'
+      : 'This receipt does not match a signature this server issued.',
+  });
 });
 
 // ── Demo page ──────────────────────────────────────────────────────────────
