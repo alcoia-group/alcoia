@@ -22,18 +22,10 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   // ── Constants ──────────────────────────────────────────────────────────
   const BACKEND_DEFAULT     = 'http://localhost:3000/api/summarize';
   const MIN_SELECTION_CHARS = 15;
-  const CLASSIFY_INTERVAL   = 3000;  // classify every 3s — slightly less CPU, still responsive
-<<<<<<< HEAD
-  const ACTION_COOLDOWN     = 20000;  // 20s per-paragraph cooldown — same paragraph won't re-trigger
-  const GLOBAL_ACTION_SPACING = 15000; // min 15s between ANY two auto popups, even across paragraphs
-=======
   // Interruption cooldowns and budget now live in intervention-policy.js —
   // one place, applied to telemetry and gaze alike.
->>>>>>> cc088c25e13510bb50454dc15e5e38ec9eadc397
-  const POPUP_MARGIN        = 14;
-  const MAX_POPUPS          = 5;   // hard cap before oldest unpinned is evicted
-  // All currently open floating popups — keyed by paragraph fingerprint
-  const openPopups          = new Map();
+  // Popup geometry, the open-popup registry and the eviction cap now live in
+  // ui-controller.js — it owns everything the reader sees.
   // Fingerprints of paragraphs currently awaiting an AI response (race-condition guard)
   const inFlightFingerprints = new Set();
   // Session-level cache: mode:fingerprint → summary text (cleared on page unload)
@@ -50,9 +42,8 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let debugEnabled       = false;
   let lastCogState       = 'unknown';
   let lastActionAt       = 0;           // manual/simulate paths only; automatic ones use the policy
-  let classifyTimer      = null;
+  let orchestrator       = null;
   let currentParagraph   = null;
-  let lastHighlighted    = null;
   let pdfHandler         = null;
   let pptxHandler        = null;
   let cameraIsReady      = false;
@@ -71,8 +62,6 @@ const _warn = (...a) => console.warn('[TL;DR]', ...a);
   let prevParagraphText   = '';    // for AI context window
 
   // ── Gaze quality tracking ──────────────────────────────────────────────
-  let lowQualityStreak    = 0;
-  let lastQualityWarnAt   = 0;
 
   // ── Highlight persistence ──────────────────────────────────────────────
   function saveHighlight(text, summary, state) {
@@ -191,180 +180,114 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     // abstains rather than reporting a fraction it cannot compute.
     getContentRect: () => {
       try {
-        const el = paragraphTracker.getActive()?.el || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
+        const el = orchestrator?.getActiveParagraphEl()
+          || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
         return el ? el.getBoundingClientRect() : null;
       } catch (e) { return null; }
     },
   });
   const { classifyGazeState, COGNITIVE_STATE_ACTIONS } = classModule;
 
-  // ── Fusion engine ──────────────────────────────────────────────────────
-  // Telemetry and gaze used to fire their own popups independently, with no
-  // shared state and no shared budget. Both now feed one engine, and one
-  // subscriber below decides whether anything reaches the reader.
-  const engineModule = await loadModule('src/content/state-engine.js');
-  const policyModule = await loadModule('src/content/intervention-policy.js');
-  const stateEngine  = engineModule.createReadingStateEngine();
-  const interventionPolicy = policyModule.createInterventionPolicy();
-  const STATES = engineModule.STATES;
+  // ── UI ─────────────────────────────────────────────────────────────────
+  const uiModule = await loadModule('src/content/ui-controller.js');
+  const { esc, clamp, applyDarkMode } = uiModule;
+  const ui = uiModule.createUIController({
+    // Read through a getter: the storage listener reassigns these at runtime
+    // and a captured copy would go stale.
+    getSettings: () => ({
+      highlightEnabled, pinDefault, autohideEnabled, autohideTimeoutSec,
+    }),
+    fetchSummary: (...a) => fetchSummary(...a),
+  });
+  const {
+    openPopups, highlightElement, closePopup, flashPopup, hidePopup,
+    reservePopup, showPopup, renderPopup,
+    showNudge, showSimulateToast, showQualityToast,
+  } = ui;
 
-  // ── Telemetry detectors ────────────────────────────────────────────────
-  // These need no permission and work with the camera off, which is the
-  // default. Paragraph tracking in particular used to hang off the gaze
-  // point, so none of this fired unless the webcam was running.
-  const paraTrackModule = await loadModule('src/content/telemetry/paragraph-tracker.js');
-  const regressionModule = await loadModule('src/content/telemetry/scroll-regression.js');
-  const interactionModule = await loadModule('src/content/telemetry/interaction-signals.js');
-  const dynamicsModule = await loadModule('src/content/telemetry/scroll-dynamics.js');
+  // ── Question layer ─────────────────────────────────────────────────────
+  const responseModule = await loadModule('src/content/telemetry/response-signals.js');
+  const cardModule     = await loadModule('src/content/question-card.js');
+  const responseSignals = responseModule.createResponseSignals();
+  const recallModule = await loadModule('src/content/telemetry/session-recall.js');
+  const sessionRecall = recallModule.createSessionRecall();
+  const questionCard = cardModule.createQuestionCard({
+    ui,
+    esc,
+    responseSignals,
+    // Scoped to the sentence the reader missed, not the whole paragraph.
+    fetchExplanation: (spanText) => fetchSummary(spanText, 'explain_more'),
+    onAnswered: (record) => {
+      // An answer outranks every telemetry signal — see state-engine.js.
+      try { orchestrator.pumpTelemetry(record); } catch (e) {}
+      try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
+      // A paragraph already answered correctly is a poor use of a recall slot.
+      if (record.paragraphKey) sessionRecall.recordAnswered(record.paragraphKey, record.correct);
+    },
+    onDismissed: () => { /* declining to be tested says nothing; record nothing */ },
+  });
 
-  const cursorModule = await loadModule('src/content/telemetry/cursor-tracking.js');
-  const entropyModule = await loadModule('src/content/telemetry/progression-entropy.js');
-
-  const paragraphTracker = paraTrackModule.createParagraphTracker({ minWords: 20 });
-  const scrollRegression = regressionModule.createScrollRegressionDetector();
-  const interactionSignals = interactionModule.createInteractionSignals();
-  const scrollDynamics = dynamicsModule.createScrollDynamics();
-  const cursorTracker = cursorModule.createCursorTracker();
-  const progressionEntropy = entropyModule.createProgressionEntropy();
-
-  // Drains every detector and hands the batch over in one go, so the engine
-  // sees a whole moment rather than a sequence of unrelated nudges.
-  function pumpTelemetry(extra) {
-    const batch = [];
-    for (const s of [scrollRegression.signal(), scrollDynamics.signal(), progressionEntropy.signal()]) if (s) batch.push(s);
-    const interactions = interactionSignals.signal();
-    if (interactions) batch.push(...interactions);
-    if (extra) batch.push(extra);
-    if (!batch.length) return;
-    stateEngine.update({ telemetry: batch, gaze: currentGazeView(), idle: buildIdleView() });
-  }
-
-  // Viewport-driven paragraph tracking. Feeds the comprehension monitor's
-  // reading-rate maths and the regression detector's paragraph indices.
-  function syncParagraph() {
-    if (!comprehensionCheckEnabled) return;
-    let transition = null;
-    try {
-      // A reader tracking text with the mouse gives a measured reading
-      // position; fall back to the viewport heuristic when they aren't.
-      transition = paragraphTracker.update(cursorTracker.getPointerY());
-    } catch (e) { return; }
-    if (!transition) return;
-
-    let speedSignal = null;
-    if (transition.left) {
-      try { speedSignal = comprehensionMonitor.leaveParagraph(); } catch (e) {}
-      if (transition.left.el) {
-        prevParagraphText = (transition.left.el.innerText || transition.left.el.textContent || '')
-          .trim().slice(0, 800);
-      }
-    }
-    if (transition.entered?.el) {
-      try { comprehensionMonitor.enterParagraph(transition.entered.el); } catch (e) {}
-      currentParagraph = { type: 'dom', data: transition.entered.el };
-    }
-
-    try { scrollRegression.update(transition); } catch (e) {}
-    try { progressionEntropy.update(transition); } catch (e) {}
-    pumpTelemetry(speedSignal);
-  }
-
-  // Latest reading from the gaze pipeline, if any. Written by the classify
-  // loop, read whenever a telemetry signal arrives so the engine can consider
-  // both at once instead of them racing each other to the reader.
-  let lastGazeLabel   = null;
-  let lastGazeQuality = 0;
-
-  function currentGazeView() {
-    if (!eyeTrackingEnabled) return { enabled: false };
-    let presence = null;
-    try { presence = featureExtractor.presence(); } catch (e) {}
-    return {
-      enabled: true,
-      label: lastGazeLabel,
-      quality: lastGazeQuality,
-      lastSampleAt: lastGazeReceivedAt || null,
-      facePresent: presence ? presence.face_present : null,
-      onPageFraction: presence ? presence.on_page_fraction : null,
-    };
-  }
-
-  // Last deliberate input from the reader. Used only to spot someone who has
-  // stopped making progress — never stored, never sent anywhere.
-  let lastInputAt = Date.now();
-  const markInput = () => { lastInputAt = Date.now(); };
-  for (const ev of ['scroll', 'mousemove', 'keydown', 'wheel', 'touchstart']) {
-    window.addEventListener(ev, markInput, { passive: true });
-  }
-
-  function buildIdleView() {
-    let expectation = null;
-    try { expectation = comprehensionMonitor.getCurrentExpectation(); } catch (e) {}
-    if (!expectation) return null;
-    return {
-      pageFocused:  document.hasFocus(),
-      msSinceInput: Date.now() - lastInputAt,
-      expectedMs:   expectation.expectedMs,
-    };
-  }
-
-  // The only place an automatic interruption can reach the reader.
-  // The handler awaits, so guard against a second state arriving mid-render.
-  let interventionInFlight = false;
-
-  stateEngine.subscribe(async (state) => {
-    lastCogState = state.label;
-    try { chrome.storage.local.set({ sra_current_state: state.label }); } catch (e) {}
-    try { sessionTracker.recordState(state.label); } catch (e) {}
-    if (focusRulerEnabled) { try { focusRuler.adaptToState(state.label); } catch (e) {} }
-
-    const currentEl = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
-    const decision  = interventionPolicy.evaluate(state, { currentEl });
-
-    if (debugEnabled) {
-      _log(`State: ${state.label} (conf ${state.confidence.toFixed(2)}, camera ${state.cameraContribution.toFixed(2)}) — ${decision.allow ? 'ACT: ' + decision.action : 'hold: ' + decision.reason}`);
-    }
-    if (!decision.allow) return;
-    if (interventionInFlight) return;
-    interventionInFlight = true;
-
-    try {
-      // With the camera off there is no gaze point, so nothing has told us
-      // which paragraph the reader is on. Fall back to the middle of the
-      // viewport rather than dropping the interruption.
-      let target = currentEl;
-      if (!target) {
-        try {
-          const para = await findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
-          if (para?.type === 'dom') { currentParagraph = para; target = para.data; }
-        } catch (e) {}
-      }
-
-      let shown = false;
-      if (decision.action === 'nudge') {
-        showNudge(target);
-        if (target) highlightElement(target, 3000);
-        shown = true;
-      } else if (state.signal) {
+  // ── Detection pipeline ─────────────────────────────────────────────────
+  // orchestrator.js owns the detectors, the state engine and the interruption
+  // budget. It decides; this file renders. onIntervention returns whether
+  // anything actually reached the screen, and the budget is spent only on a
+  // yes — an offer that bails out here must not burn one of the reader's five.
+  const orchModule = await loadModule('src/content/orchestrator.js');
+  orchestrator = await orchModule.createOrchestrator({
+    loadModule,
+    comprehensionMonitor,
+    featureExtractor,
+    classifyGazeState,
+    getSmoothedState,
+    gazeUtils,
+    dyslexiaUtils,
+    langDetect: langDetectModule,
+    // Read live: the storage listener reassigns these at runtime.
+    settings: () => ({
+      comprehensionCheckEnabled, eyeTrackingEnabled, focusRulerEnabled,
+      debugEnabled, dyslexiaEnabled, personalBaseline, scriptInfo,
+    }),
+    host: {
+      sessionTracker,
+      focusRuler,
+      log: _log,
+      findParagraphAt: (x, y) => findParagraphAt(x, y),
+      getCurrentParagraph: () => currentParagraph,
+      setCurrentParagraph: (p) => { currentParagraph = p; },
+      setPrevParagraphText: (t) => { prevParagraphText = t; },
+      setCogState: (label) => { lastCogState = label; },
+      getLastGazePoint: () => lastGazePt,
+      // Reading an open card is not fresh confusion. Without this, letting your
+      // gaze settle on a popup pops another one on top of it.
+      isReadingAPopup: () => { try { return ui.isGazeOverAnyPopup(lastGazePt); } catch (e) { return false; } },
+      getLastGazeReceivedAt: () => lastGazeReceivedAt,
+      onQualityWarning: () => showQualityToast(),
+      onParagraphRead: (text, dwellMs) => sessionRecall.recordRead(text, dwellMs),
+      onStruggle: (text) => sessionRecall.recordStruggle(text),
+      onGazeFeatures: (rawFeatures) => {
+        if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
+        else forceStopIdle();
+      },
+      onIntervention: async (decision, state, target) => {
+        if (decision.action === 'nudge') {
+          showNudge(target);
+          if (target) highlightElement(target, 3000);
+          return true;
+        }
+        if (decision.action === 'ask') {
+          return await handleAsk(decision, state, target);
+        }
         // A telemetry signal knows which paragraph it came from.
-        shown = await handleComprehensionSignal(state.signal, decision.evidence, target);
-      } else if (currentParagraph) {
-        await triggerAIForParagraph(currentParagraph, state.label);
-        shown = true;
-      }
-
-      // Budget is spent once, and only for something the reader actually saw.
-      // Recording before rendering would let a bailed-out offer burn one of
-      // the five they get per session.
-      if (shown) {
-        interventionPolicy.record(decision);
-        try { sessionTracker.recordSignal(state.label, decision.action, decision.evidence[0] || ''); } catch (e) {}
-      } else if (debugEnabled) {
-        _log(`Interruption dropped before render (${state.label}) — budget not spent`);
-      }
-    } finally {
-      interventionInFlight = false;
-    }
+        if (state.signal) {
+          return await handleComprehensionSignal(state.signal, decision.evidence, target);
+        }
+        if (currentParagraph) {
+          await triggerAIForParagraph(currentParagraph, state.label);
+          return true;
+        }
+        return false;
+      },
+    },
   });
 
   // ── Load settings ──────────────────────────────────────────────────────
@@ -406,55 +329,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   });
 
   // ── Utilities ──────────────────────────────────────────────────────────
-  const esc   = (s = '') => s.replace(/[&<>"']/g, c =>
-    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-
-  // ── Dark mode (in-page overlays) ───────────────────────────────────────
-  function applyDarkMode(enabled) {
-    const ID = 'sra-dark-styles';
-    if (!enabled) { document.getElementById(ID)?.remove(); return; }
-    if (document.getElementById(ID)) return;
-    const s = document.createElement('style');
-    s.id = ID;
-    s.textContent = `
-      .sra-popup { background: rgba(22,26,24,0.97) !important; color: #e2e2dc !important; border-color: rgba(80,160,120,0.18) !important; box-shadow: 0 8px 28px rgba(0,0,0,0.45) !important; }
-      .sra-popup .sra-state-badge { background: rgba(80,160,120,0.1) !important; color: #7dd3b0 !important; border-color: rgba(80,160,120,0.25) !important; }
-      .sra-popup .sra-popup-body { color: #e2e2dc !important; }
-      .sra-popup .sra-btn-primary  { background: #2a9e6e !important; }
-      .sra-popup .sra-btn-secondary{ background: #2563a8 !important; }
-      .sra-popup .sra-ctrl-btn     { color: #666 !important; }
-      .sra-popup-divider { background: rgba(80,160,120,0.12) !important; }
-      .sra-page-summary-panel  { background: #1a1e1c !important; color: #e2e2dc !important; }
-      .sra-page-summary-panel h2 { color: #7dd3b0 !important; }
-      .sra-page-summary-panel .sra-ps-close { color: #555 !important; }
-      .sra-page-summary-panel .sra-ps-close:hover { color: #aaa !important; }
-      .sra-page-summary-body strong { color: #7dd3b0 !important; }
-      #sra-reading-map { background: rgba(18,22,20,0.97) !important; border-color: rgba(80,160,120,0.12) !important; }
-      .sra-map-header  { color: #7a7a72 !important; border-color: rgba(80,160,120,0.1) !important; }
-      .sra-map-heading { color: #b8b8b2 !important; }
-      .sra-map-heading:hover   { background: rgba(80,160,120,0.07) !important; }
-      .sra-map-heading.current { color: #7dd3b0 !important; border-left-color: #7dd3b0 !important; }
-      .sra-map-event       { color: #888 !important; }
-      .sra-map-events-label{ color: #555 !important; }
-      .sra-map-divider     { background: rgba(80,160,120,0.1) !important; }
-      .sra-map-progress-bar{ background: rgba(80,160,120,0.12) !important; }
-      #sra-color-picker { background: #1e2422 !important; border-color: rgba(255,255,255,0.08) !important; }
-    `;
-    document.head.appendChild(s);
-  }
-
-  // ── Paragraph highlight ────────────────────────────────────────────────
-  function highlightElement(el, ms = 5000) {
-    if (!highlightEnabled || !el || el === document.body || el === document.documentElement) return;
-    clearHighlight();
-    el.classList.add('sra-para-highlight');
-    lastHighlighted = el;
-    setTimeout(clearHighlight, ms);
-  }
-  function clearHighlight() {
-    if (lastHighlighted) { lastHighlighted.classList.remove('sra-para-highlight'); lastHighlighted = null; }
-  }
+  // esc and clamp live in ui-controller.js, imported above with the rest of it.
 
   // ── AI fetch ───────────────────────────────────────────────────────────
   async function fetchSummary(text, mode = 'tldr', context = '') {
@@ -504,199 +379,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
   }
 
-  // ── Popup positioning ──────────────────────────────────────────────────
-  function placePopup(root, anchorRect, avoidRects) {
-    root.style.visibility = 'hidden';
-    root.style.display    = 'block';
-    const pw = root.offsetWidth  || 360;
-    const ph = root.offsetHeight || 150;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const m  = POPUP_MARGIN;
-    const a  = anchorRect || { left: vw/2-100, right: vw/2+100, top: vh/2-30, bottom: vh/2+30 };
-    const av = avoidRects || [];
-
-    function overlaps(cx, cy) {
-      return av.some(r =>
-        cx < r.right + m && cx + pw > r.left - m &&
-        cy < r.bottom + m && cy + ph > r.top - m
-      );
-    }
-
-    // Shift a candidate down past any blocking popup, up to 6 attempts
-    function settle(left, top) {
-      for (let i = 0; i < 6; i++) {
-        if (!overlaps(left, top)) return { left, top };
-        const blocker = av.find(r =>
-          left < r.right + m && left + pw > r.left - m &&
-          top  < r.bottom + m && top  + ph > r.top - m
-        );
-        if (!blocker || blocker.bottom + m + ph > vh - m) return null;
-        top = blocker.bottom + m;
-      }
-      return null;
-    }
-
-    const candidates = [];
-    if (a.right  + m + pw <= vw - m)  candidates.push({ left: a.right + m,      top: clamp(a.top, m, vh - ph - m) });
-    if (a.left   - m - pw >= m)        candidates.push({ left: a.left - m - pw,   top: clamp(a.top, m, vh - ph - m) });
-    if (a.bottom + m + ph <= vh - m)   candidates.push({ left: clamp(a.left, m, vw - pw - m), top: a.bottom + m });
-    if (a.top    - m - ph >= m)        candidates.push({ left: clamp(a.left, m, vw - pw - m), top: a.top - m - ph });
-
-    let chosen = null;
-    for (const c of candidates) {
-      chosen = settle(c.left, c.top);
-      if (chosen) break;
-    }
-    if (!chosen) chosen = { left: vw - pw - m, top: m };
-
-    root.style.left       = clamp(chosen.left, m, vw - pw - m) + 'px';
-    root.style.top        = clamp(chosen.top,  m, vh - ph - m) + 'px';
-    root.style.position   = 'fixed';
-    root.style.visibility = '';
-  }
-
-  function closePopup(el, fingerprint) {
-    if (fingerprint) openPopups.delete(fingerprint);
-    clearTimeout(el._hideT);
-    el.classList.remove('show');
-    setTimeout(() => { try { el.remove(); } catch (_) {} }, 250);
-  }
-
-  // (Re)arm the autohide countdown for a popup. The timer only runs when
-  // autohide is on, the popup isn't pinned, and the user is NOT currently
-  // interacting with it (mouse hovering or gaze resting on it). This makes
-  // the countdown start only once the user has finished reading/interacting.
-  function armAutohide(el, fingerprint) {
-    clearTimeout(el._hideT);
-    if (autohideEnabled && el.dataset.pinned !== 'true' && !el._mouseOver && !el._gazeOver) {
-      el._hideT = setTimeout(() => closePopup(el, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
-    }
-  }
-
-  // True when the current gaze point rests inside any open popup — used to
-  // avoid firing a new cognitive-state action while the user reads a popup.
-  function isGazeOverAnyPopup() {
-    if (!lastGazePt) return false;
-    for (const { el } of openPopups.values()) {
-      if (!el || !document.contains(el)) continue;
-      const r = el.getBoundingClientRect();
-      if (lastGazePt.x >= r.left && lastGazePt.x <= r.right &&
-          lastGazePt.y >= r.top  && lastGazePt.y <= r.bottom) return true;
-    }
-    return false;
-  }
-
-  function flashPopup(el) {
-    const orig = el.style.boxShadow;
-    el.style.transition = 'box-shadow 0.12s';
-    el.style.boxShadow  = '0 0 0 3px rgba(26,126,93,0.65)';
-    setTimeout(() => { el.style.boxShadow = orig; }, 500);
-  }
-
-  // ── Render popup (multi-popup: each paragraph gets its own card) ────────
-  function renderPopup(anchorRect, html, meta = {}) {
-    // Fix: no text → no dedup key and no meaningful content; bail immediately
-    if (!meta.text || !meta.text.trim()) return;
-
-    const fingerprint = meta.text.slice(0, 80).trim();
-
-    // Dedup: same paragraph already has a visible popup — just flash it
-    if (openPopups.has(fingerprint)) {
-      const entry = openPopups.get(fingerprint);
-      if (entry.el && document.contains(entry.el)) { flashPopup(entry.el); return; }
-      openPopups.delete(fingerprint);
-    }
-
-    // Fix: enforce MAX_POPUPS cap — evict the oldest unpinned popup first
-    if (openPopups.size >= MAX_POPUPS) {
-      for (const [fp, { el }] of openPopups.entries()) {
-        if (!el || !document.contains(el)) { openPopups.delete(fp); break; }
-        if (el.dataset.pinned !== 'true') { closePopup(el, fp); break; }
-      }
-      // If every open popup is pinned and we're at the cap, don't create another
-      if (openPopups.size >= MAX_POPUPS) return;
-    }
-
-    const root = document.createElement('div');
-    root.className = 'sra-popup';
-    document.body.appendChild(root);
-    openPopups.set(fingerprint, { el: root });
-
-    const badge = meta.trigger
-      ? `<div class="sra-state-badge">${esc(meta.triggerLabel || meta.trigger)}</div>`
-      : meta.source === 'selection'
-        ? `<div class="sra-state-badge">selected text</div>`
-        : '';
-
-    root.innerHTML = `
-      <div class="sra-controls">
-        <button class="sra-ctrl-btn sra-pin-btn" title="Pin">📌</button>
-        <button class="sra-ctrl-btn sra-close-btn" title="Close">✕</button>
-      </div>
-      <div class="sra-popup-body" dir="auto">${badge}${html}</div>
-      <div class="sra-popup-divider"></div>
-      <div class="sra-actions">
-        <button class="sra-btn sra-btn-primary  sra-explain-btn">Explain More</button>
-        <button class="sra-btn sra-btn-secondary sra-note-btn">Save Note</button>
-      </div>`;
-
-    root.querySelector('.sra-close-btn').onclick = () => closePopup(root, fingerprint);
-
-    const pinBtn = root.querySelector('.sra-pin-btn');
-    if (pinDefault) { root.dataset.pinned = 'true'; pinBtn.classList.add('active'); }
-    pinBtn.onclick = () => {
-      const pinned = root.dataset.pinned !== 'true';
-      root.dataset.pinned = pinned.toString();
-      pinBtn.classList.toggle('active', pinned);
-      clearTimeout(root._hideT);
-      if (!pinned) {
-        // Fix: unpin always starts a countdown — autohide time if enabled, else a
-        // generous 60 s fallback so forgotten unpinned cards don't accumulate forever
-        const secs = autohideEnabled ? Math.max(3, autohideTimeoutSec) : 60;
-        root._hideT = setTimeout(() => closePopup(root, fingerprint), secs * 1000);
-      }
-    };
-
-    root.querySelector('.sra-explain-btn').onclick = async () => {
-      const btn = root.querySelector('.sra-explain-btn');
-      btn.disabled = true; btn.textContent = 'Thinking…';
-      const s = await fetchSummary(meta.text || '', 'explain_more');
-      const body = root.querySelector('.sra-popup-body');
-      if (body && s) body.innerHTML = badge + `<div>${esc(s)}</div>`;
-      btn.textContent = 'Explain More'; btn.disabled = false;
-      // Reset the autohide timer so the user has time to read the expanded content
-      armAutohide(root, fingerprint);
-    };
-
-    root.querySelector('.sra-note-btn').onclick = () => {
-      chrome.runtime.sendMessage({ action: 'saveNote', note: { text: meta.text || '', meta } });
-      const btn = root.querySelector('.sra-note-btn');
-      btn.textContent = 'Saved ✓'; btn.disabled = true;
-    };
-
-    const avoidRects = [...openPopups.values()]
-      .filter(e => e.el !== root && document.contains(e.el) && e.el.classList.contains('show'))
-      .map(e => e.el.getBoundingClientRect());
-
-    placePopup(root, anchorRect, avoidRects);
-    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
-
-    // Pause the autohide countdown while the user hovers the popup; restart it
-    // (from full duration) once the pointer leaves.
-    root.addEventListener('mouseenter', () => { root._mouseOver = true; clearTimeout(root._hideT); });
-    root.addEventListener('mouseleave', () => { root._mouseOver = false; armAutohide(root, fingerprint); });
-
-    armAutohide(root, fingerprint);
-  }
-
-  // Close all unpinned popups (Esc)
-  function hidePopup() {
-    for (const [fp, { el }] of [...openPopups.entries()]) {
-      if (!el || !document.contains(el)) { openPopups.delete(fp); continue; }
-      if (el.dataset.pinned !== 'true') closePopup(el, fp);
-    }
-  }
 
   if (!window.__sra_esc_installed) {
     window.__sra_esc_installed = true;
@@ -710,8 +392,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       const simState = stateMap[e.key];
       if (simState) {
         e.preventDefault();
-        // TEMP (do not commit): "Simulating: <state>" toast disabled for testing — restore this line
-        // showSimulateToast(simState);
+        showSimulateToast(simState);
         lastActionAt = 0;
         lastCogState = simState;
         chrome.storage.local.set({ sra_current_state: simState });
@@ -753,6 +434,13 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         return;
       }
 
+      // Alt+R: review what you have read this session
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        runSessionRecall();
+        return;
+      }
+
       // Alt+N: open notes page
       if (e.key === 'n' || e.key === 'N') {
         e.preventDefault();
@@ -776,74 +464,123 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     });
   }
 
-  // ── Simulate toast — small on-screen indicator ─────────────────────────
-  function showSimulateToast(state) {
-    const existing = document.getElementById('sra-sim-toast');
-    if (existing) existing.remove();
 
-    const labels = {
-      confused:   '🤔 Simulating: Confused  (Alt+1)',
-      overloaded: '🧠 Simulating: Overloaded (Alt+2)',
-      zoning_out: '💤 Simulating: Zoning Out (Alt+3)',
-      skimming:   '⚡ Simulating: Skimming   (Alt+4)',
-      focused:    '✅ Simulating: Focused    (Alt+5)',
+  // ── Questions ──────────────────────────────────────────────────────────
+  // The primary intervention. Asking beats summarising because an answer is
+  // the only thing here that produces ground truth, and because summarising
+  // removes the difficulty that produces retention in the first place.
+  const questionsUrl = () => (backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/questions');
+
+  async function fetchQuestions(text, opts = {}) {
+    if (!text || text.trim().length < 120) return [];
+    const body = {
+      text: text.slice(0, 3500),
+      language: (document.documentElement.lang || '').slice(0, 5),
+      count: opts.count || 1,
+      kind: opts.kind || 'recall',
     };
-
-    const toast = document.createElement('div');
-    toast.id = 'sra-sim-toast';
-    Object.assign(toast.style, {
-      position:       'fixed',
-      bottom:         '24px',
-      left:           '50%',
-      transform:      'translateX(-50%)',
-      background:     '#1A7E5D',
-      color:          'white',
-      padding:        '9px 20px',
-      borderRadius:   '8px',
-      fontFamily:     "'Fraunces', Georgia, serif",
-      fontSize:       '13px',
-      fontStyle:      'italic',
-      zIndex:         '2147483646',
-      opacity:        '0',
-      transition:     'opacity 0.2s ease',
-      pointerEvents:  'none',
-      whiteSpace:     'nowrap',
-      boxShadow:      '0 4px 16px rgba(0,0,0,0.2)',
+    // Through the background worker, for the same CORS reason as fetchSummary:
+    // a content script's fetch carries the host page's origin and the server
+    // rejects it. A direct fetch here works only when the page happens to be
+    // same-origin with the server, which is true in tests and false in life.
+    const j = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ action: 'apiPost', url: questionsUrl(), body }, (resp) => {
+          if (chrome.runtime.lastError || !resp) { resolve(null); return; }
+          if (!resp.ok) {
+            // 422 means nothing passed the server's citation check; 503 means
+            // no key. Both are ordinary outcomes and both fall back to
+            // explaining rather than showing the reader an error.
+            _log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
+            resolve(null);
+            return;
+          }
+          resolve(resp.data);
+        });
+      } catch (e) { resolve(null); }
     });
-    toast.textContent = labels[state] || state;
-    document.body.appendChild(toast);
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => { toast.style.opacity = '1'; });
-    });
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      setTimeout(() => { try { toast.remove(); } catch(e){} }, 250);
-    }, 1800);
+    if (!j) return [];
+    return Array.isArray(j.questions) ? j.questions : [];
   }
 
-  // ── Gaze quality toast ─────────────────────────────────────────────────
-  function showQualityToast() {
-    const existing = document.getElementById('sra-quality-toast');
-    if (existing) existing.remove();
-    const toast = document.createElement('div');
-    toast.id = 'sra-quality-toast';
-    Object.assign(toast.style, {
-      position:     'fixed', top: '14px', right: '14px',
-      background:   '#2c2c2a', color: '#f0ede8',
-      padding:      '9px 16px', borderRadius: '9px',
-      fontFamily:   "'Fraunces', Georgia, serif", fontSize: '12px',
-      zIndex:       '2147483640', opacity: '0',
-      transition:   'opacity 0.2s ease', pointerEvents: 'none',
-      boxShadow:    '0 4px 14px rgba(0,0,0,0.25)', maxWidth: '240px', lineHeight: '1.5',
+  /* Returns true only if a card reached the screen. */
+  async function handleAsk(decision, state, target) {
+    const el = target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
+    const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
+    if (!text) return false;
+
+    const questions = await fetchQuestions(text);
+    if (!questions.length) {
+      // No question could be generated or none cited its evidence. Fall back
+      // to the explanation card rather than dropping the interruption.
+      if (state.signal) return await handleComprehensionSignal(state.signal, decision.evidence, el);
+      if (el) { await triggerAIForParagraph({ type: 'dom', data: el }, state.label); return true; }
+      return false;
+    }
+
+    let anchorRect = null;
+    try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
+    if (el) highlightElement(el, 4000);
+
+    return questionCard.show(questions[0], {
+      evidence: decision.evidence,
+      anchorRect,
+      paragraphKey: text.slice(0, 80).trim(),
     });
-    toast.textContent = 'Low camera quality — move to better lighting or centre your face in frame.';
-    document.body.appendChild(toast);
-    requestAnimationFrame(() => requestAnimationFrame(() => { toast.style.opacity = '1'; }));
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      setTimeout(() => { try { toast.remove(); } catch(e){} }, 250);
-    }, 5000);
+  }
+
+  // ── Session recall ─────────────────────────────────────────────────────
+  // Retrieval practice over what was actually read, weighted toward the
+  // paragraphs that gave the reader trouble. Reader-initiated only: this never
+  // fires on its own, and nothing about it is submitted anywhere.
+  let recallRunning = false;
+
+  async function runSessionRecall(count = 5) {
+    if (recallRunning) return;
+    const picked = sessionRecall.select(count);
+    if (!picked.length) {
+      showSimulateToast('Nothing read yet to review');
+      return;
+    }
+
+    recallRunning = true;
+    try {
+      const questions = [];
+      for (const entry of picked) {
+        const qs = await fetchQuestions(entry.text, { count: 1 });
+        if (qs.length) questions.push({ question: qs[0], paragraphKey: entry.text.slice(0, 80).trim() });
+        if (questions.length >= count) break;
+      }
+
+      if (!questions.length) {
+        showSimulateToast('Could not prepare a review right now');
+        return;
+      }
+
+      // One at a time. A wall of questions is a test; one question is a check.
+      for (const item of questions) {
+        const shown = questionCard.show(item.question, {
+          evidence: ['Reviewing what you read this session'],
+          paragraphKey: item.paragraphKey,
+        });
+        if (!shown) continue;
+        await waitForCardToClose();
+      }
+    } finally {
+      recallRunning = false;
+    }
+  }
+
+  function waitForCardToClose() {
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const tick = setInterval(() => {
+        const open = document.querySelector('.sra-popup .sra-q-options');
+        // Resolve on close, or bail out after two minutes so a forgotten card
+        // cannot wedge the run forever.
+        if (!open || Date.now() - started > 120000) { clearInterval(tick); resolve(); }
+      }, 400);
+    });
   }
 
   // ── Text highlighting (Ctrl+drag to select) ────────────────────────────
@@ -1002,13 +739,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       }
       return;
     }
-  }
-
-  // ── Focus nudge ────────────────────────────────────────────────────────
-  function showNudge(el) {
-    if (!el) return;
-    el.classList.add('sra-nudge-highlight');
-    setTimeout(() => el.classList.remove('sra-nudge-highlight'), 3500);
   }
 
   // ── Code detection ─────────────────────────────────────────────────────
@@ -1300,20 +1030,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     lastGazeReceivedAt = Date.now();
     featureExtractor.addPoint(pt);
 
-    // Pause autohide for any popup the gaze is resting on; restart it when the
-    // gaze leaves. Combined with mouse hover, this means the countdown only runs
-    // once the user has stopped looking at / interacting with the card.
-    if (openPopups.size) {
-      for (const [fp, entry] of openPopups) {
-        const el = entry.el;
-        if (!el || !document.contains(el)) continue;
-        const r = el.getBoundingClientRect();
-        const over = pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
-        if (over && !el._gazeOver) { el._gazeOver = true; clearTimeout(el._hideT); }
-        else if (!over && el._gazeOver) { el._gazeOver = false; armAutohide(el, fp); }
-      }
-    }
-
     // Image dwell: if gaze stays on the same image while confused/overloaded for >2s, explain it
     const _gazeTopEl = document.elementFromPoint(pt.x, pt.y);
     const _gazeImg   = _gazeTopEl?.tagName === 'IMG' ? _gazeTopEl
@@ -1330,6 +1046,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     } else {
       _imageDwellEl = null;
     }
+
+    // Pause autohide on any card the gaze is resting on (from main).
+    try { ui.updateGazeOverPopups(pt); } catch (e) {}
 
     // Focus ruler follows gaze Y in real time
     if (focusRulerEnabled) focusRuler.update(pt.y);
@@ -1382,17 +1101,12 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
 
     const fingerprint = 'comp-' + text.slice(0, 80).trim();
-    if (openPopups.has(fingerprint)) {
-      const entry = openPopups.get(fingerprint);
-      // Already on screen — flash it, but do not charge the reader again.
-      if (entry.el && document.contains(entry.el)) { flashPopup(entry.el); return false; }
-      openPopups.delete(fingerprint);
-    }
-
-    const root = document.createElement('div');
-    root.className = 'sra-popup';
-    document.body.appendChild(root);
-    openPopups.set(fingerprint, { el: root });
+    // reservePopup handles both dedup (flashes the existing card) and the
+    // MAX_POPUPS cap. This renderer used to do the first and not the second,
+    // so a page full of pinned cards could still stack another one on top.
+    // Null means nothing was shown, and the caller must not spend the budget.
+    const root = reservePopup(fingerprint);
+    if (!root) return false;
 
     const offerHtml = buildComprehensionOfferHtml(signal, evidence);
 
@@ -1428,25 +1142,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       }
     };
 
-    const avoidRects = [...openPopups.values()]
-      .filter(e => e.el !== root && document.contains(e.el) && e.el.classList.contains('show'))
-      .map(e => e.el.getBoundingClientRect());
-
-    placePopup(root, anchorRect, avoidRects);
-    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
-
-<<<<<<< HEAD
-    root.addEventListener('mouseenter', () => { root._mouseOver = true; clearTimeout(root._hideT); });
-    root.addEventListener('mouseleave', () => { root._mouseOver = false; armAutohide(root, fingerprint); });
-
-    armAutohide(root, fingerprint);
-=======
-    clearTimeout(root._hideT);
-    if (autohideEnabled && root.dataset.pinned !== 'true')
-      root._hideT = setTimeout(() => closePopup(root, fingerprint), Math.max(3, autohideTimeoutSec) * 1000);
-
-    return true;
->>>>>>> cc088c25e13510bb50454dc15e5e38ec9eadc397
+    showPopup(root, anchorRect);
   }
 
   // Every interruption has to show the reader what was actually observed —
@@ -1495,95 +1191,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
 
     return `${observed}<div>Want a summary?</div>`;
-  }
-
-  // ── Classification loop ────────────────────────────────────────────────
-  function startClassificationLoop() {
-    if (classifyTimer) clearInterval(classifyTimer);
-    _log('Classification loop started');
-    classifyTimer = setInterval(async () => {
-      if (!eyeTrackingEnabled || !lastGazePt) return;
-      const rawFeatures = featureExtractor.computeFeatures();
-      if (!rawFeatures) return;
-
-      // Quality gate: skip classification when webcam tracking is too noisy
-      // (poor lighting, glasses glare, face partially occluded)
-      if (rawFeatures.gaze_quality < 0.25) {
-        if (debugEnabled) _log(`Skipping classify — low gaze quality (${(rawFeatures.gaze_quality*100).toFixed(0)}%)`);
-        lowQualityStreak++;
-        if (lowQualityStreak >= 8 && Date.now() - lastQualityWarnAt > 60000) {
-          showQualityToast();
-          lastQualityWarnAt = Date.now();
-        }
-        return;
-      }
-      lowQualityStreak = 0;
-
-      // Normalize features against personal baseline so individual reading
-      // styles don't bias the fixed classifier thresholds
-      const features = personalBaseline
-        ? gazeUtils.normalizeWithBaseline(rawFeatures, personalBaseline)
-        : rawFeatures;
-
-      // Apply dyslexia threshold patch before classifying
-      const dyslexiaPatched = dyslexiaEnabled
-        ? dyslexiaUtils.patchFeaturesForDyslexia(features)
-        : features;
-
-      // Apply script-aware patch: flip regression_rate for RTL, scale fixation_ms for CJK
-      const classFeatures = langDetectModule.patchFeaturesForScript(dyslexiaPatched, scriptInfo);
-
-      const { label, confidence } = classifyGazeState(classFeatures);
-
-      // Smooth over 3 windows to prevent single-sample false triggers
-      const smoothedLabel = getSmoothedState(label);
-      lastGazeLabel   = smoothedLabel;
-      lastGazeQuality = rawFeatures.gaze_quality;
-
-      if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
-      else forceStopIdle();
-
-<<<<<<< HEAD
-      const action = COGNITIVE_STATE_ACTIONS[smoothedLabel];
-      const now    = Date.now();
-      if (action === 'none') return;
-
-      // Don't trigger a new state action while the user is reading an open popup —
-      // gaze resting on the card shouldn't be treated as fresh confusion.
-      if (isGazeOverAnyPopup()) return;
-
-      // Global spacing: never fire two auto popups closer than GLOBAL_ACTION_SPACING
-      // apart, even for different paragraphs. Without this, letting your gaze drift
-      // to another confusing paragraph pops a second card while you're still reading
-      // the first. The per-paragraph cooldown alone doesn't cover cross-paragraph.
-      if (now - lastActionAt < GLOBAL_ACTION_SPACING) return;
-
-      // Per-paragraph cooldown: each paragraph has its own 8-second window
-      const paraKey = currentParagraph && currentParagraph.type === 'dom' && currentParagraph.data
-        ? (currentParagraph.data.innerText || '').slice(0, 80).trim()
-        : 'global';
-      const lastFiredForThisPara = paraActionAt.get(paraKey) || 0;
-      if (now - lastFiredForThisPara < ACTION_COOLDOWN) return;
-
-      paraActionAt.set(paraKey, now);
-      lastActionAt = now;
-      // Clean old entries (keep map small)
-      if (paraActionAt.size > 50) {
-        const oldest = [...paraActionAt.entries()].sort((a,b)=>a[1]-b[1])[0][0];
-        paraActionAt.delete(oldest);
-      }
-      if (action === 'explain' || action === 'simplify') await triggerAIForParagraph(currentParagraph, smoothedLabel);
-      else if (action === 'nudge') { const el = currentParagraph?.type==='dom'?currentParagraph.data:null; showNudge(el); if(el) highlightElement(el,3000); }
-=======
-      // Gaze no longer fires anything by itself. It hands its reading to the
-      // engine, which will not turn it into an actionable state without
-      // telemetry backing it — see state-engine.js for why.
-      stateEngine.update({
-        gaze: currentGazeView(),
-        idle: buildIdleView(),
-      });
->>>>>>> cc088c25e13510bb50454dc15e5e38ec9eadc397
-    }, CLASSIFY_INTERVAL);
   }
 
   // ── WebGazer bootstrap ─────────────────────────────────────────────────
@@ -1650,7 +1257,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
             } catch (e) {
               _warn('Calibration step failed (non-fatal):', e.message);
             }
-            startClassificationLoop();
+            orchestrator.startClassificationLoop();
           }, 800);
         }
 
@@ -1674,70 +1281,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       window.postMessage({ source: 'sra-cal-record', x: e.clientX, y: e.clientY }, '*');
     } catch (err) {}
   }, { passive: true, capture: false });
-
-  // Scroll backtrack detection (user scrolls back to re-read = comprehension signal)
-  window.addEventListener('scroll', () => {
-    if (!comprehensionCheckEnabled) return;
-    try {
-      scrollDynamics.update(window.scrollY);
-      syncParagraph();
-      const signal = comprehensionMonitor.onScroll();
-      if (signal) pumpTelemetry(signal);
-    } catch (e) {}
-  }, { passive: true });
-
-  // ── Telemetry event wiring ────────────────────────────────────────────
-  // Selection and copy are corroboration, never triggers — the selection
-  // summary feature already responds to the reader's own action, and firing
-  // an interruption on top of it would interrupt twice for one gesture.
-  // Cursor as a reading pointer. Most mouse movement is not reading, so the
-  // tracker decides for itself whether the behaviour qualifies.
-  window.addEventListener('mousemove', (e) => {
-    if (!comprehensionCheckEnabled) return;
-    try { cursorTracker.update(e.clientX, e.clientY); } catch (err) {}
-  }, { passive: true });
-
-  let selectionDebounce = null;
-  document.addEventListener('selectionchange', () => {
-    if (!comprehensionCheckEnabled) return;
-    clearTimeout(selectionDebounce);
-    selectionDebounce = setTimeout(() => {
-      try {
-        const text = String(window.getSelection?.() || '');
-        if (text.trim()) interactionSignals.update({ kind: 'selection', text });
-      } catch (e) {}
-    }, 400);
-  });
-
-  document.addEventListener('copy', () => {
-    if (!comprehensionCheckEnabled) return;
-    try {
-      const text = String(window.getSelection?.() || '');
-      if (text.trim()) interactionSignals.update({ kind: 'copy', text });
-    } catch (e) {}
-  });
-
-  // Blur/return: coming back to the same paragraph after a long absence is a
-  // confirmed loss of the thread. Carrying on forwards is not.
-  const activeParagraphIndex = () => paragraphTracker.getActive()?.index ?? null;
-  window.addEventListener('blur', () => {
-    try { interactionSignals.update({ kind: 'blur', paragraphIndex: activeParagraphIndex() }); } catch (e) {}
-  });
-  window.addEventListener('focus', () => {
-    if (!comprehensionCheckEnabled) return;
-    try {
-      syncParagraph();
-      interactionSignals.update({ kind: 'focus', paragraphIndex: activeParagraphIndex() });
-      pumpTelemetry();
-    } catch (e) {}
-  });
-
-  // Slow tick so a reader who has stopped scrolling is still observed —
-  // dwelling on one paragraph produces no events at all.
-  setInterval(() => {
-    if (!comprehensionCheckEnabled) return;
-    try { syncParagraph(); pumpTelemetry(); } catch (e) {}
-  }, 5000);
 
   // ── PDF/PPTX handlers ─────────────────────────────────────────────────
   async function detectAndInitHandlers() {
@@ -1856,6 +1399,15 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       window.__sra_tracker_started = false;
       try { await startTracker(); sendResponse({status:'ok'}); }
       catch (e) { sendResponse({status:'error',error:String(e)}); }
+      return true;
+    }
+    if (msg.action === 'sessionRecall') {
+      runSessionRecall(msg.count || 5);
+      sendResponse({ status: 'ok', stats: sessionRecall.stats() });
+      return true;
+    }
+    if (msg.action === 'recallStats') {
+      sendResponse({ status: 'ok', stats: sessionRecall.stats() });
       return true;
     }
     if (msg.type === 'simulateState') {
@@ -1981,26 +1533,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     window.addEventListener('popstate', onSpaNavigate);
   }
 
-  // ── Resize: re-clamp all visible popups to the new viewport bounds ───────
-  if (!window.__sra_resize_watcher) {
-    window.__sra_resize_watcher = true;
-    let _resizeTimer;
-    window.addEventListener('resize', () => {
-      clearTimeout(_resizeTimer);
-      _resizeTimer = setTimeout(() => {
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        const m  = POPUP_MARGIN;
-        for (const [, { el }] of openPopups.entries()) {
-          if (!el || !document.contains(el) || !el.classList.contains('show')) continue;
-          const pw = el.offsetWidth  || 360;
-          const ph = el.offsetHeight || 150;
-          el.style.left = clamp(parseFloat(el.style.left) || 0, m, vw - pw - m) + 'px';
-          el.style.top  = clamp(parseFloat(el.style.top)  || 0, m, vh - ph - m) + 'px';
-        }
-      }, 150);
-    });
-  }
+  // Resize re-clamping lives in ui-controller.js — it is popup geometry.
+  ui.installResizeWatcher();
 
   // ── Session continuity ────────────────────────────────────────────────
   function saveLastVisit() {
@@ -2075,9 +1609,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   if (eyeTrackingEnabled) await startTracker();
   else _log('Eye tracking off — tracker not started, camera untouched');
 
-  // Enter the first paragraph now, or nothing is timed until the reader
-  // scrolls — which loses the opening of every article.
-  try { paragraphTracker.rescan(); syncParagraph(); } catch (e) {}
+  orchestrator.installListeners();
+  orchestrator.primeParagraph();
 
   restoreHighlightMarkers();
   restoreTextHighlights();

@@ -54,7 +54,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // directly — their fetch carries the host page's origin, which the server's
   // CORS policy rejects. Fetching from here (the extension's own context) sends
   // no page origin, so the server accepts it and stays locked to the extension.
-  if (msg.action === 'summarize') {
+  // Generic POST proxy. 'summarize' is kept as the original name; 'apiPost'
+  // is the same path for any other endpoint (questions, and whatever comes
+  // next). Both exist for the same reason: a content script's fetch carries
+  // the host page's origin, which the server's CORS policy rejects.
+  if (msg.action === 'summarize' || msg.action === 'apiPost') {
     const url = msg.url || 'http://localhost:3000/api/summarize';
     fetch(url, {
       method: 'POST',
@@ -76,6 +80,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const tabId = sender && sender.tab && sender.tab.id;
     if (!tabId) { sendResponse({ status: 'error', error: 'no_tab' }); return; }
 
+    // This path ends in webgazer.begin(), which calls getUserMedia. The content
+    // script already refuses to ask unless the reader enabled the camera, but
+    // the worker must not take that on trust — anything that can post a message
+    // could otherwise start the webcam. Checked here as well, deliberately.
+    chrome.storage.local.get({ sra_eye: true }, (cfg) => {
+      if (cfg.sra_eye === false) {
+        sendResponse({ status: 'error', error: 'eye_tracking_disabled' });
+        return;
+      }
+      injectWebgazer(tabId, sendResponse);
+    });
+    return true;
+  }
+
+  return false;
+});
+
+function injectWebgazer(tabId, sendResponse) {
+  {
     try {
       const webgazerUrl = chrome.runtime.getURL('src/libs/webgazer.min.js');
       chrome.scripting.executeScript({
@@ -122,6 +145,5 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     } catch (e) {
       sendResponse({ status: 'error', error: String(e) });
     }
-    return true;
   }
-});
+}

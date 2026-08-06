@@ -42,7 +42,7 @@ describe('THE TRAP — missing features do not throw', () => {
   });
 
   it('silently flips the label when the saccade/velocity keys are dropped', () => {
-    const { saccade_length, saccade_std, velocity_mean, ...reduced } = focusedSample;
+    const { saccade_length: _a, saccade_std: _b, velocity_mean: _c, ...reduced } = focusedSample;
     const full = classifyGazeState(focusedSample);
     const partial = classifyGazeState(reduced);
 
