@@ -175,6 +175,35 @@ const recall = {
   cardOnScreen: await page.evaluate(() => !!document.querySelector('.sra-q-options')),
 };
 
+/* Every keyboard shortcut, pressed. The P6 refactor silently deleted the whole
+ * handler and 133 unit tests plus this smoke check all passed, because none of
+ * them pressed a key. They do now. */
+const shortcuts = { errorsBefore: findings.pageErrors.length, results: {} };
+async function alt(key) {
+  await page.keyboard.down('Alt');
+  await page.keyboard.press(key);
+  await page.keyboard.up('Alt');
+  await page.waitForTimeout(350);
+}
+
+await alt('Digit1');   // simulate confused
+shortcuts.results.altDigit1_toast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
+await alt('KeyT');     // toggle TTS
+shortcuts.results.altT_toast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
+await alt('KeyF');     // toggle focus ruler
+shortcuts.results.altF_ruler = await page.evaluate(() =>
+  !!document.querySelector('[class*="ruler"],[id*="ruler"]') || !!document.getElementById('sra-sim-toast'));
+await alt('KeyM');     // toggle reading map
+shortcuts.results.altM_map = await page.evaluate(() => !!document.getElementById('sra-reading-map'));
+await alt('KeyS');     // summarise paragraph at viewport centre
+await page.waitForTimeout(500);
+shortcuts.results.altS_popup = await page.evaluate(() => document.querySelectorAll('.sra-popup').length > 0);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(400);
+shortcuts.results.escape_closedUnpinned = await page.evaluate(() =>
+  [...document.querySelectorAll('.sra-popup')].every((el) => el.dataset.pinned === 'true'));
+shortcuts.newPageErrors = findings.pageErrors.length - shortcuts.errorsBefore;
+
 // Receipt: reader-triggered (Alt+I), previewed in full before anything leaves.
 await page.keyboard.down('Alt'); await page.keyboard.press('KeyI'); await page.keyboard.up('Alt');
 await page.waitForTimeout(900);
@@ -207,6 +236,8 @@ console.log('question card           :', JSON.stringify(questionCard));
 console.log('after answering         :', JSON.stringify(graded));
 console.log('session recall (Alt+R)  :', JSON.stringify(recall));
 console.log('receipt (Alt+I)         :', JSON.stringify(receipt));
+console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
+console.log('  new page errors       :', shortcuts.newPageErrors);
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));
