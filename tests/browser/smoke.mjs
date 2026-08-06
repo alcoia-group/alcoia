@@ -175,6 +175,26 @@ const recall = {
   cardOnScreen: await page.evaluate(() => !!document.querySelector('.sra-q-options')),
 };
 
+// Receipt: reader-triggered (Alt+I), previewed in full before anything leaves.
+await page.keyboard.down('Alt'); await page.keyboard.press('KeyI'); await page.keyboard.up('Alt');
+await page.waitForTimeout(900);
+const receipt = await page.evaluate(() => {
+  const panel = document.querySelector('.sra-receipt');
+  if (!panel) return { shown: false };
+  const raw = panel.querySelector('.sra-r-raw pre')?.textContent || '';
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch (e) {}
+  return {
+    shown: true,
+    showsFullContents: raw.length > 0,
+    hasUrl: /https?:\/\//.test(raw),
+    hasGazeKey: /"(gaze|coords|points|samples)"/.test(raw),
+    recallAnswered: parsed?.recall?.answered ?? null,
+    coveragePct: parsed?.session?.coveragePct ?? null,
+    caveatShown: !!panel.querySelector('.sra-r-caveat'),
+  };
+});
+
 console.log('\n================ RESULTS ================');
 console.log('content script injected :', injected.contentScript);
 console.log('page errors             :', findings.pageErrors.length, findings.pageErrors.slice(0, 5));
@@ -186,6 +206,7 @@ console.log('api hits                :', JSON.stringify(apiHits));
 console.log('question card           :', JSON.stringify(questionCard));
 console.log('after answering         :', JSON.stringify(graded));
 console.log('session recall (Alt+R)  :', JSON.stringify(recall));
+console.log('receipt (Alt+I)         :', JSON.stringify(receipt));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));

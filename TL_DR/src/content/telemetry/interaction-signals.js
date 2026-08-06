@@ -24,6 +24,8 @@ export function createInteractionSignals(opts = {}) {
   let blurAt     = null;
   let blurIndex  = null;
   let lastEmitAt = 0;
+  let blurEvents = 0;
+  let longBlurEvents = 0;
 
   function push(sig) {
     const t = now();
@@ -58,6 +60,7 @@ export function createInteractionSignals(opts = {}) {
     }
 
     if (evt.kind === 'blur') {
+      blurEvents += 1;
       blurAt = now();
       blurIndex = Number.isInteger(evt.paragraphIndex) ? evt.paragraphIndex : null;
       return null;
@@ -70,6 +73,7 @@ export function createInteractionSignals(opts = {}) {
       blurAt = null; blurIndex = null;
 
       if (blurMs < longBlurMs) return null;      // a short interruption is just life
+      longBlurEvents += 1;
       const backAt = Number.isInteger(evt.paragraphIndex) ? evt.paragraphIndex : null;
       // Only a return to the same paragraph says the thread was lost. Carrying
       // on forwards is not evidence of anything.
@@ -86,5 +90,7 @@ export function createInteractionSignals(opts = {}) {
 
   function signal() { const s = pending; pending = []; return s.length ? s : null; }
 
-  return { update, signal, reset() { pending = []; blurAt = null; blurIndex = null; lastEmitAt = 0; } };
+  const stats = () => ({ blurEvents, longBlurEvents });
+
+  return { update, signal, stats, reset() { pending = []; blurAt = null; blurIndex = null; lastEmitAt = 0; } };
 }

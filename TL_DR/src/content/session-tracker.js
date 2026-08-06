@@ -11,18 +11,22 @@ export function createSessionTracker() {
   const url   = window.location.href;
   const title = document.title || window.location.hostname;
 
-  const stateDurations = { focused: 0, skimming: 0, confused: 0, zoning_out: 0, overloaded: 0 };
+  // Keyed by whatever the engine emits. It used to be a fixed object literal
+  // with the pre-P1 label set, so after the rename every lookup was undefined
+  // and no duration was ever accumulated — the guard below silently skipped
+  // every state. Open map, so a future rename cannot reintroduce that.
+  const stateDurations = Object.create(null);
   const signals    = [];  // { type, subtype, text, timestamp }
   const wpmReadings = []; // { wpm, grade }
 
-  let lastState   = 'focused';
+  let lastState   = 'unknown';
   let lastStateAt = Date.now();
 
   function recordState(label) {
     if (!label) return;
     const now = Date.now();
-    if (lastState && stateDurations[lastState] !== undefined) {
-      stateDurations[lastState] += now - lastStateAt;
+    if (lastState) {
+      stateDurations[lastState] = (stateDurations[lastState] || 0) + (now - lastStateAt);
     }
     lastState   = label;
     lastStateAt = now;
@@ -58,7 +62,7 @@ export function createSessionTracker() {
       stateDurations: { ...stateDurations },
       signals: signals.slice(-30),
       avgWpm,
-      confusionCount:     signals.filter(s => s.subtype === 'confused' || s.subtype === 'overloaded').length,
+      struggleCount:      signals.filter(s => s.type === 'struggling').length,
       backtrackCount:     signals.filter(s => s.type  === 'backtrack').length,
       speedMismatchCount: signals.filter(s => s.type  === 'speed_mismatch').length,
     };
@@ -72,5 +76,16 @@ export function createSessionTracker() {
     });
   }
 
-  return { recordState, recordSignal, recordWpm, save };
+  function snapshot() {
+    // Flush the in-progress state so a receipt taken mid-session is accurate.
+    recordState(lastState);
+    return {
+      url, title, startedAt,
+      durationMs: Date.now() - startedAt,
+      stateDurations: { ...stateDurations },
+      signals: signals.slice(),
+    };
+  }
+
+  return { recordState, recordSignal, recordWpm, save, snapshot };
 }
