@@ -50,6 +50,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // Proxy AI summary requests. Content scripts can't call the local server
+  // directly — their fetch carries the host page's origin, which the server's
+  // CORS policy rejects. Fetching from here (the extension's own context) sends
+  // no page origin, so the server accepts it and stays locked to the extension.
+  // Generic POST proxy. 'summarize' is kept as the original name; 'apiPost'
+  // is the same path for any other endpoint (questions, and whatever comes
+  // next). Both exist for the same reason: a content script's fetch carries
+  // the host page's origin, which the server's CORS policy rejects.
+  if (msg.action === 'summarize' || msg.action === 'apiPost') {
+    const url = msg.url || 'http://localhost:3000/api/summarize';
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(msg.body || {}),
+    })
+      .then(async (resp) => {
+        if (!resp.ok) { sendResponse({ ok: false, status: resp.status }); return; }
+        const data = await resp.json();
+        sendResponse({ ok: true, data });
+      })
+      .catch((err) => {
+        sendResponse({ ok: false, error: String(err && err.message || err) });
+      });
+    return true; // keep the message channel open for the async response
+  }
+
   if (msg.action === 'injectWebgazerBootstrap') {
     const tabId = sender && sender.tab && sender.tab.id;
     if (!tabId) { sendResponse({ status: 'error', error: 'no_tab' }); return; }

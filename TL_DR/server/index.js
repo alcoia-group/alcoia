@@ -15,15 +15,15 @@ app.use(cors({
   origin: (origin, callback) => {
     // Allow same-origin (no header), Chrome extension, and localhost only.
     // This blocks arbitrary websites from hitting the local server.
-    if (
+    // Requests from the extension are proxied through its background service
+    // worker, which sends no page origin — so they land in the `!origin` branch.
+    const allowed =
       !origin ||
       /^chrome-extension:\/\//.test(origin) ||
-      /^https?:\/\/(localhost|127\.0\.0\.1)/.test(origin)
-    ) {
-      callback(null, true);
-    } else {
-      callback(new Error('CORS: origin not allowed'));
-    }
+      /^https?:\/\/(localhost|127\.0\.0\.1)/.test(origin);
+    // Deny gracefully (no CORS headers) instead of throwing — a thrown error
+    // spams the console with a stack trace on every disallowed request.
+    callback(null, allowed);
   },
 }));
 app.use(express.json({ limit: '2mb' }));

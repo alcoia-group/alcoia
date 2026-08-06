@@ -80,6 +80,7 @@ Webcam → WebGazer.js (gaze estimation) → Feature Extractor → Script Patch 
 | **Dot calibration** | 9-point 3×3 grid, two passes — provides training examples for WebGazer's ridge regression |
 | **Reading calibration** | Words are highlighted at natural reading speed; calibration captures ~80 training examples from actual reading positions |
 | **Calibration persistence** | Calibration runs once. The offset is saved to extension storage and silently restored on every subsequent page |
+| **Model persistence** | The full WebGazer ridge-regression training data is serialised and saved to extension storage after every calibration (dot or reading). On subsequent pages the model is restored for a warm start instead of starting cold — accuracy compounds across sessions instead of resetting on every page load |
 | **Personal baseline** | Gaze features recorded during reading calibration become a normalisation baseline, so the classifier adapts to the individual reader |
 | **Click training** | Every click on the page is recorded as a WebGazer training example, continuously improving gaze accuracy |
 | **Multi-sample offset** | At calibration completion, 5 predictions at viewport centre are taken, outliers trimmed, and averaged for a stable correction offset |
@@ -246,7 +247,7 @@ The 15% threshold avoids false positives from pages that embed a few foreign wor
 
 Summary popups use `dir="auto"` on their content area, so the browser's bidi algorithm automatically renders RTL AI responses in the correct direction without explicit tracking.
 
-**Known limitation:** detection runs once per page load. Single-page apps that navigate between language contexts without a full reload will not re-detect. A `MutationObserver` on the `<html>` element's `lang`/`dir` attributes would address this in a future update.
+Detection re-runs automatically on single-page apps: `watchScriptChanges()` observes `<html lang>` / `dir` attribute mutations, `<body>` child replacements (SPA page swaps), and `popstate` / `hashchange` events. Any change triggers a debounced re-detection, so navigating from an English article to an Arabic one without a full reload updates the classifier patch within a few hundred milliseconds.
 
 ---
 
@@ -263,7 +264,7 @@ TL_DR/
 │   │   ├── classifier.js      Decision tree: 9 features → 5 cognitive states
 │   │   ├── gaze-utils.js      EMA smoothing, velocity rejection, calibration, baseline normalisation
 │   │   ├── gaze-features.js   Rolling window feature extractor (DBSCAN noise filter)
-│   │   ├── lang-detect.js     Script detection (RTL/CJK) and pre-classification feature patching
+│   │   ├── lang-detect.js     Script detection (RTL/CJK), SPA re-detection, feature patching
 │   │   ├── comprehension-monitor.js  WPM measurement, too-fast/too-slow detection, backtrack
 │   │   ├── reading-calibration.js    Word-by-word expert calibration overlay
 │   │   ├── session-tracker.js        Per-session state durations, signals, WPM, persistence
@@ -482,6 +483,7 @@ All settings are stored in `chrome.storage.local` and survive browser restarts.
 | `sra_backend_url` | `http://localhost:3000/api/summarize` | AI backend endpoint |
 | `sra_ever_calibrated` | `false` | Whether dot calibration has run |
 | `sra_calibration` | `{dx:0, dy:0}` | Gaze correction offset |
+| `sra_webgazer_model` | `null` | Serialised WebGazer regression training data (max 500 KB), restored on page load |
 | `sra_personal_baseline` | `null` | Personal gaze feature baseline |
 | `sra_baseline_wpm` | `null` | Personal WPM baseline |
 | `sra_current_state` | `''` | Last classified cognitive state |
@@ -588,7 +590,6 @@ In `popup.js`, add a key to the `PERSONAS` constant with the desired toggle valu
 
 - **Domain-specific calibration** — separate WPM baselines per content type (news, academic, technical)
 - **Multilingual classifier retraining** — collect RTL and CJK reading data to train a natively multilingual decision tree, removing the need for the current feature-patching workaround
-- **SPA language re-detection** — `MutationObserver` on `<html lang>` / `dir` to re-run script detection when single-page apps navigate between language contexts without a full page reload
 - **Collaborative / classroom mode** — lecturer creates a room; students' confusion events are aggregated in real time; lecturer sees a heatmap of which sections the class struggled with (architecture in progress)
 - **Session export** — export session reports as JSON or formatted text for teacher review
 - **PPTX image slides** — current viewer renders text-only slides; image-heavy slides show as empty
