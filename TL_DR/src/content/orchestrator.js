@@ -174,6 +174,12 @@ export async function createOrchestrator(deps) {
       host.log(`State: ${state.label} (conf ${state.confidence.toFixed(2)}, camera ${state.cameraContribution.toFixed(2)}) — ${decision.allow ? 'ACT: ' + decision.action : 'hold: ' + decision.reason}`);
     }
     if (!decision.allow) return;
+    // Someone reading an open card is not showing fresh confusion. Checked
+    // after the policy so the debug line still explains what was decided.
+    if (host.isReadingAPopup && host.isReadingAPopup()) {
+      if (s().debugEnabled) host.log('Interruption held — gaze is on an open card');
+      return;
+    }
     // The handler awaits, so guard against a second state arriving mid-render.
     if (interventionInFlight) return;
     interventionInFlight = true;

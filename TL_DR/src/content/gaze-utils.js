@@ -241,6 +241,10 @@ export async function runCalibrationSequence() {
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.classList.add('visible'));
 
+    // Show WebGazer's camera feedback so the user can confirm their face is
+    // detected and centred — the single biggest factor in gaze accuracy.
+    try { window.postMessage({ source: 'sra-control', type: 'setFeedback', enabled: true }, '*'); } catch (e) {}
+
     const fill    = overlay.querySelector('#sra-cal-fill');
     const target  = overlay.querySelector('#sra-cal-target');
     const area    = overlay.querySelector('#sra-cal-area');
@@ -284,8 +288,9 @@ export async function runCalibrationSequence() {
     }
 
     // Click handler on the target area
+    let recording = false;
     area.addEventListener('click', async (e) => {
-      if (cancelled || idx >= TOTAL) return;
+      if (cancelled || idx >= TOTAL || recording) return;
 
       const areaRect = area.getBoundingClientRect();
       const [px, py] = POINTS[idx];
@@ -294,28 +299,39 @@ export async function runCalibrationSequence() {
       const dotScreenX = areaRect.left + px * areaRect.width;
       const dotScreenY = areaRect.top  + py * areaRect.height;
 
-      // Record this click as a training example for WebGazer
-      window.postMessage({
-        source:  'sra-cal-record',
-        x:       dotScreenX,
-        y:       dotScreenY,
-      }, '*');
+      // Record a BURST of training examples for this dot rather than a single
+      // one. WebGazer's ridge regression collapses toward the mean (screen
+      // centre) when it has too few points per position; feeding ~6 samples
+      // per dot while the user keeps fixating gives it the density it needs to
+      // actually spread predictions across the screen.
+      recording = true;
+      target.style.transform = 'translate(-50%,-50%) scale(1.15)';
+
+      const BURST = 6, GAP = 90;
+      for (let s = 0; s < BURST; s++) {
+        if (cancelled) return;
+        window.postMessage({ source: 'sra-cal-record', x: dotScreenX, y: dotScreenY }, '*');
+        await new Promise(r => setTimeout(r, GAP));
+      }
 
       // Collect a prediction sample for offset computation
       window.postMessage({ source: 'sra-cal-sample', sra_sample_id: idx }, '*');
 
+      recording = false;
       idx++;
       updateProgress();
 
       if (idx >= TOTAL) {
         finish();
       } else {
-        setTimeout(showPoint, 350);
+        setTimeout(showPoint, 300);
       }
     });
 
     async function finish() {
       overlay.classList.remove('visible');
+      // Hide the camera feedback again now that positioning is done
+      try { window.postMessage({ source: 'sra-control', type: 'setFeedback', enabled: false }, '*'); } catch (e) {}
       setTimeout(async () => {
         try { overlay.remove(); } catch (e) {}
 
@@ -389,6 +405,7 @@ export async function runCalibrationSequence() {
       if (e.target === overlay) {
         cancelled = true;
         overlay.classList.remove('visible');
+        try { window.postMessage({ source: 'sra-control', type: 'setFeedback', enabled: false }, '*'); } catch (err) {}
         setTimeout(() => { try { overlay.remove(); } catch(e){} resolve({ dx: 0, dy: 0 }); }, 250);
       }
     });

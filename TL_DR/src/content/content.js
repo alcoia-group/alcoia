@@ -257,6 +257,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       setPrevParagraphText: (t) => { prevParagraphText = t; },
       setCogState: (label) => { lastCogState = label; },
       getLastGazePoint: () => lastGazePt,
+      // Reading an open card is not fresh confusion. Without this, letting your
+      // gaze settle on a popup pops another one on top of it.
+      isReadingAPopup: () => { try { return ui.isGazeOverAnyPopup(lastGazePt); } catch (e) { return false; } },
       getLastGazeReceivedAt: () => lastGazeReceivedAt,
       onQualityWarning: () => showQualityToast(),
       onParagraphRead: (text, dwellMs) => sessionRecall.recordRead(text, dwellMs),
@@ -344,13 +347,24 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       _log(`Fetching ${url} mode=${mode} len=${text.length}`);
       const body = { text: text.slice(0, 3500), mode };
       if (context) body.context = context.slice(0, 800);
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+
+      // Route the request through the background service worker rather than
+      // fetching directly. A direct fetch from a content script carries the
+      // host PAGE's origin (e.g. https://en.wikipedia.org), which the server's
+      // CORS policy correctly rejects. The background worker's fetch carries no
+      // page origin, so it passes CORS while keeping the server locked down to
+      // the extension only. Falls back to a direct fetch if messaging fails.
+      const j = await new Promise((resolve) => {
+        try {
+          chrome.runtime.sendMessage({ action: 'summarize', url, body }, (resp) => {
+            if (chrome.runtime.lastError || !resp) { resolve(null); return; }
+            if (!resp.ok) { _warn(`Server ${resp.status || ''} ${resp.error || ''}`); resolve(null); return; }
+            resolve(resp.data);
+          });
+        } catch (e) { resolve(null); }
       });
-      if (!resp.ok) { _warn(`Server ${resp.status}`); return null; }
-      const j = await resp.json();
+      if (!j) return null;
+
       const result = j.summary || j.result || null;
       if (result && mode !== 'page_summary') {
         const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
@@ -459,29 +473,34 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   async function fetchQuestions(text, opts = {}) {
     if (!text || text.trim().length < 120) return [];
-    try {
-      const resp = await fetch(questionsUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: text.slice(0, 3500),
-          language: (document.documentElement.lang || '').slice(0, 5),
-          count: opts.count || 1,
-          kind: opts.kind || 'recall',
-        }),
-      });
-      if (!resp.ok) {
-        // 422 means nothing passed the server's citation check; 503 means no
-        // key. Both are ordinary outcomes and both fall back to explaining.
-        _log(`Questions unavailable (${resp.status})`);
-        return [];
-      }
-      const j = await resp.json();
-      return Array.isArray(j.questions) ? j.questions : [];
-    } catch (e) {
-      _warn('Question fetch failed:', e.message);
-      return [];
-    }
+    const body = {
+      text: text.slice(0, 3500),
+      language: (document.documentElement.lang || '').slice(0, 5),
+      count: opts.count || 1,
+      kind: opts.kind || 'recall',
+    };
+    // Through the background worker, for the same CORS reason as fetchSummary:
+    // a content script's fetch carries the host page's origin and the server
+    // rejects it. A direct fetch here works only when the page happens to be
+    // same-origin with the server, which is true in tests and false in life.
+    const j = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ action: 'apiPost', url: questionsUrl(), body }, (resp) => {
+          if (chrome.runtime.lastError || !resp) { resolve(null); return; }
+          if (!resp.ok) {
+            // 422 means nothing passed the server's citation check; 503 means
+            // no key. Both are ordinary outcomes and both fall back to
+            // explaining rather than showing the reader an error.
+            _log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
+            resolve(null);
+            return;
+          }
+          resolve(resp.data);
+        });
+      } catch (e) { resolve(null); }
+    });
+    if (!j) return [];
+    return Array.isArray(j.questions) ? j.questions : [];
   }
 
   /* Returns true only if a card reached the screen. */
@@ -1028,6 +1047,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       _imageDwellEl = null;
     }
 
+    // Pause autohide on any card the gaze is resting on (from main).
+    try { ui.updateGazeOverPopups(pt); } catch (e) {}
+
     // Focus ruler follows gaze Y in real time
     if (focusRulerEnabled) focusRuler.update(pt.y);
 
@@ -1121,7 +1143,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     };
 
     showPopup(root, anchorRect);
-    return true;
   }
 
   // Every interruption has to show the reader what was actually observed —
@@ -1276,7 +1297,10 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   window.sra = window.sra || {};
   window.sra.runCalibration = async () => {
     const cal = await gazeUtils.runCalibrationSequence();
-    if (cal) await gazeUtils.setCalibration(cal);
+    if (cal) {
+      await gazeUtils.setCalibration(cal);
+      await gazeUtils.saveWebgazerModel();
+    }
     return cal;
   };
   window.sra.getState = () => lastCogState;
@@ -1320,8 +1344,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
     if (msg.type === 'runCalibration') {
       (async () => {
-        try { const cal = await gazeUtils.runCalibrationSequence(); if(cal) await gazeUtils.setCalibration(cal); sendResponse({status:'ok',calibration:cal}); }
-        catch (e) { sendResponse({status:'error',error:String(e)}); }
+        try {
+          const cal = await gazeUtils.runCalibrationSequence();
+          if (cal) {
+            await gazeUtils.setCalibration(cal);
+            await gazeUtils.saveWebgazerModel();
+            // Mark calibrated so the auto-modal doesn't reappear on future pages
+            chrome.storage.local.set({ sra_ever_calibrated: true });
+          }
+          sendResponse({ status: 'ok', calibration: cal });
+        }
+        catch (e) { sendResponse({ status: 'error', error: String(e) }); }
       })(); return true;
     }
     if (msg.type === 'debugToggle') {
@@ -1352,6 +1385,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
             }
           });
           try { await gazeUtils.saveWebgazerModel(); } catch(e) {}
+          // Mark calibrated so the auto dot-calibration modal doesn't reappear
+          chrome.storage.local.set({ sra_ever_calibrated: true });
           sendResponse({ status: 'ok', result });
         } catch (e) {
           sendResponse({ status: 'error', error: String(e) });
