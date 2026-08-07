@@ -43,13 +43,15 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "src/libs/**",
-        "src/styles/**",
-        "src/popup/**",
-        "src/content/**",
-        "src/pdf-viewer/**",
-        "src/pptx-viewer/**",
-        "assets/**"
+        "src/content/*.js",
+        "src/content/telemetry/*.js",
+        "src/styles/*.css",
+        "src/libs/fonts/*.woff2",
+        "src/libs/webgazer.min.js",
+        "src/libs/jszip.min.js",
+        "src/libs/pdfjs/*.js",
+        "src/pdf-viewer/viewer.html",
+        "src/pptx-viewer/viewer.html"
       ],
       "matches": [
         "<all_urls>"
