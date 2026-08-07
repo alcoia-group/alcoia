@@ -16,6 +16,8 @@
  * chooses whether to answer them.
  */
 
+import { countWords, detectLanguage } from './segmentation.js';
+
 /* A paragraph has to have been read, not passed over, to be worth asking
  * about. Two seconds is not reading. */
 export const MIN_DWELL_MS = 4000;
@@ -24,6 +26,7 @@ export const MIN_WORDS = 40;
 export function createSessionRecall(opts = {}) {
   const minDwellMs = opts.minDwellMs ?? MIN_DWELL_MS;
   const minWords = opts.minWords ?? MIN_WORDS;
+  const getLang = opts.lang || (() => detectLanguage());
   const random = opts.random || Math.random;
 
   /* paragraphKey -> { text, dwellMs, struggles, answeredCorrectly } */
@@ -38,7 +41,10 @@ export function createSessionRecall(opts = {}) {
   function recordRead(text, dwellMs) {
     const key = keyFor(text);
     if (!key) return;
-    const words = String(text).trim().split(/\s+/).length;
+    // Was a whitespace split, which is 1 for a whole CJK paragraph — so no
+    // paragraph on those pages was ever a recall candidate, the receipt showed
+    // 0% coverage, and Alt+R silently had nothing to ask about.
+    const words = countWords(text, getLang());
     if (words < minWords) return;
 
     const entry = seen.get(key) || { text: String(text).trim(), dwellMs: 0, struggles: 0, answeredCorrectly: false };

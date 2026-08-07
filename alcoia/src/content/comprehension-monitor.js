@@ -29,6 +29,7 @@
 // Flesch-Kincaid plus syntactic proxies. The syntactic half is what makes
 // non-English pages produce a difficulty signal at all — see text-difficulty.js.
 import { analyzeDifficulty, fleschKincaid } from './telemetry/text-difficulty.js';
+import { countWords, detectLanguage } from './telemetry/segmentation.js';
 import { ResidualDistribution } from './telemetry/residual-distribution.js';
 
 // Generic WPM for typical readers (used before personal baseline is established)
@@ -41,18 +42,26 @@ function expectedReadingMs(readability, baselineWpm) {
   return readability.wordCount > 0 ? (readability.wordCount / wpm) * 60000 : 0;
 }
 
-function isEnglishPage() {
-  const lang = (
-    document.documentElement.lang ||
-    document.querySelector('meta[http-equiv="content-language"]')?.content ||
-    navigator.language || 'en'
-  ).toLowerCase().slice(0, 2);
-  return lang === 'en' || lang === '';
-}
+/* The language of the *text*, not of the browser.
+ *
+ * This used to fall back to `navigator.language`, so a French page carrying no
+ * lang attribute was read as English on an en-US browser — and Flesch-Kincaid
+ * then ran over it with a syllable counter that strips everything outside
+ * [a-z], deleting the accents and scoring the prose far easier than it is.
+ * `detectLanguage` prefers the document's own tag and sniffs the script only
+ * when there is none. */
+function pageLanguage() { return detectLanguage(document); }
 
 // ── WPM baseline ───────────────────────────────────────────────────────────────
 // Running median of standard-difficulty paragraph WPMs from this session.
 // Seeded from chrome.storage on creation; updated continuously.
+//
+// Kept per language. A single global figure meant a reader's English 250 wpm
+// was applied to their French and their Korean, and rates differ materially
+// between languages — and between an English word and a segmented Chinese one,
+// which are not the same unit at all. The registry below keeps one baseline
+// per language and falls back to the legacy global value until a language has
+// samples of its own.
 class WpmBaseline {
   constructor(seed) {
     this._samples = [];
@@ -89,6 +98,60 @@ class WpmBaseline {
   hasSamples() { return this._samples.length >= 5; }
 }
 
+/* One WpmBaseline per language, persisted as a map. `sra_baseline_wpm` (a bare
+ * number) is left in place and used as the fallback for a language with no
+ * samples yet, so existing installs keep the baseline they already earned and
+ * nothing needs migrating. */
+class WpmRegistry {
+  constructor(fallback) {
+    this._fallback = fallback || null;
+    this._byLang   = new Map();
+    this._saveTimer = null;
+  }
+
+  _for(lang) {
+    const key = String(lang || 'en').slice(0, 2);
+    if (!this._byLang.has(key)) this._byLang.set(key, new WpmBaseline(null));
+    return this._byLang.get(key);
+  }
+
+  hydrate(fallback, map) {
+    if (fallback) this._fallback = fallback;
+    for (const [k, v] of Object.entries(map || {})) {
+      if (v > 30 && v < 900) this._byLang.set(k, new WpmBaseline(v));
+    }
+  }
+
+  get(lang) {
+    const b = this._for(lang);
+    return (b.hasSamples() ? b.get() : null) || b.get() || this._fallback;
+  }
+
+  hasSamples(lang) { return this._for(lang).hasSamples(); }
+
+  add(lang, wpm, grade) {
+    this._for(lang).add(wpm, grade);
+    this._persist();
+  }
+
+  seedFromCalibration(wpm, lang) {
+    this._fallback = wpm;
+    this._for(lang || 'en').seedFromCalibration(wpm);
+    this._persist();
+  }
+
+  /* Debounced: paragraph exits are frequent and each one would otherwise be a
+     storage write. */
+  _persist() {
+    clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      const out = {};
+      for (const [k, b] of this._byLang) if (b.get()) out[k] = b.get();
+      try { chrome.storage.local.set({ sra_baseline_wpm_by_lang: out }); } catch (e) { /* no storage */ }
+    }, 2000);
+  }
+}
+
 // ── Public factory ─────────────────────────────────────────────────────────────
 export function createComprehensionMonitor(opts = {}) {
   const SPEED_RATIO_FAST   = opts.speedRatio     || 0.30;  // <30% of expected = too fast
@@ -107,20 +170,24 @@ export function createComprehensionMonitor(opts = {}) {
   let lastScrollY    = window.scrollY;
   const residuals    = new ResidualDistribution(opts.minResiduals ?? 8);
 
-  // Load persisted WPM baseline
-  let wpmBaseline = new WpmBaseline(null);
+  // Load persisted WPM baselines — the legacy global and the per-language map.
+  const wpmBaseline = new WpmRegistry(null);
   try {
-    chrome.storage.local.get({ sra_baseline_wpm: null }, (r) => {
-      if (r.sra_baseline_wpm) wpmBaseline = new WpmBaseline(r.sra_baseline_wpm);
+    chrome.storage.local.get({ sra_baseline_wpm: null, sra_baseline_wpm_by_lang: {} }, (r) => {
+      wpmBaseline.hydrate(r.sra_baseline_wpm, r.sra_baseline_wpm_by_lang);
     });
-  } catch (e) {}
+  } catch (e) { /* no storage in tests */ }
 
   function enterParagraph(el) {
     if (!el) return;
     const text = (el.innerText || el.textContent || '').trim();
-    if (!text || text.split(/\s+/).length < MIN_WORD_COUNT) return;
-    const readability = analyzeDifficulty(text, { isEnglish: isEnglishPage() });
-    paragraphEntry = { el, text, readability, enteredAt: Date.now() };
+    if (!text) return;
+    const lang = pageLanguage();
+    // Was `text.split(/\s+/).length`, which is 1 for a whole CJK paragraph, so
+    // this returned early on every one of them and the monitor produced nothing.
+    if (countWords(text, lang) < MIN_WORD_COUNT) return;
+    const readability = analyzeDifficulty(text, { lang });
+    paragraphEntry = { el, text, lang, readability, enteredAt: Date.now() };
   }
 
   function leaveParagraph() {
@@ -130,13 +197,15 @@ export function createComprehensionMonitor(opts = {}) {
     const elapsed  = Date.now() - entry.enteredAt;
     const r        = entry.readability;
 
+    const lang = entry.lang || 'en';
+
     // Always track WPM for baseline building (any language, any difficulty)
     if (elapsed > 1000 && r.wordCount > 0) {
       const wpm = Math.round((r.wordCount / elapsed) * 60000);
-      wpmBaseline.add(wpm, r.grade);
+      wpmBaseline.add(lang, wpm, r.grade);
     }
 
-    const expected = expectedReadingMs(r, wpmBaseline.get());
+    const expected = expectedReadingMs(r, wpmBaseline.get(lang));
     if (expected <= 0) return null;
     const ratio = elapsed / expected;
 
@@ -163,8 +232,8 @@ export function createComprehensionMonitor(opts = {}) {
     }
 
     // Too slow compared to personal baseline (silent struggle)
-    if (wpmBaseline.hasSamples() && elapsed > 3000 && r.wordCount >= 40) {
-      const baseWpm     = wpmBaseline.get();
+    if (wpmBaseline.hasSamples(lang) && elapsed > 3000 && r.wordCount >= 40) {
+      const baseWpm     = wpmBaseline.get(lang);
       const actualWpm   = (r.wordCount / elapsed) * 60000;
       const slowRatio   = actualWpm / baseWpm;
       const isSlow      = unusuallySlow != null ? unusuallySlow : slowRatio < SPEED_RATIO_SLOW;
@@ -206,7 +275,10 @@ export function createComprehensionMonitor(opts = {}) {
 
   function markOfferShown() { lastOfferAt = Date.now(); }
 
-  function seedWpmFromCalibration(wpm) { wpmBaseline.seedFromCalibration(wpm); }
+  /* The calibration passages are English, so that is the language the measured
+     figure belongs to. It still serves as the fallback everywhere else until
+     each language earns its own samples. */
+  function seedWpmFromCalibration(wpm, lang) { wpmBaseline.seedFromCalibration(wpm, lang || 'en'); }
 
   // How long the paragraph currently being read should take, and when the
   // reader arrived at it. The state engine needs both to tell "still reading"
@@ -214,7 +286,7 @@ export function createComprehensionMonitor(opts = {}) {
   function getCurrentExpectation() {
     if (!paragraphEntry) return null;
     return {
-      expectedMs: expectedReadingMs(paragraphEntry.readability, wpmBaseline.get()),
+      expectedMs: expectedReadingMs(paragraphEntry.readability, wpmBaseline.get(paragraphEntry.lang)),
       enteredAt:  paragraphEntry.enteredAt,
     };
   }

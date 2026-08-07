@@ -13,6 +13,8 @@
  * detectors downstream are what turn it into signals.
  */
 
+import { countWords, detectLanguage, readingAxis } from './segmentation.js';
+
 const BLOCK_SELECTOR = 'p, li, blockquote';
 
 /* Fraction of viewport height treated as the reading line. Slightly above
@@ -24,7 +26,12 @@ export function createParagraphTracker(opts = {}) {
   const now          = opts.now || (() => Date.now());
   const doc          = opts.document || (typeof document !== 'undefined' ? document : null);
   const viewportH    = opts.viewportHeight || (() => window.innerHeight);
+  const viewportW    = opts.viewportWidth || (() => window.innerWidth);
   const readingLine  = opts.readingLine ?? READING_LINE;
+  /* Read live: an SPA can change the page language without a reload, and a
+     captured copy would keep counting words with the wrong segmenter. */
+  const getLang      = opts.lang || (() => detectLanguage(doc));
+  const getAxis      = opts.axis || (() => readingAxis(doc));
 
   let paragraphs = [];       // [{ el, index, words }]
   let indexOf    = new WeakMap();
@@ -32,9 +39,12 @@ export function createParagraphTracker(opts = {}) {
   let pending    = null;
   let lastScan   = 0;
 
+  /* Was `t.split(/\s+/).length`, which returns 1 for an entire Chinese or
+     Japanese paragraph — so every one of them fell under `minWords` and no
+     paragraph on those pages was ever tracked. */
   function wordCount(el) {
     const t = (el.innerText || el.textContent || '').trim();
-    return t ? t.split(/\s+/).length : 0;
+    return t ? countWords(t, getLang()) : 0;
   }
 
   /* Document order defines the index, which is what regression detection
@@ -57,24 +67,34 @@ export function createParagraphTracker(opts = {}) {
   /* `overrideY` is a measured reading position — currently the cursor, when the
    * reader is using it as a pointer. It beats the viewport heuristic outright
    * because it is an observation rather than an assumption. */
+  /* Vertical Japanese and Chinese (writing-mode: vertical-rl) scroll sideways
+     and read down columns, so the reading line is a vertical band and the
+     relevant extent of a paragraph is its horizontal one. Everything else
+     about the heuristic is unchanged; only the axis moves. */
   function elementAtReadingLine(overrideY) {
     if (!paragraphs.length) return null;
-    const line = Number.isFinite(overrideY) ? overrideY : viewportH() * readingLine;
+    const axis = getAxis();
+    const span = axis.vertical ? viewportW() : viewportH();
+    const frac = axis.vertical && axis.rtl ? 1 - readingLine : readingLine;
+    const line = Number.isFinite(overrideY) && !axis.vertical ? overrideY : span * frac;
+
     let best = null;
     let bestDist = Infinity;
 
     for (const p of paragraphs) {
       let r;
       try { r = p.el.getBoundingClientRect(); } catch (e) { continue; }
-      if (r.height === 0) continue;
+      const near = axis.vertical ? r.left : r.top;
+      const far  = axis.vertical ? r.right : r.bottom;
+      if ((axis.vertical ? r.width : r.height) === 0) continue;
       // Straddling the line wins outright.
-      if (r.top <= line && r.bottom >= line) return p;
-      const dist = r.top > line ? r.top - line : line - r.bottom;
+      if (near <= line && far >= line) return p;
+      const dist = near > line ? near - line : line - far;
       if (dist < bestDist) { bestDist = dist; best = p; }
     }
     // Only fall back to the nearest paragraph if it is close to the line;
     // otherwise the reader is between blocks and we should say nothing.
-    return bestDist < viewportH() * 0.35 ? best : null;
+    return bestDist < span * 0.35 ? best : null;
   }
 
   /* Call on scroll and on a slow interval. Returns a transition or null. */

@@ -12,6 +12,8 @@
  * on forwards is an ordinary interruption and means nothing.
  */
 
+import { countWords, detectLanguage } from './segmentation.js';
+
 export const LONG_BLUR_MS = 30000;
 
 export function createInteractionSignals(opts = {}) {
@@ -55,7 +57,9 @@ export function createInteractionSignals(opts = {}) {
       return push({
         type: 'copy', assertable: false,
         length: text.length, text: text.slice(0, 120),
-        subtype: text.split(/\s+/).length <= 4 ? 'term' : 'passage',
+        // Whitespace counting called every CJK selection a single-word "term",
+        // however much text was actually highlighted.
+        subtype: countWords(text, detectLanguage()) <= 4 ? 'term' : 'passage',
       });
     }
 
