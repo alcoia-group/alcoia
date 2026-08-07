@@ -121,6 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
     idleBlinkToggle.checked     = res.sra_idle_blink !== false;
     comprehensionToggle.checked = res.sra_comprehension !== false;
     assistantToggle.checked     = res.sra_enabled !== false;
+    document.body.classList.toggle('assistant-off', res.sra_enabled === false);
     ttsToggle.checked           = !!res.sra_tts;
     focusRulerToggle.checked    = !!res.sra_focus_ruler;
     dyslexiaToggle.checked      = !!res.sra_dyslexia;
@@ -237,8 +238,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Toggles ─────────────────────────────────────────────────────────────
+  /* The master switch. Writing the key is enough — every open tab listens for
+   * it via chrome.storage.onChanged, which a settings broadcast to the active
+   * tab would miss. */
   assistantToggle.addEventListener('change', () => {
     chrome.storage.local.set({ sra_enabled: assistantToggle.checked });
+    document.body.classList.toggle('assistant-off', !assistantToggle.checked);
   });
   autohideToggle.addEventListener('change', () => {
     timeoutRow.style.display = autohideToggle.checked ? 'flex' : 'none';

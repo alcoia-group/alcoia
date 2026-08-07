@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>Alcoia — My Highlights</title>
+  <title>alcoia — My Highlights</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #FAFAF7; --surface: rgba(255,255,255,0.75); --border: rgba(26,126,93,0.12);
-      --text: #2c2c2a; --muted: #7a7a72; --accent: #1A7E5D; --serif: var(--alc-serif);
+      --bg: #F9F7F2; --surface: rgba(255,255,255,0.75); --border: rgba(126,96,174,0.12);
+      --text: #333333; --muted: #6B6862; --accent: #5F4589; --serif: var(--alc-serif);
     }
     body { background: var(--bg); color: var(--text); font-family: var(--serif); font-size: 13px;
            min-height: 100vh; }
@@ -39,7 +39,7 @@
     }
     .clear-all {
       margin-left: auto; background: none; border: none; font-family: var(--serif);
-      font-size: 11px; color: #c0392b; cursor: pointer; font-style: italic;
+      font-size: 11px; color: #B4795F; cursor: pointer; font-style: italic;
       padding: 4px 8px; border-radius: 6px; transition: background 0.12s;
     }
     .clear-all:hover { background: rgba(192,57,43,0.08); }
@@ -68,7 +68,7 @@
       background: none; border: none; cursor: pointer; font-size: 16px;
       color: #ccc; transition: color 0.12s; line-height: 1; padding: 2px;
     }
-    .hl-delete:hover { color: #c0392b; }
+    .hl-delete:hover { color: #B4795F; }
 
     .empty {
       text-align: center; padding: 60px 22px; color: var(--muted); font-style: italic;
@@ -76,7 +76,7 @@
     .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
     .empty p { font-size: 13px; line-height: 1.7; }
     .empty code {
-      background: rgba(26,126,93,0.08); border-radius: 4px; padding: 1px 6px;
+      background: rgba(126,96,174,0.08); border-radius: 4px; padding: 1px 6px;
       font-size: 11px; color: var(--accent); font-style: normal;
     }
   </style>

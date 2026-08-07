@@ -47,7 +47,7 @@ export function createQuestionCard(deps = {}) {
         <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
       </div>
       <div class="sra-popup-body">
-        <div class="sra-state-badge" style="color:#1A7E5D;border-color:rgba(26,126,93,0.3);background:rgba(26,126,93,0.06)">quick check</div>
+        <div class="sra-state-badge sra-q-badge">quick check</div>
         ${evidence}
         <div class="sra-q-text">${esc(question.q)}</div>
         <div class="sra-q-options">

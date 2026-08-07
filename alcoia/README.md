@@ -1,6 +1,19 @@
-# Alcoia — Cognitive Reading Assistant
+# alcoia — reference
 
-A Chrome extension that uses webcam-based eye tracking to detect when you are struggling with text and intervenes with AI-generated summaries, read-aloud, and adaptive visual aids — automatically, without manual interaction.
+A browser extension that notices when reading slows down on a page and offers help with that
+passage. Detection runs on **browser telemetry** — pace against text difficulty and against your
+own baseline, re-reading, selection, tab focus — which needs no permission and no camera. The
+webcam is an **optional secondary sensor, off by default**, contributing only presence and coarse
+region.
+
+The primary intervention is a **question about what you just read**, not a summary: an answer is
+the only ground truth in the system, and summarising removes the difficulty that produces
+retention.
+
+> **Reading this file:** the sections below are a feature and configuration reference. Some of the
+> deeper sections still describe the gaze-first architecture this project has moved away from —
+> where this file and [`../README.md`](../README.md) or [`../the project notes`](../the project notes) disagree,
+> those two are current and this one is not.
 
 ---
 
@@ -28,7 +41,7 @@ A Chrome extension that uses webcam-based eye tracking to detect when you are st
 
 ## Overview
 
-Alcoia is a Chrome extension that watches how you read using your webcam and responds intelligently when it detects you are confused, overloaded, zoning out, or reading too quickly through difficult text. It generates AI summaries, speaks paragraphs aloud, and adapts its visual presentation — all without you lifting a finger.
+alcoia is a Chrome extension that watches how you read using your webcam and responds intelligently when it detects you are confused, overloaded, zoning out, or reading too quickly through difficult text. It generates AI summaries, speaks paragraphs aloud, and adapts its visual presentation — all without you lifting a finger.
 
 The extension supports:
 - Ordinary web pages (articles, documentation, Wikipedia, etc.)
@@ -128,29 +141,34 @@ Four named presets that configure all toggles at once. Select in the popup's **R
 | Format | Mechanism |
 |---|---|
 | **Web pages** | Content script injects directly; gaze maps to DOM paragraphs |
-| **Local PDFs** | `file://*.pdf` navigations are intercepted by the background service worker and redirected to a bundled PDF.js viewer. Alcoia content script injects normally |
+| **Local PDFs** | `file://*.pdf` navigations are intercepted by the background service worker and redirected to a bundled PDF.js viewer. alcoia content script injects normally |
 | **Local PPTX** | `file://*.pptx` navigations redirected to a bundled PPTX viewer (JSZip parses slide XML). Each slide renders as a readable text card |
 
 ---
 
-## Cognitive States
+## Reading states
 
-| State | What it means | Action |
+Six states, each naming an **observation** rather than a feeling. `confused` and `overloaded`
+were removed deliberately: they are internal states that cannot be measured from a browser, and
+claiming to detect them would be claiming something this software cannot support.
+
+| State | What was observed | What it earns |
 |---|---|---|
-| `focused` | Normal, on-task reading | None |
-| `skimming` | Fast scanning, high velocity, short fixations | None |
-| `confused` | High regression rate, long fixations, low saccade variance | Explain summary + optional TTS |
-| `zoning_out` | Gaze drifting, low fixation count, eyes off text | Gentle visual nudge |
-| `overloaded` | Unusually short fixations despite high text density | Simplified summary + optional TTS |
+| `on_pace` | Pace matches the difficulty of the text and your own baseline | Nothing |
+| `skimming` | Moving faster than this text usually takes to read | A question, but only on difficult text — skimming easy prose is a choice |
+| `struggling` | Slower than your usual pace here, or going back over it | A question; an explanation if the answer is wrong |
+| `drifting` | Movement on the page has stalled without you leaving it | A nudge on the current paragraph |
+| `absent` | Nothing to read from — you are away from the page | Nothing |
+| `unknown` | The signals do not agree | **Nothing, ever.** This is a valid and common answer |
 
-State is classified every 3 seconds. Actions fire with a 20-second per-paragraph cooldown to avoid feeling intrusive.
-
----
+Gaze may assert only `absent`. It can corroborate a telemetry state to raise confidence, but it
+can never assert a reading state on its own — a gaze label with nothing behind it resolves to
+`unknown` and is dropped.
 
 ## Reader Profiles
 
 ### Professionals (lawyers, doctors, analysts, office workers)
-Dense, long-form text is the daily norm. Alcoia helps with:
+Dense, long-form text is the daily norm. alcoia helps with:
 - Comprehension check flags paragraphs read faster than their difficulty warrants (critical in contracts)
 - AI explains jargon in context, with the surrounding paragraph included for accuracy
 - Session reports show where reading slowed down — useful for identifying clauses to re-examine
@@ -160,7 +178,7 @@ Dense, long-form text is the daily norm. Alcoia helps with:
 ### Students
 - Reading calibration sets a personal WPM baseline per document type
 - Confused state triggers explanations; overloaded state triggers simplifications
-- PPTX viewer gives Alcoia treatment to lecture slides
+- PPTX viewer gives alcoia treatment to lecture slides
 - Session reports show exactly which sections they struggled with — useful for revision and identifying gaps
 - Highlight persistence marks previously difficult paragraphs on re-reads
 - Scroll backtrack detection recognises when they re-read a section and offers a summary
@@ -308,7 +326,7 @@ alcoia/
 
 ### Cross-world communication
 
-Chrome extensions run content scripts in an isolated JavaScript world. `window.webgazer` is not accessible from there. Alcoia solves this with a postMessage bridge:
+Chrome extensions run content scripts in an isolated JavaScript world. `window.webgazer` is not accessible from there. alcoia solves this with a postMessage bridge:
 
 ```
 Content script (isolated world)
@@ -349,7 +367,7 @@ See the Architecture section above for the annotated tree. Key relationships:
 
 ### Allow file access (for PDF and PPTX support)
 
-1. On `chrome://extensions`, click **Details** next to Alcoia.
+1. On `chrome://extensions`, click **Details** next to alcoia.
 2. Enable **Allow access to file URLs**.
 
 This is required for the PDF and PPTX viewers to fetch local files.
@@ -399,7 +417,7 @@ Content-Type: application/json
 ### First use
 
 1. Navigate to any page with text.
-2. Open the extension popup (click the Alcoia icon).
+2. Open the extension popup (click the alcoia icon).
 3. Go to the **Session** tab → click **Start Camera** → allow camera access.
 4. A dot-calibration overlay appears. Click each green dot as it appears (two passes, 18 clicks total).
 5. The calibration is saved. It will not appear again on future pages.

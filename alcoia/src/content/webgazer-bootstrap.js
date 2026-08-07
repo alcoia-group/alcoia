@@ -14,7 +14,7 @@
   const wgUrl    = scriptEl && scriptEl.dataset && scriptEl.dataset.webgazerUrl;
 
   if (!wgUrl) {
-    console.warn('[Alcoia] bootstrap: missing data-webgazer-url attribute');
+    console.warn('[alcoia] bootstrap: missing data-webgazer-url attribute');
     return;
   }
 
@@ -22,7 +22,7 @@
   // WebGazer requires HTTPS or localhost. HTTP pages will always fail.
   if (!window.isSecureContext) {
     const msg = 'WebGazer requires HTTPS or localhost. This page uses plain HTTP — eye tracking cannot start here. Try a different page.';
-    console.warn('[Alcoia]', msg);
+    console.warn('[alcoia]', msg);
     window.postMessage({ source: 'sra-control', type: 'cameraError', error: msg, code: 'insecure-context' }, '*');
     return;
   }
@@ -40,8 +40,8 @@
     })
     .catch(() => {
       // tfhub.dev is blocked by CSP on this page
-      const msg = "This page's Content Security Policy blocks tfhub.dev (required for WebGazer's face detector). Eye tracking won't work here. Try using Alcoia on a news article, documentation site, or any page without strict CSP.";
-      console.warn('[Alcoia]', msg);
+      const msg = "This page's Content Security Policy blocks tfhub.dev (required for WebGazer's face detector). Eye tracking won't work here. Try using alcoia on a news article, documentation site, or any page without strict CSP.";
+      console.warn('[alcoia]', msg);
       window.postMessage({
         source: 'sra-control',
         type:   'cameraError',
@@ -57,7 +57,7 @@
     s.onload = function () {
       if (typeof webgazer === 'undefined') {
         const msg = 'webgazer loaded but window.webgazer is not defined';
-        console.warn('[Alcoia]', msg);
+        console.warn('[alcoia]', msg);
         window.postMessage({ source: 'sra-control', type: 'cameraError', error: msg }, '*');
         return;
       }
@@ -65,7 +65,7 @@
       // List available trackers for debugging
       try {
         const trackers = webgazer.getTrackerNames ? webgazer.getTrackerNames() : ['TFFacemesh'];
-        console.log('[Alcoia] WebGazer available trackers:', trackers);
+        console.log('[alcoia] WebGazer available trackers:', trackers);
       } catch (e) {}
 
       // Use TFFacemesh (the only option in newer webgazer builds)
@@ -77,7 +77,7 @@
         webgazer.setGazeListener(function (data) {
           try { window.postMessage({ source: 'sra-webgazer', gaze: data }, '*'); } catch (e) {}
         });
-      } catch (e) { console.warn('[Alcoia] setGazeListener failed:', e.message); }
+      } catch (e) { console.warn('[alcoia] setGazeListener failed:', e.message); }
 
       // Hide all built-in UI
       function hideUI() {
@@ -100,7 +100,7 @@
 
       p.then(function () {
         hideUI();
-        console.log('[Alcoia] WebGazer camera ready');
+        console.log('[alcoia] WebGazer camera ready');
         window.postMessage({ source: 'sra-control', type: 'cameraReady' }, '*');
       }).catch(function (err) {
         const msg = err && err.message ? err.message : String(err);
@@ -109,14 +109,14 @@
         const friendly = isCsp
           ? "WebGazer's face detection model couldn't load (likely blocked by this page's CSP). Try a different page."
           : msg;
-        console.warn('[Alcoia] webgazer.begin() failed:', friendly);
+        console.warn('[alcoia] webgazer.begin() failed:', friendly);
         window.postMessage({ source: 'sra-control', type: 'cameraError', error: friendly }, '*');
       });
     };
 
     s.onerror = function () {
       const msg = 'Failed to load webgazer bundle from: ' + url;
-      console.warn('[Alcoia]', msg);
+      console.warn('[alcoia]', msg);
       window.postMessage({ source: 'sra-control', type: 'cameraError', error: msg }, '*');
     };
 
@@ -188,12 +188,12 @@
           : (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0);
         if (hasData && typeof webgazer !== 'undefined' && webgazer.setData) {
           webgazer.setData(parsed);
-          console.log('[Alcoia] WebGazer model restored from previous session');
+          console.log('[alcoia] WebGazer model restored from previous session');
         } else {
-          console.log('[Alcoia] No usable saved model — training fresh this session');
+          console.log('[alcoia] No usable saved model — training fresh this session');
         }
       } catch (e) {
-        console.warn('[Alcoia] Model restore failed:', e.message);
+        console.warn('[alcoia] Model restore failed:', e.message);
       }
       window.postMessage({ source: 'sra-model-restored', id: d.id }, '*');
       return;

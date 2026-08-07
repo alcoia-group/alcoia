@@ -1,4 +1,4 @@
-// server/index.js — Alcoia AI Backend (v2 — improved prompting)
+// server/index.js — alcoia AI Backend (v2 — improved prompting)
 // Uses Groq API (fast, free tier available at console.groq.com)
 
 require('dotenv').config();
@@ -248,7 +248,7 @@ app.post('/api/summarize', rateLimit, async (req, res) => {
     if (!summary) return res.status(500).json({ error: 'Empty response from Groq.' });
     res.json({ summary });
   } catch (err) {
-    console.error('[Alcoia] Groq error:', err.message);
+    console.error('[alcoia] Groq error:', err.message);
     res.status(500).json({ error: 'AI request failed', detail: err.message });
   }
 });
@@ -291,7 +291,7 @@ app.post('/api/questions', questionRateLimit, async (req, res) => {
     questionCache.set(key, questions);
     res.json({ questions, cached: false });
   } catch (err) {
-    console.error('[Alcoia] Question generation failed:', err.message);
+    console.error('[alcoia] Question generation failed:', err.message);
     res.status(500).json({ error: 'Question generation failed', detail: err.message });
   }
 });
@@ -363,7 +363,7 @@ app.get('/health', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n  Alcoia backend → http://localhost:${PORT}`);
+  console.log(`\n  alcoia backend → http://localhost:${PORT}`);
   console.log(`  Health check  → http://localhost:${PORT}/health`);
   console.log(`  Demo page     → http://localhost:${PORT}/demo\n`);
 });

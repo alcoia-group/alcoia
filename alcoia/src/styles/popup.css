@@ -13,7 +13,7 @@
 	user-select: none;
 	text-shadow: 0 1px 0 #fff, 0 0.5px 0 #888;
 }
-:root{--bg:#FAFAF7;--text:#333333;--accent:#1A7E5D;--accent2:#3A82F7;--gold:#C8A54B}
+:root{--bg:#F9F7F2;--text:#333333;--accent:#5F4589;--accent2:#3A82F7;--gold:#9A6B2F}
 *{box-sizing:border-box}
 body{margin:0;font-family:var(--alc-ui, system-ui, sans-serif);background:var(--bg);color:var(--text);width:340px;height:480px}
 .popup-root{padding:18px;display:flex;flex-direction:column;gap:14px;position:relative;min-height:480px}

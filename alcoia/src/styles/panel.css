@@ -1,36 +1,47 @@
-/* ── Alcoia — extension-page chrome ───────────────────────────────────────────
+/* ── alcoia — extension-page chrome ───────────────────────────────────────────
  *
  * Shared by every page the extension owns: the toolbar popup, notes,
  * highlights, export, the session report. Pairs with fonts.css, which must be
  * linked first.
  *
- * Direction: warm paper. A cream ground, ink-brown text, one forest-green
- * accent, hairline warm borders. Serif for anything the reader reads as
- * prose; Plus Jakarta Sans for labels, buttons and controls. Nothing is set
- * in italic unless it is a quotation — the previous revision italicised every
- * caption in the product, which is what made it feel dated and hard to scan.
+ * Direction: warm paper, matte. Off-white ground, charcoal ink — never pure
+ * black on never pure white — dusty lilac as the one brand colour, muted sage
+ * reserved for moments the system itself produced. Serif for prose the reader
+ * reads; Plus Jakarta Sans for labels, buttons and controls. Nothing italic
+ * unless it is a quotation.
+ *
+ * No shadows on controls. Elevation here is a hairline: the interface should
+ * read as matte and tactile, like a printed page, rather than as glass over a
+ * light source. --shadow survives only for genuinely floating panels.
  * ────────────────────────────────────────────────────────────────────────── */
 
 :root {
-  --paper:      #FCFAF5;
-  --paper-2:    #F6F2E9;
-  --surface:    #FFFFFF;
-  --border:     rgba(60,48,32,0.11);
-  --border-2:   rgba(60,48,32,0.18);
-  --text:       #2A2722;
-  --muted:      #6E675C;
-  --faint:      #9C9486;
-  --accent:     #1A7E5D;
-  --accent-2:   #12604A;
-  --accent-sf:  rgba(26,126,93,0.075);
-  --accent-sf2: rgba(26,126,93,0.14);
-  --gold:       #B08A2E;
-  --warn:       #8A5A12;
-  --wrong:      #A33B2D;
+  --paper:      #F9F7F2;
+  --paper-2:    #F2EFE8;
+  --surface:    #FFFEFB;
+  --border:     rgba(51,51,51,0.12);
+  --border-2:   rgba(51,51,51,0.20);
+  --text:       #333333;
+  --muted:      #6B6862;
+  --faint:      #9A968E;
+  /* Deepened from the original #B8A9C9, which read as light grey against warm
+     paper and could not carry a white label. --accent-2 is for type on paper. */
+  --accent:     #7E60AE;
+  --accent-2:   #5F4589;
+  --accent-sf:  #EFE9F6;
+  --accent-sf2: rgba(126,96,174,0.30);
+  /* Sage: the system speaking. Never a second brand colour — its meaning is a
+     function of how rarely it appears. */
+  --sage:       #A3B1A3;
+  --sage-2:     #6F8070;
+  --sage-sf:    #EAEFEA;
+  --gold:       #9A6B2F;
+  --warn:       #9A6B2F;
+  --wrong:      #B4795F;
   --radius:     12px;
   --radius-sm:  9px;
-  --shadow-sm:  0 1px 2px rgba(60,48,32,0.06);
-  --shadow:     0 2px 4px rgba(60,48,32,0.05), 0 8px 24px -8px rgba(60,48,32,0.18);
+  --shadow-sm:  none;
+  --shadow:     0 1px 2px rgba(51,51,51,0.05), 0 8px 24px -12px rgba(51,51,51,0.16);
 
   /* Legacy aliases — the older pages declare --serif locally; these keep
      them working while they migrate onto the tokens above. */
@@ -40,19 +51,22 @@
 
 .dark-mode,
 body.dark-mode {
-  --paper:      #161A18;
-  --paper-2:    #1D2220;
-  --surface:    #1E2422;
-  --border:     rgba(160,200,180,0.13);
-  --border-2:   rgba(160,200,180,0.20);
+  --paper:      #1A181C;
+  --paper-2:    #221F26;
+  --surface:    #242029;
+  --border:     rgba(200,188,214,0.14);
+  --border-2:   rgba(200,188,214,0.22);
   --text:       #E6E3DB;
   --muted:      #9A958B;
   --faint:      #767066;
-  --accent:     #4CBE8E;
-  --accent-2:   #6FD3A8;
-  --accent-sf:  rgba(76,190,142,0.10);
-  --accent-sf2: rgba(76,190,142,0.18);
-  --gold:       #D2B25F;
+  --accent:     #7E60AE;
+  --accent-2:   #CDBBEE;
+  --accent-sf:  rgba(183,159,224,0.12);
+  --accent-sf2: rgba(183,159,224,0.24);
+  --sage:       #8FA08F;
+  --sage-2:     #A8BCA8;
+  --sage-sf:    rgba(163,177,163,0.14);
+  --gold:       #C09A55;
   --shadow-sm:  0 1px 2px rgba(0,0,0,0.35);
   --shadow:     0 2px 4px rgba(0,0,0,0.3), 0 8px 24px -8px rgba(0,0,0,0.5);
 }
@@ -130,13 +144,13 @@ body {
 }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary { background: var(--accent); color: #fff; }
-.btn-primary:hover:not(:disabled) { background: var(--accent-2); }
+/* White on lilac clears AA at the deepened value (5.0:1). */
+.btn-primary { background: var(--accent); color: #FFFFFF; }
+.btn-primary:hover:not(:disabled) { background: #6E4F9C; }
 .btn-ghost {
   background: var(--surface);
   color: var(--text);
   border-color: var(--border);
-  box-shadow: var(--shadow-sm);
 }
 .btn-ghost:hover:not(:disabled) { background: var(--accent-sf); border-color: var(--border-2); color: var(--accent-2); }
 .btn-quiet {

@@ -1,4 +1,4 @@
-/* Loads the Alcoia extension unpacked in Chromium and runs the the project notes
+/* Loads the alcoia extension unpacked in Chromium and runs the the project notes
  * verification checklist against a plain article page.
  *
  *   CAM=off node tests/browser/smoke.mjs   (default — camera must stay untouched)
@@ -124,7 +124,7 @@ page.on('console', (m) => {
   const t = `[${m.type()}] ${m.text()}`;
   findings.allLogs.push(t);
   if (m.type() === 'error') findings.consoleErrors.push(m.text());
-  if (/\bState:|SRA|Alcoia/i.test(m.text())) findings.engineLogs.push(m.text());
+  if (/\bState:|SRA|alcoia/i.test(m.text())) findings.engineLogs.push(m.text());
 });
 page.on('pageerror', (e) => findings.pageErrors.push(String(e)));
 findings.failedRequests = [];

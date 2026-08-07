@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>Alcoia — Session Report</title>
+  <title>alcoia — Session Report</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
   <style>
     :root {
-      --accent: #1A7E5D; --accent2: #0f5c42;
-      --bg: #FAFAF7; --text: #2c2c2a; --muted: #7a7a72;
-      --border: rgba(26,126,93,0.12);
+      --accent: #5F4589; --accent2: #5F4589;
+      --bg: #F9F7F2; --text: #333333; --muted: #6B6862;
+      --border: rgba(126,96,174,0.12);
       --serif: var(--alc-serif);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -72,13 +72,13 @@
   <p class="sub">Your reading patterns from recent sessions. Sessions shorter than 30s are not saved.</p>
 
   <div class="picker" id="picker"></div>
-  <div id="report"><p class="empty">No sessions yet. Read some pages with Alcoia active and come back here.</p></div>
+  <div id="report"><p class="empty">No sessions yet. Read some pages with alcoia active and come back here.</p></div>
 
 </div>
 <script>
 const STATE_COLORS = {
-  focused: '#1A7E5D', skimming: '#2563a8', confused: '#a06000',
-  zoning_out: '#5a3e8a', overloaded: '#8b2000',
+  focused: '#5F4589', skimming: '#5B7A99', confused: '#9A6B2F',
+  zoning_out: '#7E6E5A', overloaded: '#B4795F',
 };
 const STATE_LABELS = {
   focused: 'Focused', skimming: 'Skimming', confused: 'Confused',
@@ -117,7 +117,7 @@ function renderReport(session) {
   );
   const sigHtml = interesting.length
     ? interesting.map(s => {
-        const bc = s.type === 'backtrack' ? '#5a3e8a' : s.subtype === 'overloaded' ? '#8b2000' : '#a06000';
+        const bc = s.type === 'backtrack' ? '#7E6E5A' : s.subtype === 'overloaded' ? '#B4795F' : '#9A6B2F';
         const lab = s.type === 'backtrack' ? 'scroll backtrack' : (s.subtype || s.type);
         const txt = s.text ? `<p class="sig-text">"${s.text.slice(0, 120)}${s.text.length > 120 ? '…' : ''}"</p>` : '';
         return `<div class="signal-item">

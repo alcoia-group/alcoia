@@ -119,7 +119,7 @@ if (!document.getElementById('sra-tts-styles')) {
     .sra-tts-word { transition: background 0.1s, color 0.1s; border-radius: 3px; }
     .sra-tts-active {
       background: rgba(26, 126, 93, 0.22) !important;
-      color: #0f5c42 !important;
+      color: #5F4589 !important;
     }
   `;
   (document.head || document.documentElement).appendChild(s);
