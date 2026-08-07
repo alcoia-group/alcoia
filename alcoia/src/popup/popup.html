@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Alcoia</title>
+  <title>alcoia</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
   <style>
@@ -41,7 +41,6 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      box-shadow: var(--shadow-sm);
     }
     .state-top { display: flex; align-items: center; gap: 9px; }
     .state-dot {
@@ -49,8 +48,9 @@
       background: var(--faint); flex: none;
       transition: background 0.3s, box-shadow 0.3s;
     }
-    .state-dot.live     { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-sf); }
-    .state-dot.attn     { background: var(--warn);   box-shadow: 0 0 0 3px rgba(138,90,18,0.12); }
+    /* on pace is a sage moment — the system is satisfied, not branded. */
+    .state-dot.live     { background: var(--sage-2); box-shadow: 0 0 0 3px var(--sage-sf); }
+    .state-dot.attn     { background: var(--warn);   box-shadow: 0 0 0 3px rgba(154,107,47,0.12); }
     .state-dot.loading  { background: var(--gold);   animation: blink 1.1s ease infinite; }
     .state-dot.error    { background: var(--wrong); }
     @keyframes blink { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
@@ -77,8 +77,8 @@
       color: var(--muted);
       background: var(--paper);
     }
-    .src-chip.on { color: var(--accent-2); border-color: var(--accent-sf2); background: var(--accent-sf); }
-    .src-chip.err { color: var(--wrong); border-color: rgba(163,59,45,0.28); }
+    .src-chip.on { color: var(--sage-2); border-color: rgba(111,128,112,0.32); background: var(--sage-sf); }
+    .src-chip.err { color: var(--wrong); border-color: rgba(180,121,95,0.28); }
     .src-chip i {
       width: 5px; height: 5px; border-radius: 50%;
       background: currentColor; opacity: 0.55; font-style: normal;
@@ -169,10 +169,12 @@
       background: var(--surface);
       transition: all 0.2s;
     }
-    .chip.on            { border-color: var(--accent); color: var(--accent-2); background: var(--accent-sf); }
-    .chip.on-struggling { border-color: var(--warn);   color: var(--warn);   background: rgba(138,90,18,0.08); }
-    .chip.on-drifting   { border-color: #5a4b8a;       color: #5a4b8a;       background: rgba(90,75,138,0.07); }
-    .chip.on-skimming   { border-color: #2563a8;       color: #2563a8;       background: rgba(37,99,168,0.07); }
+    /* Each state gets a hue that cannot be mistaken for the brand lilac —
+       otherwise "the system acted here" and "this is alcoia" read the same. */
+    .chip.on            { border-color: var(--sage-2); color: var(--sage-2); background: var(--sage-sf); }
+    .chip.on-struggling { border-color: var(--warn);   color: var(--warn);   background: rgba(154,107,47,0.08); }
+    .chip.on-drifting   { border-color: #7E6E5A;       color: #7E6E5A;       background: rgba(90,75,138,0.07); }
+    .chip.on-skimming   { border-color: #5B7A99;       color: #5B7A99;       background: rgba(91,122,153,0.07); }
 
     /* ── Shortcuts ── */
     .kbd-card {
@@ -193,6 +195,11 @@
 
     #dyslexiaOptions { padding: 2px 0 0; }
 
+    /* Switched off: the panel stays usable but says so, rather than showing
+       a live reading state it is no longer producing. */
+    body.assistant-off .state-card { opacity: 0.55; }
+    body.assistant-off .tab-panel  { opacity: 0.6; }
+
     /* ── Platform gating ──────────────────────────────────────────────
        Safari on iOS and iPadOS does not give a web extension a usable
        camera, and on a phone the whole gaze path is dead weight. Rather
@@ -203,7 +210,10 @@
     body.no-camera [data-camera-only] { display: none !important; }
 
     /* ── Touch and narrow viewports ── */
-    @media (max-width: 400px) {
+    /* 360px, not 400px: the Chrome popup body *is* 400px wide, so a
+       max-width:400px query fires in the ordinary case and collapses both
+       grids to a single column on every desktop install. */
+    @media (max-width: 360px) {
       .toggle-grid, .mode-grid, .btn-grid { grid-template-columns: 1fr; }
       .section { padding: 12px 14px; }
       .state-card { margin: 12px 14px 0; }
@@ -241,11 +251,11 @@
     <div class="brand">
       <img id="sra-logo-img" src="../../assets/alcoia.png" alt="">
       <div>
-        <div class="brand-name">Alcoia</div>
+        <div class="brand-name">alcoia</div>
         <div class="brand-sub">Notices when reading slows down</div>
       </div>
     </div>
-    <label class="pill" title="Turn the assistant on or off">
+    <label class="pill" title="Turn alcoia off on every page — like uninstalling it, without uninstalling it">
       <input type="checkbox" id="assistantToggle" checked>
       <span class="pill-track"></span>
     </label>

@@ -1,1 +1,9 @@
 node_modules/
+
+# Internal working documents — kept out of the published repository.
+# NOTE: these are ignored, not deleted. They still exist in your working tree.
+the project notes
+NOTICE.md
+PRIVACY.md
+WEBSITE-BRIEF.md
+LEGAL-DISCLOSURE-MAP.md

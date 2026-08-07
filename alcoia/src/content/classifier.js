@@ -1,4 +1,4 @@
-// classifier.js — Decision Tree for Alcoia
+// classifier.js — Decision Tree for alcoia
 // Auto-generated — do not edit by hand.
 // Regenerate via: tldr classifier/tldr_classifier_training(1).ipynb
 //   (NOT tldr_classifier_v2.ipynb — that notebook exports a different tree.

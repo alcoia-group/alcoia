@@ -1,5 +1,5 @@
 /*
-  content.js — Alcoia Extension Core
+  content.js — alcoia Extension Core
   Guard at the very top prevents the SyntaxError when injected twice.
 */
 
@@ -14,8 +14,8 @@ if (window.__sra_content_loaded) {
 
 function __sra_main() {
 
-const _log  = (...a) => console.log('[Alcoia]', ...a);
-const _warn = (...a) => console.warn('[Alcoia]', ...a);
+const _log  = (...a) => console.log('[alcoia]', ...a);
+const _warn = (...a) => console.warn('[alcoia]', ...a);
 
 (async function () {
 
@@ -32,6 +32,11 @@ const _warn = (...a) => console.warn('[Alcoia]', ...a);
   const _summaryCache        = new Map();
 
   // ── Runtime state ──────────────────────────────────────────────────────
+  /* The popup's master switch. It used to write `sra_enabled` to storage and
+   * nothing anywhere read it, so turning the assistant "off" changed nothing
+   * at all — the detectors kept running, cards kept appearing, and the only
+   * way to actually stop it was chrome://extensions. It is wired now. */
+  let assistantEnabled   = true;
   let backendUrl         = BACKEND_DEFAULT;
   // Off until the reader turns it on. This is the boot value used before
   // storage answers, so `true` here would start a webcam on a fresh profile.
@@ -93,7 +98,7 @@ const _warn = (...a) => console.warn('[Alcoia]', ...a);
       if (!document.getElementById('sra-hl-marker-css')) {
         const s = document.createElement('style');
         s.id = 'sra-hl-marker-css';
-        s.textContent = '[data-sra-summarized]{border-left:2px solid rgba(26,126,93,0.3)!important;padding-left:6px!important;}';
+        s.textContent = '[data-sra-summarized]{border-left:2px solid rgba(126,96,174,0.3)!important;padding-left:6px!important;}';
         document.head.appendChild(s);
       }
     });
@@ -291,6 +296,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     langDetect: langDetectModule,
     // Read live: the storage listener reassigns these at runtime.
     settings: () => ({
+      assistantEnabled,
       comprehensionCheckEnabled, eyeTrackingEnabled, focusRulerEnabled,
       debugEnabled, dyslexiaEnabled, personalBaseline, scriptInfo,
     }),
@@ -316,6 +322,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         else forceStopIdle();
       },
       onIntervention: async (decision, state, target) => {
+        // Off means off: nothing reaches the screen, and the budget is not
+        // spent on an offer that was never made.
+        if (!assistantEnabled) return false;
         if (decision.action === 'nudge') {
           showNudge(target);
           if (target) highlightElement(target, 3000);
@@ -345,6 +354,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   const settingsReady = new Promise((resolve) => { settingsLoaded = resolve; });
 
   chrome.storage.local.get({
+    sra_enabled: true,
     sra_backend_url: BACKEND_DEFAULT, sra_eye: false, sra_selection: true,
     sra_highlight_para: true, sra_autohide: false, sra_autohide_timeout: 12,
     sra_pin_default: false, sra_debug: false, sra_idle_blink: true, sra_comprehension: true,
@@ -353,6 +363,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     sra_personal_baseline: null, sra_baseline_wpm: null, sra_dark_mode: false,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
+    assistantEnabled   = res.sra_enabled !== false;
     eyeTrackingEnabled = res.sra_eye === true;
     selectionEnabled   = res.sra_selection !== false;
     highlightEnabled   = res.sra_highlight_para !== false;
@@ -472,6 +483,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     document.addEventListener('keydown', async (e) => {
       if (e.key === 'Escape') { hidePopup(); return; }
       if (!e.altKey) return;
+      // Escape still closes whatever is open; every other shortcut is inert
+      // while the assistant is switched off, so the page keeps its own keys.
+      if (!assistantEnabled) return;
 
       // Alt+1–5: force a state's intervention, for testing.
       const simState = SIM_KEYS[e.key];
@@ -986,8 +1000,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
   }
 
-  // ── Selection Alcoia (or Ctrl+drag → colour highlight) ──────────────────
+  // ── Selection alcoia (or Ctrl+drag → colour highlight) ──────────────────
   document.addEventListener('mouseup', async (ev) => {
+    if (!assistantEnabled) return;
     if (!selectionEnabled) return;
 
     let selected = '';
@@ -1239,7 +1254,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         ? `You read this stretch at about ${signal.actualWpm} words per minute; your usual pace is
            around ${signal.baselineWpm}.`
         : 'You spent noticeably longer here than you usually do.';
-      return `<div class="sra-state-badge" style="color:#a06000;border-color:rgba(160,96,0,0.3);background:rgba(160,96,0,0.06)">
+      return `<div class="sra-state-badge" style="color:#9A6B2F;border-color:rgba(154,107,47,0.3);background:rgba(154,107,47,0.06)">
         reading pace check</div>
         ${observed}
         <div style="line-height:1.7">${detail}
@@ -1256,7 +1271,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
            ${Math.round(signal.expected / 1000)}s for text this dense.`
         : 'you moved through it faster than text this dense usually takes.';
       const score = r && Number.isFinite(r.score) ? ` (readability score ${r.score.toFixed(0)}/100)` : '';
-      return `<div class="sra-state-badge" style="color:#a06000;border-color:rgba(160,96,0,0.3);background:rgba(160,96,0,0.06)">
+      return `<div class="sra-state-badge" style="color:#9A6B2F;border-color:rgba(154,107,47,0.3);background:rgba(154,107,47,0.06)">
         reading pace check</div>
         ${observed}
         <div style="line-height:1.7">That was a <strong>complex paragraph</strong>${score} but ${timing}
@@ -1264,7 +1279,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
 
     if (signal.type === 'backtrack') {
-      return `<div class="sra-state-badge" style="color:#5a3e8a;border-color:rgba(90,62,138,0.3);background:rgba(90,62,138,0.06)">
+      return `<div class="sra-state-badge" style="color:#7E6E5A;border-color:rgba(126,110,90,0.3);background:rgba(126,110,90,0.06)">
         scroll backtrack</div>
         ${observed}
         <div style="line-height:1.7">Looks like something might not have landed clearly.
@@ -1656,11 +1671,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       ].join('');
 
       const stateTag = state
-        ? `<span style="background:rgba(26,126,93,0.3);padding:1px 7px;border-radius:4px;font-style:italic;">${state}</span>`
+        ? `<span style="background:rgba(126,96,174,0.3);padding:1px 7px;border-radius:4px;font-style:italic;">${state}</span>`
         : '';
       toast.innerHTML = `
         <span>↩ Back ${ago}${stateTag ? ' · last state: ' + stateTag : ''}</span>
-        ${pct > 5 ? `<button id="sra-cont-restore" style="background:rgba(26,126,93,0.7);border:none;color:#fff;padding:4px 10px;border-radius:7px;cursor:pointer;font-family:inherit;font-size:11px;">Scroll to ${pct}%</button>` : ''}
+        ${pct > 5 ? `<button id="sra-cont-restore" style="background:rgba(126,96,174,0.7);border:none;color:#fff;padding:4px 10px;border-radius:7px;cursor:pointer;font-family:inherit;font-size:11px;">Scroll to ${pct}%</button>` : ''}
         <button id="sra-cont-dismiss" style="background:none;border:none;color:#aaa;cursor:pointer;font-size:16px;padding:0 2px;">×</button>`;
 
       document.body.appendChild(toast);
@@ -1687,6 +1702,41 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   await settingsReady;
   if (eyeTrackingEnabled) await startTracker();
   else _log('Eye tracking off — tracker not started, camera untouched');
+
+  /* Turning the switch off has to leave the page as if the extension were
+   * not installed: no cards, no ruler, no sidebar, no speech, no camera, and
+   * no telemetry accruing in the background. Turning it back on resumes
+   * whatever the reader's settings already said. */
+  function setAssistantEnabled(on) {
+    const was = assistantEnabled;
+    assistantEnabled = !!on;
+    if (was === assistantEnabled) return;
+
+    if (!assistantEnabled) {
+      try { hidePopup(true); } catch (e) { /* nothing open */ }
+      try { ui.clearHighlight(); } catch (e) { /* nothing highlighted */ }
+      try { focusRuler.disable(); } catch (e) { /* never enabled */ }
+      try { forceStopIdle(); } catch (e) { /* no idle overlay */ }
+      try { ttsHandler.stop(); } catch (e) { /* not speaking */ }
+      try { document.getElementById('sra-reading-map')?.classList.remove('open'); } catch (e) {}
+      try { document.querySelector('.sra-word-bubble')?.remove(); } catch (e) {}
+      _log('Assistant switched off — page left alone');
+    } else {
+      if (focusRulerEnabled) { try { focusRuler.enable(); } catch (e) {} }
+      try { orchestrator.primeParagraph(); } catch (e) {}
+      _log('Assistant switched on');
+    }
+  }
+
+  /* The popup only messages the active tab, so a settings broadcast would
+   * leave every other open tab still running. Storage is the one channel
+   * every tab hears. */
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local') return;
+      if (changes.sra_enabled) setAssistantEnabled(changes.sra_enabled.newValue !== false);
+    });
+  } catch (e) { /* no storage in this context */ }
 
   orchestrator.installListeners();
   orchestrator.primeParagraph();

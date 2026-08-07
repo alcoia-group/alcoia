@@ -3,7 +3,7 @@
 <head>    
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Alcoia — Feature Demo</title>
+<title>alcoia — Feature Demo</title>
 <link rel="stylesheet" href="src/styles/fonts.css">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -119,7 +119,7 @@ p{margin-bottom:20px;text-align:justify}
 <body>
 
 <header class="site-header">
-  <div class="logo">Alcoia — Feature Demo</div>
+  <div class="logo">alcoia — Feature Demo</div>
   <nav class="nav">
     <a href="#regression">Regression</a>
     <a href="#confusion">Confusion</a>
@@ -135,11 +135,11 @@ p{margin-bottom:20px;text-align:justify}
 
   <div style="margin-bottom:48px;padding-top:16px">
     <div style="font-size:28px;font-weight:700;margin-bottom:10px;letter-spacing:-0.5px">
-      Alcoia Feature Demonstration
+      alcoia Feature Demonstration
     </div>
     <div style="font-size:15px;color:var(--muted);font-style:italic;line-height:1.7">
       Each section below is designed to trigger a specific cognitive state or extension feature.
-      Have Alcoia running with eye tracking enabled, then read each section naturally.
+      Have alcoia running with eye tracking enabled, then read each section naturally.
       Use <kbd style="font-family:monospace;font-size:12px;background:#eee;padding:1px 5px;border-radius:3px">Alt+1</kbd> through
       <kbd style="font-family:monospace;font-size:12px;background:#eee;padding:1px 5px;border-radius:3px">Alt+5</kbd>
       to simulate states manually if eye tracking isn't firing reliably.
@@ -168,7 +168,7 @@ p{margin-bottom:20px;text-align:justify}
       the eye moves forward, the brain detects an anomaly, and the eye
       regresses to the point of confusion before continuing. This backwards
       movement — a saccade in the rightward-to-leftward direction — is
-      precisely what Alcoia measures as regression rate.
+      precisely what alcoia measures as regression rate.
     </p>
 
     <p>
@@ -177,13 +177,13 @@ p{margin-bottom:20px;text-align:justify}
       least twice already. A reader with no comprehension difficulty reads
       forward ninety percent of the time. A confused or error-detecting reader
       may make backwards movements on thirty to fifty percent of their saccades.
-      Alcoia treats a regression rate above twenty percent sustained over
+      alcoia treats a regression rate above twenty percent sustained over
       two and a half seconds — combined with near-zero scroll — as a
       signal that the reader needs assistance.
     </p>
 
     <div class="callout">
-      <strong>What Alcoia should do here:</strong> detect high regression rate,
+      <strong>What alcoia should do here:</strong> detect high regression rate,
       classify as confused, fetch an explanation of whichever paragraph your
       gaze was on when the threshold was crossed. Use Alt+1 to simulate this immediately.
     </div>
@@ -225,7 +225,7 @@ p{margin-bottom:20px;text-align:justify}
     </p>
 
     <div class="callout">
-      <strong>What Alcoia should do here:</strong> detect long fixations, short
+      <strong>What alcoia should do here:</strong> detect long fixations, short
       saccades, zero scroll, classify as confused, and offer an explanation of the
       dense paragraph above. Use Alt+1 to trigger this immediately.
     </div>
@@ -264,7 +264,7 @@ p{margin-bottom:20px;text-align:justify}
     </p>
 
     <div class="callout">
-      <strong>What Alcoia should do here:</strong> detect very long fixations,
+      <strong>What alcoia should do here:</strong> detect very long fixations,
       high vertical gaze drift, zero scroll, classify as zoning out, and pulse
       a green highlight on the current paragraph. No AI call — just a gentle
       visual nudge back to attention. Use Alt+3 to simulate this immediately.
@@ -309,7 +309,7 @@ p{margin-bottom:20px;text-align:justify}
     </p>
 
     <div class="callout">
-      <strong>What Alcoia should do here:</strong> detect very high regression,
+      <strong>What alcoia should do here:</strong> detect very high regression,
       very short saccades, highest line re-read count, classify as overloaded,
       and send the paragraph to the AI with mode=simplify. The response rewrites
       the content in plain language with bullet points. Use Alt+2 to trigger this.
@@ -364,7 +364,7 @@ p{margin-bottom:20px;text-align:justify}
     </p>
 
     <div class="callout">
-      <strong>What Alcoia does with FK scores:</strong> when you pass through
+      <strong>What alcoia does with FK scores:</strong> when you pass through
       the very difficult paragraph too quickly (faster than ~110 words per minute),
       the comprehension monitor flags a speed-vs-complexity mismatch and offers
       a summary. Hover each paragraph to see its live FK score in the meter above.
@@ -395,7 +395,7 @@ p{margin-bottom:20px;text-align:justify}
     </div>
 
     <div class="callout">
-      <strong>What Alcoia should do here:</strong> if you read the Gödel paragraph
+      <strong>What alcoia should do here:</strong> if you read the Gödel paragraph
       in under 6-7 seconds and move on (scroll down), the comprehension monitor
       should offer a summary. The paragraph has a Flesch-Kincaid score of approximately
       28 (very difficult) despite being only two sentences. Try scrolling past it quickly,
@@ -565,7 +565,7 @@ document.getElementById('startDotCal').addEventListener('click', () => {
   if (window.sra && window.sra.runCalibration) {
     window.sra.runCalibration();
   } else {
-    alert('Alcoia extension not detected on this page. Load the extension first.');
+    alert('alcoia extension not detected on this page. Load the extension first.');
   }
 });
 </script>

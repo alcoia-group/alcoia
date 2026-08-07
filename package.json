@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Alcoia browser extension \u2014 tests and tooling. The extension itself lives in alcoia/ and ships unbundled.",
+  "description": "alcoia browser extension \u2014 tests and tooling. The extension itself lives in alcoia/ and ships unbundled.",
   "scripts": {
     "lint": "eslint .",
     "test": "vitest run",
