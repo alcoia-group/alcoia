@@ -157,6 +157,7 @@ const _warn = (...a) => console.warn('[Alcoia]', ...a);
   const ttsModule      = await loadModule('src/content/tts-handler.js');
   const rulerModule    = await loadModule('src/content/focus-ruler.js');
   const dyslexiaModule  = await loadModule('src/content/dyslexia-utils.js');
+  const segmentation     = await loadModule('src/content/telemetry/segmentation.js');
   const langDetectModule = await loadModule('src/content/lang-detect.js');
   const mapModule       = await loadModule('src/content/reading-map.js');
 
@@ -241,7 +242,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   function buildCurrentReceipt() {
     const paragraphs = document.querySelectorAll('p, li, blockquote').length;
-    const wordCount = (document.body.innerText || '').trim().split(/\s+/).length;
+    // Whitespace counting reported a whole Chinese article as one word, and
+    // that figure is a field of the reader's receipt.
+    const wordCount = segmentation.countWords(document.body.innerText || '', segmentation.detectLanguage());
     return receiptModule.buildReceipt({
       session: sessionTracker.snapshot(),
       recall: responseSignals.stats(),
