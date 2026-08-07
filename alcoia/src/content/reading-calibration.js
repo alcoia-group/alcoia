@@ -91,7 +91,7 @@ export async function runReadingCalibration(opts = {}) {
 
     const panel = document.createElement('div');
     Object.assign(panel.style, {
-      background:   '#FAFAF7',
+      background:   '#F9F7F2',
       borderRadius: '16px',
       padding:      '36px 44px',
       maxWidth:     '640px',
@@ -105,7 +105,7 @@ export async function runReadingCalibration(opts = {}) {
     Object.assign(title.style, {
       fontSize:     '13px',
       fontWeight:   '700',
-      color:        '#1A7E5D',
+      color:        '#5F4589',
       letterSpacing:'1px',
       textTransform:'uppercase',
       marginBottom: '6px',
@@ -114,19 +114,19 @@ export async function runReadingCalibration(opts = {}) {
     const subtitle = document.createElement('div');
     subtitle.textContent = 'Read the highlighted text at your natural pace. No clicking needed.';
     Object.assign(subtitle.style, {
-      fontSize: '13px', color: '#7a7a72', fontStyle: 'italic',
+      fontSize: '13px', color: '#6B6862', fontStyle: 'italic',
       marginBottom: '24px',
     });
 
     // Progress bar
     const progressWrap = document.createElement('div');
     Object.assign(progressWrap.style, {
-      height: '3px', background: 'rgba(26,126,93,0.15)',
+      height: '3px', background: 'rgba(126,96,174,0.15)',
       borderRadius: '2px', marginBottom: '28px', overflow: 'hidden',
     });
     const progressFill = document.createElement('div');
     Object.assign(progressFill.style, {
-      height: '100%', background: '#1A7E5D', width: '0%',
+      height: '100%', background: '#5F4589', width: '0%',
       borderRadius: '2px', transition: 'width 0.15s linear',
     });
     progressWrap.appendChild(progressFill);
@@ -136,13 +136,13 @@ export async function runReadingCalibration(opts = {}) {
     Object.assign(textContainer.style, {
       fontSize:    '18px',
       lineHeight:  '1.9',
-      color:       '#2c2c2a',
+      color:       '#333333',
       marginBottom:'28px',
     });
 
     const statusLine = document.createElement('div');
     Object.assign(statusLine.style, {
-      fontSize: '11px', color: '#7a7a72', fontStyle: 'italic', textAlign: 'center',
+      fontSize: '11px', color: '#6B6862', fontStyle: 'italic', textAlign: 'center',
     });
     statusLine.textContent = 'Starting in 2 seconds...';
 
@@ -150,7 +150,7 @@ export async function runReadingCalibration(opts = {}) {
     skipBtn.textContent = 'Skip calibration';
     Object.assign(skipBtn.style, {
       marginTop: '14px', display: 'block', background: 'none',
-      border: 'none', color: '#7a7a72', fontFamily: 'Georgia, serif',
+      border: 'none', color: '#6B6862', fontFamily: 'Georgia, serif',
       fontSize: '11px', fontStyle: 'italic', cursor: 'pointer', padding: '0',
     });
     skipBtn.addEventListener('click', () => cleanup(false));
@@ -239,7 +239,7 @@ export async function runReadingCalibration(opts = {}) {
           if (wordIdx > 0) {
             Object.assign(spans[wordIdx - 1].style, {
               background: 'transparent',
-              color:      '#2c2c2a',
+              color:      '#333333',
               fontWeight: 'normal',
             });
           }
@@ -247,8 +247,8 @@ export async function runReadingCalibration(opts = {}) {
           // Highlight current
           const span = spans[wordIdx];
           Object.assign(span.style, {
-            background: 'rgba(26,126,93,0.18)',
-            color:      '#0f5c42',
+            background: 'rgba(126,96,174,0.18)',
+            color:      '#5F4589',
             fontWeight: '700',
           });
 
@@ -319,8 +319,8 @@ export function runSelfPacedCalibration(opts = {}) {
     const panel = document.createElement('div');
     Object.assign(panel.style, {
       boxSizing: 'border-box',
-      background: 'var(--alc-paper, #FCFAF5)',
-      color: 'var(--alc-text, #2A2722)',
+      background: 'var(--alc-paper, #F9F7F2)',
+      color: 'var(--alc-text, #333333)',
       borderRadius: '16px', padding: '28px 32px',
       maxWidth: '620px', width: '100%', maxHeight: '86vh', overflowY: 'auto',
       fontFamily: 'var(--alc-serif, Georgia, serif)',
@@ -332,7 +332,7 @@ export function runSelfPacedCalibration(opts = {}) {
     Object.assign(label.style, {
       fontFamily: 'var(--alc-ui, system-ui, sans-serif)',
       fontSize: '10.5px', fontWeight: '700', letterSpacing: '0.09em',
-      textTransform: 'uppercase', color: 'var(--alc-accent, #1A7E5D)',
+      textTransform: 'uppercase', color: 'var(--alc-accent, #5F4589)',
       marginBottom: '8px',
     });
 
@@ -342,7 +342,7 @@ export function runSelfPacedCalibration(opts = {}) {
       + 'Press the button the moment you finish the last word.';
     Object.assign(intro.style, {
       fontSize: '13.5px', lineHeight: '1.6', margin: '0 0 20px',
-      color: 'var(--alc-muted, #6E675C)',
+      color: 'var(--alc-muted, #6B6862)',
     });
 
     const passage = document.createElement('div');
@@ -360,7 +360,7 @@ export function runSelfPacedCalibration(opts = {}) {
     primary.textContent = 'Start reading';
     Object.assign(primary.style, {
       flex: '1', padding: '11px 16px', borderRadius: '10px', border: 'none',
-      background: 'var(--alc-accent, #1A7E5D)', color: '#fff', cursor: 'pointer',
+      background: 'var(--alc-accent, #5F4589)', color: '#fff', cursor: 'pointer',
       fontFamily: 'var(--alc-ui, system-ui, sans-serif)',
       fontSize: '13px', fontWeight: '600', minHeight: '44px',
     });
@@ -370,7 +370,7 @@ export function runSelfPacedCalibration(opts = {}) {
     Object.assign(skip.style, {
       padding: '11px 16px', borderRadius: '10px',
       border: '1px solid var(--alc-border, rgba(60,48,32,0.11))',
-      background: 'transparent', color: 'var(--alc-muted, #6E675C)',
+      background: 'transparent', color: 'var(--alc-muted, #6B6862)',
       cursor: 'pointer', fontFamily: 'var(--alc-ui, system-ui, sans-serif)',
       fontSize: '13px', fontWeight: '600', minHeight: '44px',
     });
@@ -379,7 +379,7 @@ export function runSelfPacedCalibration(opts = {}) {
     Object.assign(status.style, {
       fontFamily: 'var(--alc-ui, system-ui, sans-serif)',
       fontSize: '12px', lineHeight: '1.5', marginTop: '12px', minHeight: '1.4em',
-      color: 'var(--alc-muted, #6E675C)',
+      color: 'var(--alc-muted, #6B6862)',
     });
     status.textContent = `${words.length} words. The text is blurred until you start.`;
 

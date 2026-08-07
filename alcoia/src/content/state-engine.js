@@ -1,4 +1,4 @@
-/* state-engine.js — single reading-state estimate for Alcoia
+/* state-engine.js — single reading-state estimate for alcoia
  *
  * Replaces the two independent pipelines that each fired their own popups:
  * comprehension-monitor (telemetry) and the gaze classifier. Both now feed

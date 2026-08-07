@@ -107,6 +107,8 @@ export async function createOrchestrator(deps) {
   /* Drains every detector and hands the batch over in one go, so the engine
    * sees a whole moment rather than a sequence of unrelated nudges. */
   function pumpTelemetry(extra) {
+    // The master switch. Nothing accrues while the assistant is off.
+    if (s().assistantEnabled === false) return;
     const batch = [];
     for (const sig of [scrollRegression.signal(), scrollDynamics.signal(), progressionEntropy.signal()]) {
       if (sig) batch.push(sig);

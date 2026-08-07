@@ -14,12 +14,12 @@ const TAB_ID    = 'sra-reading-map-tab';
 const WIDTH_PX  = 190;
 
 const EVENT_COLOR = {
-  summarized: '#1A7E5D',
+  summarized: '#5F4589',
   struggling: '#8A5A12',
   drifting:   '#5A4B8A',
-  skimming:   '#2563A8',
-  on_pace:    '#1A7E5D',
-  manual:     '#6E675C',
+  skimming:   '#5B7A99',
+  on_pace:    '#5F4589',
+  manual:     '#6B6862',
 };
 
 export function createReadingMap() {
@@ -39,7 +39,7 @@ export function createReadingMap() {
         width: ${WIDTH_PX}px; transform: translateX(100%);
         transition: transform 0.22s cubic-bezier(.4,0,.2,1);
         background: rgba(250,250,247,0.96);
-        border-left: 1px solid rgba(26,126,93,0.14);
+        border-left: 1px solid rgba(126,96,174,0.14);
         box-shadow: -4px 0 20px rgba(0,0,0,0.08);
         z-index: 2147483635;
         display: flex; flex-direction: column;
@@ -53,7 +53,7 @@ export function createReadingMap() {
         position: fixed; top: 50%; right: 0;
         transform: translateY(-50%) translateX(0);
         transition: transform 0.22s cubic-bezier(.4,0,.2,1);
-        background: rgba(26,126,93,0.88);
+        background: rgba(126,96,174,0.88);
         color: white; border: none; cursor: pointer;
         border-radius: 8px 0 0 8px;
         padding: 10px 5px; writing-mode: vertical-rl;
@@ -63,39 +63,39 @@ export function createReadingMap() {
       #${TAB_ID}.open { transform: translateY(-50%) translateX(-${WIDTH_PX}px); }
 
       .sra-map-progress-bar {
-        height: 3px; background: rgba(26,126,93,0.15); flex-shrink: 0;
+        height: 3px; background: rgba(126,96,174,0.15); flex-shrink: 0;
       }
       .sra-map-progress-fill {
-        height: 100%; background: #1A7E5D;
+        height: 100%; background: #5F4589;
         width: 0%; transition: width 0.3s ease;
       }
       .sra-map-header {
         padding: 11px 12px 7px;
         font-family: var(--alc-ui, system-ui, sans-serif);
         font-size: 10px; font-weight: 700; letter-spacing: 0.09em;
-        text-transform: uppercase; color: #7a7a72;
-        border-bottom: 1px solid rgba(26,126,93,0.1);
+        text-transform: uppercase; color: #6B6862;
+        border-bottom: 1px solid rgba(126,96,174,0.1);
         flex-shrink: 0;
         display: flex; align-items: center; justify-content: space-between;
       }
-      .sra-map-pct { color: #1A7E5D; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+      .sra-map-pct { color: #5F4589; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
       .sra-map-body { flex: 1; overflow-y: auto; padding: 8px 0; }
       .sra-map-heading {
         display: block; padding: 4px 12px;
-        font-size: 11px; line-height: 1.35; color: #2c2c2a;
+        font-size: 11px; line-height: 1.35; color: #333333;
         cursor: pointer; text-decoration: none;
         transition: background 0.1s; white-space: nowrap;
         overflow: hidden; text-overflow: ellipsis;
         border-left: 2px solid transparent;
       }
-      .sra-map-heading:hover { background: rgba(26,126,93,0.06); }
-      .sra-map-heading.current { border-left-color: #1A7E5D; color: #1A7E5D; font-weight: 700; }
+      .sra-map-heading:hover { background: rgba(126,96,174,0.06); }
+      .sra-map-heading.current { border-left-color: #5F4589; color: #5F4589; font-weight: 700; }
       .sra-map-heading[data-level="1"] { font-weight: 700; }
       .sra-map-heading[data-level="2"] { padding-left: 18px; color: #444; }
       .sra-map-heading[data-level="3"] { padding-left: 26px; color: #666; font-size: 10.5px; }
       .sra-map-heading[data-level="4"] { padding-left: 32px; color: #888; font-size: 10px; }
 
-      .sra-map-divider { height: 1px; background: rgba(26,126,93,0.1); margin: 6px 12px; }
+      .sra-map-divider { height: 1px; background: rgba(126,96,174,0.1); margin: 6px 12px; }
 
       .sra-map-events { padding: 0 12px 8px; }
       .sra-map-events-label {
@@ -179,7 +179,7 @@ export function createReadingMap() {
 
     if (!headings.length) {
       const msg = document.createElement('div');
-      msg.style.cssText = 'padding:12px;font-size:11px;color:#9C9486;';
+      msg.style.cssText = 'padding:12px;font-size:11px;color:#9A968E;';
       msg.textContent = 'No headings found on this page.';
       body.appendChild(msg);
     } else {

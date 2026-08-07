@@ -4,7 +4,7 @@
 // ── Local PDF redirect ─────────────────────────────────────────────────────────
 // Chrome's native PDF viewer runs in a sandboxed renderer that content scripts
 // cannot inject into. When a local file:// PDF is opened, redirect it to the
-// extension's custom PDF viewer page, which has full Alcoia integration.
+// extension's custom PDF viewer page, which has full alcoia integration.
 // Requires "Allow access to file URLs" to be enabled in chrome://extensions.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'loading') return;

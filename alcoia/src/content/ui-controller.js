@@ -165,7 +165,7 @@ export function createUIController(deps = {}) {
   function flashPopup(el) {
     const orig = el.style.boxShadow;
     el.style.transition = 'box-shadow 0.12s';
-    el.style.boxShadow  = '0 0 0 3px rgba(26,126,93,0.65)';
+    el.style.boxShadow  = '0 0 0 3px rgba(126,96,174,0.65)';
     setTimeout(() => { el.style.boxShadow = orig; }, 500);
   }
 
@@ -363,7 +363,7 @@ export function createUIController(deps = {}) {
     };
     toast('sra-sim-toast', labels[state] || `Simulating: ${state}`, {
       position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
-      background: '#1A7E5D', color: 'white', padding: '9px 18px', borderRadius: '10px',
+      background: '#5F4589', color: 'white', padding: '9px 18px', borderRadius: '10px',
       fontFamily: 'var(--alc-ui, system-ui, sans-serif)', fontSize: '12px', fontWeight: '600',
       zIndex: '2147483646', opacity: '0', transition: 'opacity 0.2s ease',
       pointerEvents: 'none', whiteSpace: 'pre', boxShadow: '0 6px 20px rgba(60,48,32,0.28)',
@@ -374,7 +374,7 @@ export function createUIController(deps = {}) {
     toast('sra-quality-toast',
       'Low camera quality — move to better lighting or centre your face in frame.', {
         position: 'fixed', top: '14px', right: '14px',
-        background: '#2c2c2a', color: '#f0ede8',
+        background: '#333333', color: '#f0ede8',
         padding: '9px 16px', borderRadius: '9px',
         fontFamily: 'var(--alc-ui, system-ui, sans-serif)', fontSize: '12px',
         zIndex: '2147483640', opacity: '0', transition: 'opacity 0.2s ease',
@@ -436,13 +436,13 @@ export function applyDarkMode(enabled) {
         --alc-paper:     #171B19 !important;
         --alc-surface:   rgba(23,27,25,0.97) !important;
         --alc-border:    rgba(160,200,180,0.13) !important;
-        --alc-border-2:  rgba(76,190,142,0.30) !important;
+        --alc-border-2:  rgba(183,159,224,0.30) !important;
         --alc-text:      #E6E3DB !important;
         --alc-muted:     #9A958B !important;
         --alc-faint:     #767066 !important;
-        --alc-accent:    #4CBE8E !important;
-        --alc-accent-2:  #6FD3A8 !important;
-        --alc-accent-sf: rgba(76,190,142,0.12) !important;
+        --alc-accent:    #B79FE0 !important;
+        --alc-accent-2:  #CDBBEE !important;
+        --alc-accent-sf: rgba(183,159,224,0.12) !important;
         --alc-warn:      #D9A94E !important;
         --alc-shadow:
           0 0 0 1px rgba(160,200,180,0.13),
@@ -451,15 +451,15 @@ export function applyDarkMode(enabled) {
       .sra-btn-primary { color: #10221B !important; }
       .sra-q-option    { background: rgba(255,255,255,0.045) !important; }
       .sra-word-bubble { background: rgba(14,17,15,0.96) !important; }
-      #sra-reading-map { background: rgba(18,22,20,0.97) !important; border-color: rgba(80,160,120,0.12) !important; }
-      .sra-map-header  { color: #7a7a72 !important; border-color: rgba(80,160,120,0.1) !important; }
+      #sra-reading-map { background: rgba(18,22,20,0.97) !important; border-color: rgba(126,96,174,0.12) !important; }
+      .sra-map-header  { color: #6B6862 !important; border-color: rgba(126,96,174,0.1) !important; }
       .sra-map-heading { color: #b8b8b2 !important; }
-      .sra-map-heading:hover   { background: rgba(80,160,120,0.07) !important; }
-      .sra-map-heading.current { color: #7dd3b0 !important; border-left-color: #7dd3b0 !important; }
+      .sra-map-heading:hover   { background: rgba(126,96,174,0.07) !important; }
+      .sra-map-heading.current { color: #C3ABE8 !important; border-left-color: #C3ABE8 !important; }
       .sra-map-event       { color: #888 !important; }
       .sra-map-events-label{ color: #555 !important; }
-      .sra-map-divider     { background: rgba(80,160,120,0.1) !important; }
-      .sra-map-progress-bar{ background: rgba(80,160,120,0.12) !important; }
+      .sra-map-divider     { background: rgba(126,96,174,0.1) !important; }
+      .sra-map-progress-bar{ background: rgba(126,96,174,0.12) !important; }
       #sra-color-picker { background: #1e2422 !important; border-color: rgba(255,255,255,0.08) !important; }
     `;
   document.head.appendChild(s);

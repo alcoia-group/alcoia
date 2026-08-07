@@ -139,13 +139,13 @@ export function saveWebgazerModel() {
       const json = ev.data.modelData;
       if (!json) { resolve(false); return; }
       if (json.length > MODEL_SIZE_CAP) {
-        console.warn('[Alcoia] WebGazer model too large to persist:', Math.round(json.length / 1024), 'KB — skipping');
+        console.warn('[alcoia] WebGazer model too large to persist:', Math.round(json.length / 1024), 'KB — skipping');
         resolve(false);
         return;
       }
       try {
         chrome.storage.local.set({ sra_webgazer_model: json }, () => {
-          console.log('[Alcoia] WebGazer model saved:', Math.round(json.length / 1024), 'KB');
+          console.log('[alcoia] WebGazer model saved:', Math.round(json.length / 1024), 'KB');
           resolve(true);
         });
       } catch (e) { resolve(false); }
@@ -205,7 +205,7 @@ export async function runCalibrationSequence() {
     });
 
     if (!wgAvailable) {
-      console.warn('[Alcoia] WebGazer not available for calibration — skipping');
+      console.warn('[alcoia] WebGazer not available for calibration — skipping');
       resolve({ dx: 0, dy: 0 });
       return;
     }
@@ -388,7 +388,7 @@ export async function runCalibrationSequence() {
         }
 
         await setCalibration(offset);
-        console.log('[Alcoia] Calibration complete. Offset:', offset, `(from ${samples.length} samples)`);
+        console.log('[alcoia] Calibration complete. Offset:', offset, `(from ${samples.length} samples)`);
         resolve(offset);
       }, 280);
     }

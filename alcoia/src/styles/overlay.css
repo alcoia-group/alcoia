@@ -1,4 +1,4 @@
-/* ── Alcoia — in-page overlay styles ──────────────────────────────────────────
+/* ── alcoia — in-page overlay styles ──────────────────────────────────────────
  *
  * Everything the reader sees on top of a page they are reading: the summary
  * card, the retrieval question, the word bubble, the page-summary panel, the
@@ -15,49 +15,68 @@
  * previous revision set nearly every label in italic serif at 9–11px, which
  * is where the old UI stopped being readable.
  *
- * Direction: warm paper. Cream ground, ink-brown text rather than grey, one
- * forest-green accent, hairline warm borders, shadows tinted brown rather
- * than black so cards sit on the page instead of hovering over it.
+ * Direction: warm paper, matte. Off-white ground, charcoal ink — never pure
+ * black on never pure white — dusty lilac as the one brand colour, and muted
+ * sage reserved for moments where the system itself did something.
+ *
+ * Two rules that are easy to break and expensive to break:
+ *
+ *   1. Sage means "generated" or "acted on here". It is not a second accent.
+ *      Its meaning comes from its scarcity; spend it on the evidence rule, the
+ *      paragraph highlight and a correct answer, and nowhere else.
+ *   2. No glows, no gradients, no shadows on buttons. Elevation is a hairline.
+ *      A card floating over somebody else's page is the one place that needs
+ *      real separation, so it gets a warm, tight, nearly invisible shadow —
+ *      not because it should look raised, but because without it the card can
+ *      become unreadable against arbitrary page content.
  *
  * Palette note: these variables are declared on :root of the *host page*, so
  * they are namespaced --alc-*. Never introduce a bare --bg here.
  * ────────────────────────────────────────────────────────────────────────── */
 
 :root {
-  --alc-paper:     #FCFAF5;
-  --alc-surface:   rgba(252,250,245,0.97);
-  --alc-border:    rgba(60,48,32,0.11);
-  --alc-border-2:  rgba(26,126,93,0.24);
-  --alc-text:      #2A2722;
-  --alc-muted:     #6E675C;
-  --alc-faint:     #9C9486;
-  --alc-accent:    #1A7E5D;
-  --alc-accent-2:  #12604A;
-  --alc-accent-sf: rgba(26,126,93,0.075);
-  --alc-warn:      #8A5A12;
-  --alc-wrong:     #A33B2D;
-  --alc-gold:      #C8A54B;
+  --alc-paper:     #F9F7F2;
+  --alc-surface:   rgba(252,251,248,0.98);
+  --alc-sunk:      #F2EFE8;
+  --alc-border:    rgba(51,51,51,0.12);
+  --alc-border-2:  rgba(126,96,174,0.34);
+  --alc-text:      #333333;
+  --alc-muted:     #6B6862;
+  --alc-faint:     #9A968E;
+  /* Lilac: the brand. The first value shipped (#B8A9C9) was so desaturated it
+     read as light grey against warm paper, and it could not carry white type.
+     Deepened until a white label on it clears AA (5.0:1) and it reads as a
+     colour rather than an absence of one. --accent-2 is for type on paper. */
+  --alc-accent:    #7E60AE;
+  --alc-accent-2:  #5F4589;
+  --alc-accent-sf: #EFE9F6;
+  /* Sage: the system speaking. See rule 1 above. */
+  --alc-sage:      #A3B1A3;
+  --alc-sage-2:    #6F8070;
+  --alc-sage-sf:   #EAEFEA;
+  --alc-warn:      #9A6B2F;
+  --alc-wrong:     #B4795F;
   --alc-radius:    14px;
   --alc-radius-sm: 10px;
   --alc-shadow:
     0 0 0 1px var(--alc-border),
-    0 1px 2px rgba(60,48,32,0.05),
-    0 12px 32px -8px rgba(60,48,32,0.20);
+    0 1px 2px rgba(51,51,51,0.05),
+    0 8px 24px -12px rgba(51,51,51,0.16);
 }
 
 /* ── Paragraph highlight — the passage a card is talking about ───────────── */
 .sra-para-highlight {
-  outline: 2px solid rgba(26,126,93,0.42) !important;
+  outline: 2px solid rgba(111,128,112,0.45) !important;
   outline-offset: 5px !important;
   border-radius: 4px !important;
-  background: rgba(26,126,93,0.05) !important;
+  background: rgba(163,177,163,0.13) !important;
   transition: outline 0.35s ease, background 0.35s ease !important;
 }
 
 @keyframes sra-nudge-pulse {
-  0%   { box-shadow: 0 0 0 0    rgba(26,126,93,0.40); }
-  60%  { box-shadow: 0 0 0 12px rgba(26,126,93,0);    }
-  100% { box-shadow: 0 0 0 0    rgba(26,126,93,0);    }
+  0%   { box-shadow: 0 0 0 0    rgba(126,96,174,0.38); }
+  60%  { box-shadow: 0 0 0 12px rgba(126,96,174,0);    }
+  100% { box-shadow: 0 0 0 0    rgba(126,96,174,0);    }
 }
 .sra-nudge-highlight,
 .sra-nudge { animation: sra-nudge-pulse 1.4s ease-out 2 !important; }
@@ -78,7 +97,6 @@
   border-radius: var(--alc-radius);
   padding: 15px 17px 14px;
   box-shadow: var(--alc-shadow);
-  backdrop-filter: blur(14px) saturate(1.08);
   z-index: 2147483647;
   opacity: 0;
   transform: translateY(5px) scale(0.985);
@@ -97,14 +115,14 @@
   font-weight: 600;
   font-style: normal;
   letter-spacing: 0.04em;
-  color: var(--alc-accent);
+  color: var(--alc-sage-2);
   margin: 0 0 9px;
   padding: 0 0 8px;
   border-bottom: 1px solid var(--alc-border);
 }
 .sra-state-struggling .sra-state-badge { color: var(--alc-warn); }
-.sra-state-drifting   .sra-state-badge { color: #5a4b8a; }
-.sra-state-skimming   .sra-state-badge { color: #2563a8; }
+.sra-state-drifting   .sra-state-badge { color: #7E6E5A; }
+.sra-state-skimming   .sra-state-badge { color: #5B7A99; }
 
 /* ── Body ────────────────────────────────────────────────────────────────── */
 .sra-popup-body {
@@ -115,11 +133,11 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: rgba(26,126,93,0.25) transparent;
+  scrollbar-color: rgba(126,96,174,0.3) transparent;
 }
 .sra-popup-body::-webkit-scrollbar { width: 5px; }
 .sra-popup-body::-webkit-scrollbar-thumb {
-  background: rgba(26,126,93,0.22);
+  background: rgba(126,96,174,0.28);
   border-radius: 3px;
 }
 .sra-popup-body p,
@@ -151,8 +169,10 @@
 .sra-btn:hover:not(:disabled) { opacity: 0.92; }
 .sra-btn:focus-visible { outline: 2px solid var(--alc-accent); outline-offset: 2px; }
 .sra-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.sra-btn-primary { background: var(--alc-accent); color: #fff; }
-.sra-btn-primary:hover:not(:disabled) { background: var(--alc-accent-2); }
+/* White on lilac clears AA at the deepened value (5.0:1). At the original
+   pale #B8A9C9 it did not, which is part of why that value had to go. */
+.sra-btn-primary { background: var(--alc-accent); color: #FFFFFF; }
+.sra-btn-primary:hover:not(:disabled) { background: #6E4F9C; }
 .sra-btn-secondary {
   background: transparent;
   color: var(--alc-accent-2);
@@ -179,6 +199,11 @@
 .sra-ctrl-btn.active { color: var(--alc-accent); background: var(--alc-accent-sf); }
 
 .sra-error { color: var(--alc-wrong); font-size: 13px; }
+
+/* The question card's own badge. Sage, because asking is the system acting —
+   and deliberately no icon: a sparkle here would say "generated", which is the
+   opposite of what a question about a real sentence is claiming. */
+.sra-q-badge { color: var(--alc-sage-2); }
 
 /* ── Retrieval question card (P3) — the primary intervention ──────────────
    Lives on .sra-popup, so it inherits the card's type. These rules were
@@ -219,20 +244,20 @@
 .sra-q-option:focus-visible { outline: 2px solid var(--alc-accent); outline-offset: 1px; }
 .sra-q-option:disabled { cursor: default; opacity: 0.7; }
 .sra-q-option.sra-q-correct {
-  background: rgba(26,126,93,0.12);
-  border-color: rgba(26,126,93,0.5);
+  background: var(--alc-sage-sf);
+  border-color: rgba(111,128,112,0.55);
   opacity: 1;
 }
 .sra-q-option.sra-q-wrong {
-  background: rgba(163,59,45,0.09);
-  border-color: rgba(163,59,45,0.42);
+  background: rgba(180,121,95,0.10);
+  border-color: rgba(180,121,95,0.45);
   opacity: 1;
 }
 .sra-q-result { margin-top: 12px; font-size: 13.5px; line-height: 1.65; }
 .sra-q-span {
   margin-top: 9px;
   padding-left: 11px;
-  border-left: 2px solid var(--alc-border-2);
+  border-left: 2px solid var(--alc-sage);
   color: var(--alc-muted);
   font-style: italic;
 }
@@ -244,7 +269,7 @@
   z-index: 2147483646;
   max-width: 270px;
   background: rgba(24,28,26,0.95);
-  color: #ececE6;
+  color: #EFEDE6;
   font-family: var(--alc-serif);
   font-size: 12.5px;
   line-height: 1.6;
@@ -263,7 +288,7 @@
   display: block;
   margin-bottom: 5px;
   font-size: 13.5px;
-  color: #7dd3b0;
+  color: #C3ABE8;
 }
 .sra-word-loading {
   font-family: var(--alc-ui);
@@ -358,8 +383,8 @@
   margin: 15px 0;
   padding: 11px 14px;
   border-radius: var(--alc-radius-sm);
-  background: rgba(138,90,18,0.08);
-  border: 1px solid rgba(138,90,18,0.26);
+  background: rgba(154,107,47,0.08);
+  border: 1px solid rgba(154,107,47,0.26);
   font-size: 12.5px; line-height: 1.6;
 }
 .sra-r-raw { margin: 18px 0 6px; font-size: 12px; }
@@ -431,13 +456,13 @@
 .sra-cal-steps { display: flex; gap: 5px; }
 .sra-cal-step  {
   width: 8px; height: 8px; border-radius: 50%;
-  background: rgba(26,126,93,0.18);
+  background: rgba(126,96,174,0.18);
   transition: background 0.2s;
 }
 .sra-cal-step.active { background: var(--alc-accent); }
 .sra-cal-progress {
   flex: 1; height: 3px;
-  background: rgba(26,126,93,0.15);
+  background: rgba(126,96,174,0.15);
   border-radius: 2px; overflow: hidden;
 }
 .sra-cal-fill {
@@ -459,9 +484,9 @@
 .sra-cal-target-area {
   position: relative;
   height: 160px;
-  background: rgba(26,126,93,0.03);
+  background: rgba(126,96,174,0.03);
   border-radius: 10px;
-  border: 1px solid rgba(26,126,93,0.1);
+  border: 1px solid rgba(126,96,174,0.1);
   overflow: hidden;
 }
 .sra-cal-target {
@@ -470,7 +495,7 @@
   background: var(--alc-accent);
   border-radius: 50%;
   transform: translate(-50%, -50%);
-  box-shadow: 0 0 0 4px rgba(26,126,93,0.2);
+  box-shadow: 0 0 0 4px rgba(126,96,174,0.2);
   transition: left 0.4s cubic-bezier(.4,0,.2,1), top 0.4s cubic-bezier(.4,0,.2,1);
 }
 .sra-cal-hint {

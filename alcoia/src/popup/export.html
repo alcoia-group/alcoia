@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>Alcoia — Export Annotations</title>
+  <title>alcoia — Export Annotations</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #FAFAF7; --surface: rgba(255,255,255,0.75); --border: rgba(26,126,93,0.12);
-      --text: #2c2c2a; --muted: #7a7a72; --accent: #1A7E5D; --serif: var(--alc-serif);
+      --bg: #F9F7F2; --surface: rgba(255,255,255,0.75); --border: rgba(126,96,174,0.12);
+      --text: #333333; --muted: #6B6862; --accent: #5F4589; --serif: var(--alc-serif);
     }
     body { background: var(--bg); color: var(--text); font-family: var(--serif); font-size: 13px; min-height: 100vh; }
 
@@ -28,7 +28,7 @@
     }
     .btn:hover { opacity: 0.85; }
     .btn-primary  { background: var(--accent); color: white; }
-    .btn-ghost    { background: rgba(26,126,93,0.08); color: var(--accent); border: 1px solid rgba(26,126,93,0.2); }
+    .btn-ghost    { background: rgba(126,96,174,0.08); color: var(--accent); border: 1px solid rgba(126,96,174,0.2); }
     .stat { font-size: 11px; color: var(--muted); font-style: italic; margin-left: auto; }
 
     #preview {
@@ -80,7 +80,7 @@ function buildMarkdown(notes, highlights, sessions) {
   const lines = [];
   const now   = fmtDate(Date.now());
 
-  lines.push(`# Alcoia Reading Annotations`);
+  lines.push(`# alcoia Reading Annotations`);
   lines.push(`> Exported ${now}\n`);
 
   // ── Notes ──────────────────────────────────────────────────────────────

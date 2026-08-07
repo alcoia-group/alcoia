@@ -1,4 +1,4 @@
-// notes.js — Alcoia Notes Dashboard
+// notes.js — alcoia Notes Dashboard
 // External script file (required — Chrome MV3 blocks inline scripts in extension pages)
 
 // Fix logo src using chrome.runtime.getURL (inline src may not resolve correctly)

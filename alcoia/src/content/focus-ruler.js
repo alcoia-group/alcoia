@@ -119,7 +119,7 @@ export function createFocusRuler() {
     line.id = 'sra-ruler-line';
     Object.assign(line.style, {
       position: 'absolute', left: '0', right: '0',
-      height: '2px', background: 'rgba(26,126,93,0.30)',
+      height: '2px', background: 'rgba(126,96,174,0.30)',
     });
 
     ruler.appendChild(mk('sra-ruler-top', 'top'));

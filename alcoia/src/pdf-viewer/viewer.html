@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>Alcoia — PDF Viewer</title>
+  <title>alcoia — PDF Viewer</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --accent: #1A7E5D;
+      --accent: #5F4589;
       --bg:     #3a3a3a;
       --bar-h:  44px;
     }
@@ -52,7 +52,7 @@
       color: transparent; position: absolute; white-space: pre;
       cursor: text; pointer-events: all; transform-origin: 0% 0%;
     }
-    .textLayer ::selection { background: rgba(26,126,93,0.25); }
+    .textLayer ::selection { background: rgba(126,96,174,0.25); }
 
     /* ── Loading / error ── */
     #status {
@@ -70,7 +70,7 @@
 <body>
 
 <div id="toolbar">
-  <span class="brand">Alcoia</span>
+  <span class="brand">alcoia</span>
   <button id="prevBtn">&#8592; Prev</button>
   <button id="nextBtn">Next &#8594;</button>
   <button id="zoomOutBtn">&#8722;</button>
@@ -110,7 +110,7 @@
     pdfDoc = await pdfjsLib.getDocument({ url: fileUrl }).promise;
   } catch (e) {
     showError(`Could not load PDF: ${e.message}<br><br>
-      Make sure "Allow access to file URLs" is enabled for Alcoia in
+      Make sure "Allow access to file URLs" is enabled for alcoia in
       <code>chrome://extensions</code>.`);
     return;
   }
