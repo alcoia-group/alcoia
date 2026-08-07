@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import Q from '../TL_DR/server/questions.js';
+import Q from '../alcoia/server/questions.js';
 
 const {
   contentHash, buildQuestionPrompt, extractJsonArray,

@@ -3,7 +3,7 @@ import {
   createReadingStateEngine,
   STATES,
   GAZE_LABEL_TO_STATE,
-} from '../TL_DR/src/content/state-engine.js';
+} from '../alcoia/src/content/state-engine.js';
 
 /* A controllable clock so nothing here depends on wall time. */
 function fixedClock(start = 1_000_000) {

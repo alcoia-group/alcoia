@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildReceipt, hashUrl, auditReceipt, receiptIsSubstantive, canonicalise, RECEIPT_VERSION,
-} from '../TL_DR/src/content/receipt.js';
-import Sig from '../TL_DR/server/receipt-signing.js';
+} from '../alcoia/src/content/receipt.js';
+import Sig from '../alcoia/server/receipt-signing.js';
 
 const SOURCES = {
   session: { startedAt: 1_700_000_000_000, durationMs: 600_000 },

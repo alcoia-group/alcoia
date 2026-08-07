@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { analyzeDifficulty, syntacticLoad, fleschKincaid } from '../TL_DR/src/content/telemetry/text-difficulty.js';
+import { analyzeDifficulty, syntacticLoad, fleschKincaid } from '../alcoia/src/content/telemetry/text-difficulty.js';
 
 const EASY = 'The cat sat on the mat. It was warm. The sun came out. We went home. It was a good day.';
 

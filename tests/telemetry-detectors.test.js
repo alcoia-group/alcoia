@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { createParagraphTracker } from '../TL_DR/src/content/telemetry/paragraph-tracker.js';
-import { createScrollRegressionDetector, FAST_RETURN_MS, SLOW_RETURN_MS } from '../TL_DR/src/content/telemetry/scroll-regression.js';
-import { createInteractionSignals, LONG_BLUR_MS } from '../TL_DR/src/content/telemetry/interaction-signals.js';
-import { createScrollDynamics } from '../TL_DR/src/content/telemetry/scroll-dynamics.js';
+import { createParagraphTracker } from '../alcoia/src/content/telemetry/paragraph-tracker.js';
+import { createScrollRegressionDetector, FAST_RETURN_MS, SLOW_RETURN_MS } from '../alcoia/src/content/telemetry/scroll-regression.js';
+import { createInteractionSignals, LONG_BLUR_MS } from '../alcoia/src/content/telemetry/interaction-signals.js';
+import { createScrollDynamics } from '../alcoia/src/content/telemetry/scroll-dynamics.js';
 
 function fixedClock(start = 1_000_000) {
   let t = start;

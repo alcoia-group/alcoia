@@ -19,10 +19,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { classifyGazeState } from '../TL_DR/src/content/classifier.js';
+import { classifyGazeState } from '../alcoia/src/content/classifier.js';
 
-const CLASSIFIER = 'TL_DR/src/content/classifier.js';
-const EXTRACTOR  = 'TL_DR/src/content/gaze-features.js';
+const CLASSIFIER = 'alcoia/src/content/classifier.js';
+const EXTRACTOR  = 'alcoia/src/content/gaze-features.js';
 
 /* Every `f.<key>` the generated tree reads. */
 function branchKeys() {

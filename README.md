@@ -1,8 +1,8 @@
-# <img src="TL_DR/assets/tldr.png" width="5%" />  TL;DR     
+# <img src="alcoia/assets/alcoia.png" width="5%" />  Alcoia     
                            
-TL;DR is a Chrome extension that reads how you read. It uses your webcam to track your eye movements in real time, analyses those movements every 2.5 seconds to determine your cognitive state, and automatically delivers AI-generated assistance — summaries, explanations, or simplifications — for the exact paragraph you are struggling with.  
+Alcoia is a Chrome extension that reads how you read. It uses your webcam to track your eye movements in real time, analyses those movements every 2.5 seconds to determine your cognitive state, and automatically delivers AI-generated assistance — summaries, explanations, or simplifications — for the exact paragraph you are struggling with.  
       
-Unlike a traditional AI assistant that waits for you to ask for help, TL;DR detects when you need it and acts before you consciously decide to ask. 
+Unlike a traditional AI assistant that waits for you to ask for help, Alcoia detects when you need it and acts before you consciously decide to ask. 
  
 ---   
  
@@ -18,7 +18,7 @@ The third is an AI response layer. When the classifier detects confusion or over
 
 Text selection also works independently of eye tracking. Selecting any text on any page triggers an AI summary popup immediately. Images get the same treatment: gazing at a figure for two seconds while confused — or Ctrl-hovering over any image — triggers an AI explanation of what the image shows and how it relates to the surrounding text.
 
-Beyond the core loop, the extension ships a comprehension monitor (flags dense paragraphs read too fast, or silent struggle read far below personal baseline), reading personas (one-click presets for research, study, casual, and speed reading), a collapsible reading map sidebar with progress and confusion events, dark mode across all UI, text-to-speech with word-level highlighting, a dyslexia mode with adapted fonts and softened classifier thresholds, and viewers for local PDF and PPTX files. The full feature reference is in [TL_DR/README.md](TL_DR/README.md).
+Beyond the core loop, the extension ships a comprehension monitor (flags dense paragraphs read too fast, or silent struggle read far below personal baseline), reading personas (one-click presets for research, study, casual, and speed reading), a collapsible reading map sidebar with progress and confusion events, dark mode across all UI, text-to-speech with word-level highlighting, a dyslexia mode with adapted fonts and softened classifier thresholds, and viewers for local PDF and PPTX files. The full feature reference is in [alcoia/README.md](alcoia/README.md).
 
 ---
 
@@ -89,7 +89,7 @@ Eye tracking requires a secure context: HTTPS or localhost. It will not start on
 **Backend server**
 
 ```
-cd TL_DR/server
+cd alcoia/server
 npm install
 ```
 
@@ -107,7 +107,7 @@ Verify the server is running by visiting `http://localhost:3000/health` in your 
 
 **Chrome extension**
 
-Navigate to `chrome://extensions`, enable Developer Mode in the top right, click Load Unpacked, and select the `TL_DR` folder that contains `manifest.json`. After any code change, click the refresh icon on the extension card to reload it.
+Navigate to `chrome://extensions`, enable Developer Mode in the top right, click Load Unpacked, and select the `alcoia` folder that contains `manifest.json`. After any code change, click the refresh icon on the extension card to reload it.
 
 **Retraining the classifier**
 
@@ -116,18 +116,18 @@ pip install numpy pandas scikit-learn matplotlib seaborn jupyter
 jupyter notebook "tldr classifier/tldr_classifier_v2.ipynb"
 ```
 
-Select Kernel then Restart and Run All. The notebook generates the dataset CSV, trains the decision tree, produces evaluation visualisations, and writes a new `classifier.js`. Copy the output file to `TL_DR/src/content/classifier.js` and reload the extension.
+Select Kernel then Restart and Run All. The notebook generates the dataset CSV, trains the decision tree, produces evaluation visualisations, and writes a new `classifier.js`. Copy the output file to `alcoia/src/content/classifier.js` and reload the extension.
 
 ---
 
 ## Repository structure
 
 ```
-TL_DR/
+alcoia/
   manifest.json
   background.js               Service worker: message routing, file:// intercept
   assets/
-    tldr.png
+    alcoia.png
   src/
     content/
       content.js              Main orchestrator, runs on every page
