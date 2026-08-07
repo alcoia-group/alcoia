@@ -1,4 +1,4 @@
-/* Loads the TL;DR extension unpacked in Chromium and runs the the project notes
+/* Loads the Alcoia extension unpacked in Chromium and runs the the project notes
  * verification checklist against a plain article page.
  *
  *   CAM=off node tests/browser/smoke.mjs   (default — camera must stay untouched)
@@ -16,10 +16,17 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
-const EXT   = '/home/user/TL-DR/TL_DR';
-const CHROME = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
-const HERE  = path.dirname(new URL(import.meta.url).pathname);
+/* Paths are derived, not pinned. They used to be absolute Linux paths, so the
+ * check could only run on one machine — and a verification step nobody can
+ * run is a verification step that stops being run. CHROME falls back to
+ * whichever Chromium Playwright installed (`npx playwright install chromium`). */
+const HERE  = path.dirname(fileURLToPath(import.meta.url));
+const EXT   = process.env.EXT || path.resolve(HERE, '..', '..', 'alcoia');
+const PINNED_CHROME = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const CHROME = process.env.CHROME
+  || (fs.existsSync(PINNED_CHROME) ? PINNED_CHROME : chromium.executablePath());
 
 // Serve the article over http — file:// needs a separate extension permission
 // toggle that would not reflect how the extension actually runs.
@@ -57,7 +64,7 @@ const server = http.createServer((req, res) => {
   res.end(html);
 }).listen(8731);
 
-const findings = { consoleErrors: [], pageErrors: [], getUserMedia: [], mediaRequests: [], engineLogs: [], allLogs: [] };
+const findings = { consoleErrors: [], pageErrors: [], getUserMedia: [], mediaRequests: [], engineLogs: [], allLogs: [], thirdParty: [] };
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'tldr-profile-'));
 const ctx = await chromium.launchPersistentContext(profile, {
@@ -105,7 +112,7 @@ page.on('console', (m) => {
   const t = `[${m.type()}] ${m.text()}`;
   findings.allLogs.push(t);
   if (m.type() === 'error') findings.consoleErrors.push(m.text());
-  if (/\bState:|SRA|TL;DR/i.test(m.text())) findings.engineLogs.push(m.text());
+  if (/\bState:|SRA|Alcoia/i.test(m.text())) findings.engineLogs.push(m.text());
 });
 page.on('pageerror', (e) => findings.pageErrors.push(String(e)));
 findings.failedRequests = [];
@@ -121,6 +128,11 @@ page.on('request', (req) => {
   if (req.resourceType() === 'image' && /^https?:/.test(req.url()) && !req.url().includes('localhost:8731')) {
     findings.mediaRequests.push({ url: req.url(), sample: '(outbound image request)' });
   }
+  /* Anything leaving for a host that is not the page and not the backend. The
+     overlay stylesheet used to pull a font from fonts.googleapis.com on every
+     page the reader opened, which handed Google their IP and the referrer. */
+  const u = req.url();
+  if (/^https?:/.test(u) && !u.includes('localhost:8731')) findings.thirdParty.push(u);
 });
 
 await page.goto('http://localhost:8731/', { waitUntil: 'load' });
@@ -148,6 +160,24 @@ const gum = await page.evaluate(() => window.__gumCalls || []);
 findings.getUserMedia = gum;
 
 const popups = await page.evaluate(() => document.querySelectorAll('.sra-popup').length);
+
+/* Computed styles, not just element presence. The question card and the
+ * receipt once shipped their CSS in a file nothing loaded, and every test
+ * here passed while they rendered as unstyled default HTML — clicking
+ * `.sra-q-option` works perfectly on a bare <button>. Assert that a rule
+ * reaches the element and that the bundled family is the one resolving. */
+const styling = await page.evaluate(() => {
+  const card = document.querySelector('.sra-popup');
+  const opt  = document.querySelector('.sra-q-option');
+  const cs   = card && getComputedStyle(card);
+  const os   = opt && getComputedStyle(opt);
+  return {
+    cardStyled:   !!cs && cs.position === 'fixed' && parseFloat(cs.borderTopLeftRadius) > 0,
+    cardFamily:   cs ? cs.fontFamily.split(',')[0].replace(/["']/g, '') : null,
+    optionStyled: !!os && parseFloat(os.borderTopLeftRadius) > 0,
+    fontsLoaded:  [...new Set([...document.fonts].filter((f) => f.status === 'loaded').map((f) => f.family))],
+  };
+});
 
 // Answer the question if one was asked, and confirm the card grades it.
 const questionCard = await page.evaluate(() => {
@@ -231,6 +261,8 @@ console.log('console errors          :', findings.consoleErrors.length, findings
 console.log('getUserMedia calls      :', findings.getUserMedia.length, findings.getUserMedia);
 console.log('image/video in requests :', findings.mediaRequests.length, findings.mediaRequests.slice(0, 3));
 console.log('popups rendered         :', popups);
+console.log('overlay styling applied :', JSON.stringify(styling));
+console.log('third-party requests    :', findings.thirdParty.length, [...new Set(findings.thirdParty)].slice(0, 5));
 console.log('api hits                :', JSON.stringify(apiHits));
 console.log('question card           :', JSON.stringify(questionCard));
 console.log('after answering         :', JSON.stringify(graded));

@@ -11,8 +11,8 @@
  * a regression. Update it deliberately at that point.
  */
 import { describe, it, expect } from 'vitest';
-import { classifyGazeState } from '../TL_DR/src/content/classifier.js';
-import { createReadingStateEngine, STATES } from '../TL_DR/src/content/state-engine.js';
+import { classifyGazeState } from '../alcoia/src/content/classifier.js';
+import { createReadingStateEngine, STATES } from '../alcoia/src/content/state-engine.js';
 
 const FEATURES = [
   'avg_fixation_ms', 'fixation_std', 'regression_rate',

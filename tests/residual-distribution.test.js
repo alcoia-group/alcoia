@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ResidualDistribution } from '../TL_DR/src/content/telemetry/residual-distribution.js';
+import { ResidualDistribution } from '../alcoia/src/content/telemetry/residual-distribution.js';
 
 describe('ResidualDistribution', () => {
   it('abstains until it has enough history', () => {

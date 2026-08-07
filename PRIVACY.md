@@ -1,4 +1,4 @@
-# Privacy Policy — TL;DR
+# Privacy Policy — Alcoia
 
 > **⚠️ SCAFFOLD ONLY — NOT PUBLISHABLE, NOT A PRIVACY POLICY YET.**
 >
@@ -70,7 +70,7 @@ each; supervisory authority complaint route.
 
 ## 8. Children
 
-`TODO(human)` — Consequential if TL;DR is pitched at schools or universities. COPPA
+`TODO(human)` — Consequential if Alcoia is pitched at schools or universities. COPPA
 (US, under 13) and any applicable local equivalents. If institutional pilots happen, this
 section and a DPA both become blockers, not niceties.
 

@@ -6,8 +6,8 @@
  * These tests pin the fix.
  */
 import { describe, it, expect } from 'vitest';
-import { createReadingStateEngine, STATES } from '../TL_DR/src/content/state-engine.js';
-import { createInterventionPolicy } from '../TL_DR/src/content/intervention-policy.js';
+import { createReadingStateEngine, STATES } from '../alcoia/src/content/state-engine.js';
+import { createInterventionPolicy } from '../alcoia/src/content/intervention-policy.js';
 
 function fixedClock(start = 1_000_000) {
   let t = start;

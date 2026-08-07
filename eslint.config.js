@@ -16,15 +16,15 @@ export default [
   {
     ignores: [
       'node_modules/**',
-      'TL_DR/src/libs/**',          // third-party, minified, not ours to lint
+      'alcoia/src/libs/**',          // third-party, minified, not ours to lint
       'tldr classifier/**',
-      'TL_DR/src/content/classifier.js',  // generated — regenerate, do not edit
+      'alcoia/src/content/classifier.js',  // generated — regenerate, do not edit
     ],
   },
 
   // Extension code: browser globals, ES modules.
   {
-    files: ['TL_DR/**/*.js'],
+    files: ['alcoia/**/*.js'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'module',
@@ -57,7 +57,7 @@ export default [
   // page's MAIN world, where that global does exist — the reference is not a
   // service-worker reference at all.
   {
-    files: ['TL_DR/background.js'],
+    files: ['alcoia/background.js'],
     languageOptions: {
       globals: { ...globals.serviceworker, chrome: 'readonly', webgazer: 'readonly' },
     },
@@ -65,7 +65,7 @@ export default [
 
   // The page-world bootstrap runs as a classic script, not a module.
   {
-    files: ['TL_DR/src/content/webgazer-bootstrap.js', 'TL_DR/src/content/sra-page-bridge.js'],
+    files: ['alcoia/src/content/webgazer-bootstrap.js', 'alcoia/src/content/sra-page-bridge.js'],
     languageOptions: {
       sourceType: 'script',
       globals: { ...browserExtension, webgazer: 'readonly' },
@@ -74,7 +74,7 @@ export default [
 
   // Server is Node.
   {
-    files: ['TL_DR/server/**/*.js'],
+    files: ['alcoia/server/**/*.js'],
     languageOptions: {
       sourceType: 'commonjs',
       globals: globals.node,
