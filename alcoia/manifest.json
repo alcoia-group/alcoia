@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "Alcoia",
+  "description": "Notices when reading slows down on a page or PDF, and offers help with that passage.",
+  "version": "0.2.0",
+  "version_name": "0.2.0 (pre-release)",
+  "permissions": [
+    "storage",
+    "scripting",
+    "activeTab",
+    "tabs",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "file:///*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "assets/alcoia.png",
+      "48": "assets/alcoia.png",
+      "128": "assets/alcoia.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content/content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/libs/**",
+        "src/styles/**",
+        "src/popup/**",
+        "src/content/**",
+        "src/pdf-viewer/**",
+        "src/pptx-viewer/**",
+        "assets/**"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "assets/alcoia.png",
+    "48": "assets/alcoia.png",
+    "128": "assets/alcoia.png"
+  }
+}

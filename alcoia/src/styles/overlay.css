@@ -1,0 +1,551 @@
+/* ── Alcoia — in-page overlay styles ──────────────────────────────────────────
+ *
+ * Everything the reader sees on top of a page they are reading: the summary
+ * card, the retrieval question, the word bubble, the page-summary panel, the
+ * reading receipt, the calibration overlay.
+ *
+ * Loaded by content.js alongside fonts.css, which defines --alc-serif
+ * (Source Serif 4) and --alc-ui (Plus Jakarta Sans). If fonts.css is blocked
+ * by a page CSP the fallbacks in those stacks still resolve, so nothing here
+ * depends on the download landing.
+ *
+ * Typography rule for this file: prose the reader is meant to *read* is set
+ * in the serif; captions, key caps, buttons and status micro-labels are the
+ * UI sans. Italics mark quotation and evidence, never decoration — the
+ * previous revision set nearly every label in italic serif at 9–11px, which
+ * is where the old UI stopped being readable.
+ *
+ * Direction: warm paper. Cream ground, ink-brown text rather than grey, one
+ * forest-green accent, hairline warm borders, shadows tinted brown rather
+ * than black so cards sit on the page instead of hovering over it.
+ *
+ * Palette note: these variables are declared on :root of the *host page*, so
+ * they are namespaced --alc-*. Never introduce a bare --bg here.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --alc-paper:     #FCFAF5;
+  --alc-surface:   rgba(252,250,245,0.97);
+  --alc-border:    rgba(60,48,32,0.11);
+  --alc-border-2:  rgba(26,126,93,0.24);
+  --alc-text:      #2A2722;
+  --alc-muted:     #6E675C;
+  --alc-faint:     #9C9486;
+  --alc-accent:    #1A7E5D;
+  --alc-accent-2:  #12604A;
+  --alc-accent-sf: rgba(26,126,93,0.075);
+  --alc-warn:      #8A5A12;
+  --alc-wrong:     #A33B2D;
+  --alc-gold:      #C8A54B;
+  --alc-radius:    14px;
+  --alc-radius-sm: 10px;
+  --alc-shadow:
+    0 0 0 1px var(--alc-border),
+    0 1px 2px rgba(60,48,32,0.05),
+    0 12px 32px -8px rgba(60,48,32,0.20);
+}
+
+/* ── Paragraph highlight — the passage a card is talking about ───────────── */
+.sra-para-highlight {
+  outline: 2px solid rgba(26,126,93,0.42) !important;
+  outline-offset: 5px !important;
+  border-radius: 4px !important;
+  background: rgba(26,126,93,0.05) !important;
+  transition: outline 0.35s ease, background 0.35s ease !important;
+}
+
+@keyframes sra-nudge-pulse {
+  0%   { box-shadow: 0 0 0 0    rgba(26,126,93,0.40); }
+  60%  { box-shadow: 0 0 0 12px rgba(26,126,93,0);    }
+  100% { box-shadow: 0 0 0 0    rgba(26,126,93,0);    }
+}
+.sra-nudge-highlight,
+.sra-nudge { animation: sra-nudge-pulse 1.4s ease-out 2 !important; }
+
+/* ── The card ────────────────────────────────────────────────────────────── */
+.sra-popup {
+  position: fixed !important;     /* always in the viewport; scroll irrelevant */
+  box-sizing: border-box;
+  max-width: 400px;
+  min-width: 280px;
+  background: var(--alc-surface);
+  color: var(--alc-text);
+  font-family: var(--alc-serif);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.7;
+  letter-spacing: 0;
+  border-radius: var(--alc-radius);
+  padding: 15px 17px 14px;
+  box-shadow: var(--alc-shadow);
+  backdrop-filter: blur(14px) saturate(1.08);
+  z-index: 2147483647;
+  opacity: 0;
+  transform: translateY(5px) scale(0.985);
+  transition: opacity 190ms ease, transform 190ms cubic-bezier(.2,.9,.3,1);
+}
+.sra-popup.show { opacity: 1; transform: none; }
+.sra-popup *, .sra-popup *::before, .sra-popup *::after { box-sizing: border-box; }
+
+/* ── Evidence badge ──────────────────────────────────────────────────────
+   This is the interruption's justification — "You slowed down a lot here".
+   It reads as a caption, not as a heading, and it is never optional. */
+.sra-state-badge {
+  display: block;
+  font-family: var(--alc-ui);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-style: normal;
+  letter-spacing: 0.04em;
+  color: var(--alc-accent);
+  margin: 0 0 9px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--alc-border);
+}
+.sra-state-struggling .sra-state-badge { color: var(--alc-warn); }
+.sra-state-drifting   .sra-state-badge { color: #5a4b8a; }
+.sra-state-skimming   .sra-state-badge { color: #2563a8; }
+
+/* ── Body ────────────────────────────────────────────────────────────────── */
+.sra-popup-body {
+  /* Tall enough that a four-option question fits without scrolling. At 230px
+     the fourth option sat below the fold and the card looked like it had
+     three answers. */
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(26,126,93,0.25) transparent;
+}
+.sra-popup-body::-webkit-scrollbar { width: 5px; }
+.sra-popup-body::-webkit-scrollbar-thumb {
+  background: rgba(26,126,93,0.22);
+  border-radius: 3px;
+}
+.sra-popup-body p,
+.sra-popup-body div { margin: 0 0 6px; }
+.sra-popup-body p:last-child,
+.sra-popup-body div:last-child { margin-bottom: 0; }
+.sra-popup-body strong { font-weight: 700; color: var(--alc-accent-2); }
+
+.sra-popup-divider {
+  height: 1px;
+  background: var(--alc-border);
+  margin: 12px 0 10px;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.sra-actions { display: flex; gap: 7px; }
+.sra-btn {
+  flex: 1;
+  padding: 8px 13px;
+  border-radius: var(--alc-radius-sm);
+  border: 1px solid transparent;
+  font-family: var(--alc-ui);
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.sra-btn:hover:not(:disabled) { opacity: 0.92; }
+.sra-btn:focus-visible { outline: 2px solid var(--alc-accent); outline-offset: 2px; }
+.sra-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.sra-btn-primary { background: var(--alc-accent); color: #fff; }
+.sra-btn-primary:hover:not(:disabled) { background: var(--alc-accent-2); }
+.sra-btn-secondary {
+  background: transparent;
+  color: var(--alc-accent-2);
+  border-color: var(--alc-border-2);
+}
+.sra-btn-secondary:hover:not(:disabled) { background: var(--alc-accent-sf); }
+
+/* ── Close / pin ─────────────────────────────────────────────────────────── */
+.sra-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 1px; }
+.sra-ctrl-btn {
+  width: 25px; height: 25px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--alc-faint);
+  font-family: var(--alc-ui);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.sra-ctrl-btn:hover  { background: var(--alc-accent-sf); color: var(--alc-accent); }
+.sra-ctrl-btn.active { color: var(--alc-accent); background: var(--alc-accent-sf); }
+
+.sra-error { color: var(--alc-wrong); font-size: 13px; }
+
+/* ── Retrieval question card (P3) — the primary intervention ──────────────
+   Lives on .sra-popup, so it inherits the card's type. These rules were
+   previously in src/content/overlay.css, which nothing loaded: the question
+   card and the receipt both rendered unstyled. They are here now. */
+.sra-q-evidence {
+  font-family: var(--alc-serif);
+  font-size: 12.5px;
+  font-style: italic;
+  line-height: 1.6;
+  color: var(--alc-muted);
+  margin: 0 0 9px;
+}
+.sra-q-text {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.55;
+  margin: 0 0 12px;
+}
+.sra-q-options { display: flex; flex-direction: column; gap: 6px; }
+.sra-q-option {
+  text-align: left;
+  font-family: var(--alc-serif);
+  font-size: 13.5px;
+  line-height: 1.5;
+  padding: 9px 12px;
+  border-radius: var(--alc-radius-sm);
+  border: 1px solid var(--alc-border);
+  background: rgba(255,255,255,0.55);
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.13s, border-color 0.13s;
+}
+.sra-q-option:hover:not(:disabled) {
+  background: var(--alc-accent-sf);
+  border-color: var(--alc-border-2);
+}
+.sra-q-option:focus-visible { outline: 2px solid var(--alc-accent); outline-offset: 1px; }
+.sra-q-option:disabled { cursor: default; opacity: 0.7; }
+.sra-q-option.sra-q-correct {
+  background: rgba(26,126,93,0.12);
+  border-color: rgba(26,126,93,0.5);
+  opacity: 1;
+}
+.sra-q-option.sra-q-wrong {
+  background: rgba(163,59,45,0.09);
+  border-color: rgba(163,59,45,0.42);
+  opacity: 1;
+}
+.sra-q-result { margin-top: 12px; font-size: 13.5px; line-height: 1.65; }
+.sra-q-span {
+  margin-top: 9px;
+  padding-left: 11px;
+  border-left: 2px solid var(--alc-border-2);
+  color: var(--alc-muted);
+  font-style: italic;
+}
+.sra-q-explain { margin-top: 10px; font-size: 13.5px; line-height: 1.7; }
+
+/* ── Word-lookup bubble (Ctrl+hover) ─────────────────────────────────────── */
+.sra-word-bubble {
+  position: fixed;
+  z-index: 2147483646;
+  max-width: 270px;
+  background: rgba(24,28,26,0.95);
+  color: #ececE6;
+  font-family: var(--alc-serif);
+  font-size: 12.5px;
+  line-height: 1.6;
+  border-radius: 10px;
+  padding: 10px 13px;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.30);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.09);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 170ms ease, transform 170ms ease;
+}
+.sra-word-bubble.show { opacity: 1; transform: none; }
+.sra-word-bubble strong {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 13.5px;
+  color: #7dd3b0;
+}
+.sra-word-loading {
+  font-family: var(--alc-ui);
+  font-size: 11px;
+  color: #9a9d97;
+}
+
+/* ── Page-summary panel ──────────────────────────────────────────────────── */
+.sra-page-summary-overlay {
+  position: fixed; inset: 0;
+  background: rgba(16,20,18,0.44);
+  backdrop-filter: blur(3px);
+  z-index: 2147483644;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.sra-page-summary-panel {
+  box-sizing: border-box;
+  background: var(--alc-paper);
+  color: var(--alc-text);
+  border-radius: 16px;
+  padding: 28px 32px;
+  max-width: 600px; width: 92vw; max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 18px 56px rgba(16,20,18,0.28);
+  font-family: var(--alc-serif);
+  font-size: 14px;
+  line-height: 1.75;
+  position: relative;
+}
+.sra-page-summary-panel h2 {
+  font-size: 17px; font-weight: 700; margin: 0 0 14px; color: var(--alc-accent-2);
+}
+.sra-page-summary-panel .sra-ps-close {
+  position: absolute; top: 14px; right: 16px;
+  background: none; border: none;
+  font-family: var(--alc-ui); font-size: 16px; line-height: 1;
+  color: var(--alc-faint); cursor: pointer;
+}
+.sra-page-summary-panel .sra-ps-close:hover { color: var(--alc-text); }
+.sra-page-summary-body strong { color: var(--alc-accent-2); }
+.sra-page-summary-body ul,
+.sra-page-summary-body ol { margin: 6px 0 10px 20px; }
+
+/* ── Reading receipt (P4) ────────────────────────────────────────────────── */
+.sra-receipt-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(16,20,18,0.46);
+  backdrop-filter: blur(3px);
+  z-index: 2147483647;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.sra-receipt {
+  box-sizing: border-box;
+  background: var(--alc-paper);
+  color: var(--alc-text);
+  border-radius: 16px;
+  padding: 26px 30px;
+  max-width: 560px; width: 94vw; max-height: 84vh;
+  overflow-y: auto;
+  box-shadow: 0 18px 56px rgba(16,20,18,0.30);
+  font-family: var(--alc-serif);
+  font-size: 14px;
+  line-height: 1.68;
+  position: relative;
+}
+.sra-receipt *, .sra-receipt *::before, .sra-receipt *::after { box-sizing: border-box; }
+.sra-receipt h2 { margin: 0 0 3px; font-size: 19px; font-weight: 700; }
+.sra-receipt h3 {
+  margin: 22px 0 8px;
+  font-family: var(--alc-ui);
+  font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--alc-faint);
+}
+.sra-r-sub { margin: 0 0 4px; color: var(--alc-muted); font-size: 12.5px; }
+.sra-r-close {
+  position: absolute; top: 14px; right: 16px;
+  background: none; border: none;
+  font-family: var(--alc-ui); font-size: 15px;
+  color: var(--alc-faint); cursor: pointer;
+}
+.sra-r-close:hover { color: var(--alc-text); }
+.sra-r-row {
+  display: flex; justify-content: space-between; gap: 16px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--alc-border);
+}
+.sra-r-row > :last-child { font-variant-numeric: tabular-nums; }
+.sra-r-warn {
+  margin: 15px 0;
+  padding: 11px 14px;
+  border-radius: var(--alc-radius-sm);
+  background: rgba(138,90,18,0.08);
+  border: 1px solid rgba(138,90,18,0.26);
+  font-size: 12.5px; line-height: 1.6;
+}
+.sra-r-raw { margin: 18px 0 6px; font-size: 12px; }
+.sra-r-raw summary {
+  cursor: pointer;
+  font-family: var(--alc-ui);
+  color: var(--alc-muted);
+}
+.sra-r-raw pre {
+  max-height: 220px; overflow: auto;
+  background: rgba(24,28,26,0.045);
+  padding: 11px;
+  border-radius: 8px;
+  font-family: var(--alc-mono);
+  font-size: 11px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+}
+/* The signature caveat travels with the artifact. It must stay legible —
+   never shrink it below this. */
+.sra-r-caveat {
+  margin: 15px 0 0;
+  font-size: 12.5px; line-height: 1.6;
+  color: var(--alc-muted);
+  font-style: italic;
+}
+.sra-r-actions { display: flex; gap: 8px; margin-top: 18px; }
+.sra-r-status {
+  margin-top: 10px;
+  font-family: var(--alc-ui);
+  font-size: 11.5px;
+  color: var(--alc-muted);
+  min-height: 1.3em;
+}
+
+/* ── Toasts (positioned inline by ui-controller.js) ──────────────────────── */
+.sra-toast {
+  font-family: var(--alc-ui);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+#sra-continuity-toast button:hover { opacity: 0.8; }
+
+/* ── Camera calibration overlay ──────────────────────────────────────────
+   Reachable only when the reader turns the camera on themselves. */
+.sra-cal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(20,28,22,0.86);
+  backdrop-filter: blur(3px);
+  z-index: 2147483646;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+.sra-cal-overlay.visible { opacity: 1; }
+.sra-cal-panel {
+  box-sizing: border-box;
+  background: var(--alc-paper);
+  border: 1px solid var(--alc-border);
+  border-radius: 16px;
+  padding: 24px;
+  width: 340px;
+  display: flex; flex-direction: column; gap: 14px;
+  font-family: var(--alc-serif);
+  color: var(--alc-text);
+  box-shadow: 0 18px 56px rgba(0,0,0,0.35);
+}
+.sra-cal-top   { display: flex; align-items: center; gap: 10px; }
+.sra-cal-steps { display: flex; gap: 5px; }
+.sra-cal-step  {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(26,126,93,0.18);
+  transition: background 0.2s;
+}
+.sra-cal-step.active { background: var(--alc-accent); }
+.sra-cal-progress {
+  flex: 1; height: 3px;
+  background: rgba(26,126,93,0.15);
+  border-radius: 2px; overflow: hidden;
+}
+.sra-cal-fill {
+  height: 100%;
+  background: var(--alc-accent);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.sra-cal-retry {
+  font-family: var(--alc-ui);
+  font-size: 11px;
+  color: var(--alc-accent);
+  background: none;
+  border: 1px solid var(--alc-border-2);
+  border-radius: 7px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.sra-cal-target-area {
+  position: relative;
+  height: 160px;
+  background: rgba(26,126,93,0.03);
+  border-radius: 10px;
+  border: 1px solid rgba(26,126,93,0.1);
+  overflow: hidden;
+}
+.sra-cal-target {
+  position: absolute;
+  width: 16px; height: 16px;
+  background: var(--alc-accent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 4px rgba(26,126,93,0.2);
+  transition: left 0.4s cubic-bezier(.4,0,.2,1), top 0.4s cubic-bezier(.4,0,.2,1);
+}
+.sra-cal-hint {
+  font-family: var(--alc-ui);
+  font-size: 11px;
+  color: var(--alc-muted);
+  text-align: center;
+}
+.sra-calibration .sra-cal-point {
+  position: absolute;
+  width: 18px; height: 18px;
+  background: var(--alc-accent);
+  border-radius: 50%;
+  transform: translate(-50%,-50%);
+  box-shadow: 0 6px 14px rgba(0,0,0,0.15);
+}
+
+.sra-pptx-overlay { pointer-events: none; }
+
+/* ── Touch and small screens ─────────────────────────────────────────────
+   Safari on iPhone and iPad runs this same content script, so every surface
+   here has to survive a 390px viewport and a finger. Two rules:
+
+   - A card on a narrow viewport becomes a bottom sheet. `placePopup()` in
+     ui-controller.js adds `.sra-sheet` and pins it; this supplies the shape.
+     Dodging text on a phone is not possible — there is no margin to dodge
+     into — so the card takes a predictable position instead of a clever one.
+   - Anything tappable gets 44px, the smallest target Apple's own guidance
+     considers reliable. The desktop sizes here are 25–34px, which is a
+     mis-tap on every attempt.
+   ───────────────────────────────────────────────────────────────────────── */
+.sra-popup.sra-sheet {
+  max-width: none;
+  min-width: 0;
+  border-radius: 16px;
+  padding: 16px 16px 14px;
+  max-height: 62vh;
+  overflow-y: auto;
+  box-shadow: 0 -2px 12px rgba(60,48,32,0.10), 0 16px 40px rgba(60,48,32,0.28);
+}
+.sra-popup.sra-sheet .sra-popup-body { max-height: 40vh; }
+
+@media (pointer: coarse) {
+  .sra-btn,
+  .sra-q-option,
+  .sra-r-actions .sra-btn { min-height: 44px; }
+  .sra-ctrl-btn { width: 40px; height: 40px; font-size: 15px; }
+  .sra-controls { top: 6px; right: 6px; }
+  /* Hover styling latches on touch — it sticks after a tap and reads as a
+     selected state that was never selected. */
+  .sra-q-option:hover:not(:disabled) { background: rgba(255,255,255,0.55); border-color: var(--alc-border); }
+  .sra-btn:hover:not(:disabled) { opacity: 1; }
+}
+
+@media (max-width: 560px) {
+  .sra-receipt,
+  .sra-page-summary-panel { padding: 20px 18px; border-radius: 14px; max-height: 88vh; }
+  .sra-receipt h2 { font-size: 17px; }
+  .sra-r-actions { flex-wrap: wrap; }
+  .sra-r-actions .sra-btn { flex: 1 1 44%; }
+  .sra-receipt-backdrop,
+  .sra-page-summary-overlay { padding: 12px; align-items: flex-end; }
+  .sra-cal-panel { width: 100%; max-width: 420px; }
+  /* No hover, so the word bubble is unreachable; nothing should reserve
+     space for it. */
+  .sra-word-bubble { display: none !important; }
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .sra-popup,
+  .sra-word-bubble,
+  .sra-cal-overlay,
+  .sra-cal-target,
+  .sra-cal-fill { transition-duration: 1ms !important; }
+  .sra-nudge-highlight,
+  .sra-nudge { animation: none !important; }
+}

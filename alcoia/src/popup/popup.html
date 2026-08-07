@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Alcoia</title>
+  <link rel="stylesheet" href="../styles/fonts.css">
+  <link rel="stylesheet" href="../styles/panel.css">
+  <style>
+    /* Popup-specific layout. Shared primitives — pills, buttons, fields, key
+       caps, the colour tokens — live in panel.css. */
+
+    /* Chrome sizes the toolbar popup to content up to 800x600. Safari on
+       iOS presents it as a sheet at the device width instead, so a fixed
+       400px would be clipped on a phone and stranded on an iPad. */
+    body { width: min(400px, 100vw); max-width: 400px; }
+
+    /* ── Header ── */
+    .header {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 14px 16px 13px;
+      background: var(--paper-2);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .brand img { width: 28px; height: 28px; border-radius: 7px; flex: none; }
+    .brand-name {
+      font-family: var(--alc-serif);
+      font-size: 16px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2;
+    }
+    .brand-sub { font-size: 11px; color: var(--muted); line-height: 1.3; }
+
+    /* ── Reading-state card ──────────────────────────────────────────────
+       The honest summary of what the extension currently knows. The state
+       comes from the fused estimate; the source line says which signals are
+       actually running, because "camera off" is the normal case and the UI
+       used to imply the opposite. */
+    .state-card {
+      margin: 12px 16px 0;
+      padding: 12px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+    }
+    .state-top { display: flex; align-items: center; gap: 9px; }
+    .state-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--faint); flex: none;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    .state-dot.live     { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-sf); }
+    .state-dot.attn     { background: var(--warn);   box-shadow: 0 0 0 3px rgba(138,90,18,0.12); }
+    .state-dot.loading  { background: var(--gold);   animation: blink 1.1s ease infinite; }
+    .state-dot.error    { background: var(--wrong); }
+    @keyframes blink { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
+
+    .state-name {
+      font-family: var(--alc-serif);
+      font-size: 15px; font-weight: 600; line-height: 1.3;
+      flex: 1; min-width: 0;
+    }
+    .state-why {
+      margin: 6px 0 0 17px;
+      font-size: 11.5px; line-height: 1.5; color: var(--muted);
+    }
+    .state-sources {
+      display: flex; gap: 6px; flex-wrap: wrap;
+      margin: 10px 0 0 17px;
+    }
+    .src-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 10.5px; font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: var(--paper);
+    }
+    .src-chip.on { color: var(--accent-2); border-color: var(--accent-sf2); background: var(--accent-sf); }
+    .src-chip.err { color: var(--wrong); border-color: rgba(163,59,45,0.28); }
+    .src-chip i {
+      width: 5px; height: 5px; border-radius: 50%;
+      background: currentColor; opacity: 0.55; font-style: normal;
+    }
+
+    /* ── Tabs ── */
+    .tab-bar { display: flex; gap: 2px; padding: 12px 16px 0; }
+    .tab-btn {
+      flex: 1;
+      padding: 7px 6px 9px;
+      background: none; border: none;
+      border-bottom: 2px solid transparent;
+      font-family: var(--alc-ui);
+      font-size: 11.5px; font-weight: 600;
+      color: var(--muted);
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover:not(.active) { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-strip { height: 1px; background: var(--border); margin: 0 0 0; }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── Toggle rows and cells ── */
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 8px 2px;
+      cursor: pointer;
+      border-radius: 8px;
+    }
+    .toggle-row:hover { background: var(--accent-sf); }
+    .toggle-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .toggle-name { font-size: 12.5px; font-weight: 600; }
+    .toggle-desc { font-size: 11px; color: var(--muted); line-height: 1.45; }
+
+    .toggle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .toggle-cell {
+      display: flex; flex-direction: column; gap: 4px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 11px 11px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .toggle-cell:hover { border-color: var(--border-2); background: var(--accent-sf); }
+    .toggle-cell-top {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+    }
+    .toggle-cell-name { font-size: 12px; font-weight: 600; line-height: 1.35; }
+    .toggle-cell-desc { font-size: 10.5px; color: var(--muted); line-height: 1.45; }
+
+    /* Marks a control as not part of the default setup. */
+    .opt-tag {
+      font-size: 9.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+      color: var(--faint); white-space: nowrap;
+    }
+
+    /* ── Reading modes ── */
+    .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .mode-btn {
+      text-align: left;
+      padding: 9px 11px 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-family: var(--alc-ui);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+    .mode-btn:hover { border-color: var(--border-2); background: var(--accent-sf); }
+    .mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .mode-btn .m-name { display: block; font-size: 12px; font-weight: 700; }
+    .mode-btn .m-desc { display: block; font-size: 10.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+    .mode-btn.active .m-desc { color: rgba(255,255,255,0.85); }
+
+    /* ── Reading-state legend ── */
+    .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .chip {
+      font-size: 10.5px; font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: var(--surface);
+      transition: all 0.2s;
+    }
+    .chip.on            { border-color: var(--accent); color: var(--accent-2); background: var(--accent-sf); }
+    .chip.on-struggling { border-color: var(--warn);   color: var(--warn);   background: rgba(138,90,18,0.08); }
+    .chip.on-drifting   { border-color: #5a4b8a;       color: #5a4b8a;       background: rgba(90,75,138,0.07); }
+    .chip.on-skimming   { border-color: #2563a8;       color: #2563a8;       background: rgba(37,99,168,0.07); }
+
+    /* ── Shortcuts ── */
+    .kbd-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 11px 12px;
+    }
+    .kbd-grid {
+      display: grid; grid-template-columns: auto 1fr;
+      gap: 6px 11px; align-items: center;
+      font-size: 11px;
+    }
+    /* Key caps hug their own label rather than stretching to the width of the
+       longest one, which turned the column into a wall of equal grey boxes. */
+    .kbd-grid kbd { justify-self: start; }
+    .kbd-desc { color: var(--muted); }
+
+    #dyslexiaOptions { padding: 2px 0 0; }
+
+    /* ── Platform gating ──────────────────────────────────────────────
+       Safari on iOS and iPadOS does not give a web extension a usable
+       camera, and on a phone the whole gaze path is dead weight. Rather
+       than offering a control that silently does nothing, popup.js sets
+       .no-camera on <body> and everything camera-only leaves the panel.
+       Detection stays telemetry-only there, which is the primary path
+       anyway — nothing else about the product changes. */
+    body.no-camera [data-camera-only] { display: none !important; }
+
+    /* ── Touch and narrow viewports ── */
+    @media (max-width: 400px) {
+      .toggle-grid, .mode-grid, .btn-grid { grid-template-columns: 1fr; }
+      .section { padding: 12px 14px; }
+      .state-card { margin: 12px 14px 0; }
+    }
+    @media (pointer: coarse) {
+      .btn { min-height: 44px; }
+      .pill { width: 44px; height: 26px; }
+      .pill-track::after { width: 20px; height: 20px; }
+      .pill input:checked + .pill-track::after { transform: translateX(18px); }
+      .tab-btn { padding: 12px 6px 13px; }
+      .toggle-row { padding: 12px 2px; }
+      .field-input { min-height: 44px; }
+      /* Hover states latch after a tap on touch and read as selection. */
+      .toggle-cell:hover, .mode-btn:hover, .toggle-row:hover {
+        border-color: var(--border); background: var(--surface);
+      }
+      .toggle-row:hover { background: none; }
+    }
+
+    /* ── Footer ── */
+    .footer {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 16px 13px;
+      border-top: 1px solid var(--border);
+      background: var(--paper-2);
+    }
+    .footer-brand { font-size: 11px; color: var(--muted); }
+    .footer-brand b { color: var(--accent-2); font-weight: 700; }
+  </style>
+</head>
+<body>
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <div class="header">
+    <div class="brand">
+      <img id="sra-logo-img" src="../../assets/alcoia.png" alt="">
+      <div>
+        <div class="brand-name">Alcoia</div>
+        <div class="brand-sub">Notices when reading slows down</div>
+      </div>
+    </div>
+    <label class="pill" title="Turn the assistant on or off">
+      <input type="checkbox" id="assistantToggle" checked>
+      <span class="pill-track"></span>
+    </label>
+  </div>
+
+  <!-- ── Reading state ──────────────────────────────────────────────────── -->
+  <div class="state-card">
+    <div class="state-top">
+      <span class="state-dot" id="stateDot"></span>
+      <span class="state-name" id="stateName">Not reading yet</span>
+    </div>
+    <div class="state-why" id="stateWhy">Open an article and start reading — the estimate appears here.</div>
+    <div class="state-sources">
+      <span class="src-chip on" id="signalChip"><i></i><span id="signalStatus">Reading signals</span></span>
+      <span class="src-chip" id="cameraChip" data-camera-only><i id="cameraDot"></i><span id="cameraStatus">Camera off</span></span>
+    </div>
+  </div>
+
+  <!-- ── Tabs ───────────────────────────────────────────────────────────── -->
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="assist">Assist</button>
+    <button class="tab-btn"        data-tab="access">Reading</button>
+    <button class="tab-btn"        data-tab="session">Session</button>
+  </div>
+  <div class="tab-strip"></div>
+
+  <!-- ════════════════════ TAB 1 — ASSIST ════════════════════ -->
+  <div class="tab-panel active" id="tab-assist">
+
+    <div class="section">
+      <div class="section-label">Reading mode</div>
+      <div class="mode-grid">
+        <button class="mode-btn" data-persona="research">
+          <span class="m-name">Research</span>
+          <span class="m-desc">Cards stay pinned · focus ruler</span>
+        </button>
+        <button class="mode-btn" data-persona="study">
+          <span class="m-name">Study</span>
+          <span class="m-desc">Read aloud · cards clear after 10s</span>
+        </button>
+        <button class="mode-btn" data-persona="casual">
+          <span class="m-name">Casual</span>
+          <span class="m-desc">Only when you select text</span>
+        </button>
+        <button class="mode-btn" data-persona="speed">
+          <span class="m-name">Speed</span>
+          <span class="m-desc">Focus ruler · cards clear after 4s</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Signals, in the order they actually carry weight. Telemetry is the
+         primary path and needs no permission; the camera is an optional
+         extra that only reports whether you are there. -->
+    <div class="section">
+      <div class="section-label">What it watches</div>
+      <div class="toggle-grid">
+
+        <label class="toggle-cell" for="comprehensionToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Reading signals</span>
+            <label class="pill"><input type="checkbox" id="comprehensionToggle" checked><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Your pace against the difficulty of the text, re-reads, and where you stop. No permission needed.</span>
+        </label>
+
+        <label class="toggle-cell" for="eyeToggle" data-camera-only>
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Camera <span class="opt-tag">optional</span></span>
+            <label class="pill"><input type="checkbox" id="eyeToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Adds only whether you are at the screen and roughly where you are looking. Off by default; video never leaves your machine.</span>
+        </label>
+
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">How it helps</div>
+      <div class="toggle-grid">
+
+        <label class="toggle-cell" for="selToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Selection summaries</span>
+            <label class="pill"><input type="checkbox" id="selToggle" checked><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Explain any passage you highlight</span>
+        </label>
+
+        <label class="toggle-cell" for="highlightToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Show the passage</span>
+            <label class="pill"><input type="checkbox" id="highlightToggle" checked><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Outline the paragraph a card refers to</span>
+        </label>
+
+        <label class="toggle-cell" for="ttsToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Read aloud</span>
+            <label class="pill"><input type="checkbox" id="ttsToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Speak the passage · <kbd>Alt+T</kbd></span>
+        </label>
+
+        <label class="toggle-cell" for="focusRulerToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Focus ruler</span>
+            <label class="pill"><input type="checkbox" id="focusRulerToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Dim everything but the current line · <kbd>Alt+F</kbd></span>
+        </label>
+
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Behaviour</div>
+      <div class="toggle-grid">
+
+        <label class="toggle-cell" for="autohideToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Auto-dismiss</span>
+            <label class="pill"><input type="checkbox" id="autohideToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Clear cards after a timeout</span>
+        </label>
+
+        <label class="toggle-cell" for="pinDefaultToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Pin by default</span>
+            <label class="pill"><input type="checkbox" id="pinDefaultToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Keep cards until you close them</span>
+        </label>
+
+        <label class="toggle-cell" for="idleBlinkToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Idle pulse</span>
+            <label class="pill"><input type="checkbox" id="idleBlinkToggle" checked><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Soft edge pulse when you look away</span>
+        </label>
+
+        <label class="toggle-cell" for="darkModeToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Dark mode</span>
+            <label class="pill"><input type="checkbox" id="darkModeToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Dark cards, sidebar and panels</span>
+        </label>
+
+      </div>
+
+      <div class="field-row-inline" id="timeoutRow" style="display:none;margin-top:10px">
+        <span class="field-label">Dismiss after</span>
+        <input class="field-input field-input-sm" id="autohideTimeout" type="number" min="3" max="120" value="12">
+      </div>
+
+      <p class="section-note">
+        However these are set, you are interrupted at most once every three minutes
+        and five times a session, and never twice on the same paragraph.
+      </p>
+    </div>
+
+  </div>
+
+  <!-- ════════════════════ TAB 2 — READING ════════════════════ -->
+  <div class="tab-panel" id="tab-access">
+
+    <div class="section">
+      <div class="section-label">Dyslexia support</div>
+
+      <label class="toggle-row" for="dyslexiaToggle">
+        <div class="toggle-info">
+          <span class="toggle-name">Dyslexia mode</span>
+          <span class="toggle-desc">Cleaner face, wider spacing, and a slower hand on interruptions</span>
+        </div>
+        <label class="pill"><input type="checkbox" id="dyslexiaToggle"><span class="pill-track"></span></label>
+      </label>
+
+      <div id="dyslexiaOptions" style="display:none">
+        <label class="toggle-row" for="bionicToggle">
+          <div class="toggle-info">
+            <span class="toggle-name">Bionic reading</span>
+            <span class="toggle-desc">Bold the first half of each word to lead the eye</span>
+          </div>
+          <label class="pill"><input type="checkbox" id="bionicToggle"><span class="pill-track"></span></label>
+        </label>
+        <div class="field-row" style="padding:6px 2px 2px">
+          <span class="field-label">Colour overlay</span>
+          <select id="dyslexiaColorSelect" class="field-input">
+            <option value="">None</option>
+            <option value="rgba(255,243,180,0.12)">Warm yellow</option>
+            <option value="rgba(180,220,255,0.12)">Light blue</option>
+            <option value="rgba(200,255,200,0.10)">Soft green</option>
+            <option value="rgba(255,200,200,0.10)">Pale rose</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Reading pace</div>
+      <div class="btn-row">
+        <button class="btn btn-ghost" id="readingCalBtn">Measure my reading speed</button>
+      </div>
+      <p class="section-note">
+        You read a short passage at your normal pace and say when you are done. That
+        sets the baseline every pace signal is compared against. No camera involved.
+        Without it, your baseline is learned slowly from ordinary reading — which is
+        exactly the period when the pace judgements are least reliable.
+      </p>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Developer</div>
+      <label class="toggle-row" for="debugTogglePopup" data-camera-only>
+        <div class="toggle-info">
+          <span class="toggle-name">Debug overlay</span>
+          <span class="toggle-desc">Draw gaze prediction dots (camera only)</span>
+        </div>
+        <label class="pill"><input type="checkbox" id="debugTogglePopup"><span class="pill-track"></span></label>
+      </label>
+      <div class="field-row" style="padding-top:6px">
+        <span class="field-label">Backend URL</span>
+        <input class="field-input" id="backendUrl" type="text" placeholder="http://localhost:3000/api/summarize">
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ════════════════════ TAB 3 — SESSION ════════════════════ -->
+  <div class="tab-panel" id="tab-session">
+
+    <div class="section">
+      <div class="section-label">This page</div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="pageSummaryBtn">What is this page about?</button>
+        <div class="btn-grid">
+          <button class="btn btn-ghost" id="recallBtn">Test my recall</button>
+          <button class="btn btn-ghost" id="receiptBtn">Reading receipt</button>
+        </div>
+      </div>
+      <p class="section-note">
+        The receipt is yours. It is built on your machine, shown to you before it
+        goes anywhere, and never sent on its own.
+      </p>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Reading state</div>
+      <div class="chips">
+        <span class="chip" id="chip-on_pace">on pace</span>
+        <span class="chip" id="chip-skimming">skimming</span>
+        <span class="chip" id="chip-struggling">struggling</span>
+        <span class="chip" id="chip-drifting">drifting</span>
+        <span class="chip" id="chip-absent">away</span>
+        <span class="chip" id="chip-unknown">unknown</span>
+      </div>
+      <p class="section-note">
+        These describe what was observed, not what you were feeling.
+        <b>Unknown</b> is the normal answer when the signals do not agree — nothing
+        interrupts you on it.
+      </p>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Saved work</div>
+      <div class="btn-grid">
+        <button class="btn btn-ghost" id="sessionReportBtn">Session report</button>
+        <button class="btn btn-ghost" id="notesBtn">Notes</button>
+        <button class="btn btn-ghost" id="viewHighlightsBtn">Highlights</button>
+        <button class="btn btn-ghost" id="exportBtn">Export</button>
+      </div>
+    </div>
+
+    <div class="section" data-camera-only>
+      <div class="section-label">Camera — optional</div>
+      <div class="btn-row">
+        <button class="btn btn-ghost" id="startCameraBtn">Turn the camera on</button>
+        <div class="btn-grid">
+          <button class="btn btn-ghost" id="calibrateBtn">Calibrate</button>
+          <button class="btn btn-ghost" id="troubleshootBtn">Permissions</button>
+        </div>
+      </div>
+      <p class="section-note">
+        The camera is a secondary sensor: it reports whether you are at the screen
+        and roughly which region you are looking at. Detection runs without it.
+      </p>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Shortcuts</div>
+      <div class="kbd-card">
+        <div class="kbd-grid">
+          <kbd>Alt+S</kbd><span class="kbd-desc">Explain the paragraph you are on</span>
+          <kbd>Alt+T</kbd><span class="kbd-desc">Read aloud</span>
+          <kbd>Alt+F</kbd><span class="kbd-desc">Focus ruler — dims all but the reading line</span>
+          <kbd>Alt+M</kbd><span class="kbd-desc">Reading map sidebar</span>
+          <kbd>Alt+R</kbd><span class="kbd-desc">Test my recall</span>
+          <kbd>Alt+I</kbd><span class="kbd-desc">Reading receipt</span>
+          <kbd>Alt+N</kbd><span class="kbd-desc">Notes</span>
+          <kbd>Alt+G</kbd><span class="kbd-desc">Session report</span>
+          <kbd>Ctrl+drag</kbd><span class="kbd-desc">Highlight the selection</span>
+          <kbd>Ctrl+hover</kbd><span class="kbd-desc">Define a word in context</span>
+          <kbd>Esc</kbd><span class="kbd-desc">Close open cards</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Simulate a state</div>
+      <div class="btn-grid">
+        <button class="btn btn-ghost" id="simStrugglingBtn">Struggling <kbd>Alt+1</kbd></button>
+        <button class="btn btn-ghost" id="simDriftingBtn">Drifting <kbd>Alt+3</kbd></button>
+        <button class="btn btn-ghost" id="simSkimmingBtn">Skimming <kbd>Alt+4</kbd></button>
+        <button class="btn btn-ghost" id="simOnPaceBtn">On pace <kbd>Alt+5</kbd></button>
+      </div>
+      <p class="section-note">Forces the matching intervention on the paragraph in view, for testing.</p>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <span class="footer-brand">by <b>CJ_</b></span>
+    <button class="btn-quiet" id="upgradeBtn">Premium →</button>
+  </div>
+
+<script src="popup.js"></script>
+</body>
+</html>

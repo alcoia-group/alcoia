@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createInterventionPolicy, STATE_ACTIONS } from '../TL_DR/src/content/intervention-policy.js';
-import { STATES } from '../TL_DR/src/content/state-engine.js';
+import { createInterventionPolicy, STATE_ACTIONS } from '../alcoia/src/content/intervention-policy.js';
+import { STATES } from '../alcoia/src/content/state-engine.js';
 
 function fixedClock(start = 1_000_000) {
   let t = start;

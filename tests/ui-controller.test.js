@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createUIController, esc, clamp } from '../TL_DR/src/content/ui-controller.js';
+import { createUIController, esc, clamp } from '../alcoia/src/content/ui-controller.js';
 
 function build(settings = {}) {
   return createUIController({

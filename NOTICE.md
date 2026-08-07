@@ -2,16 +2,16 @@
 
 ## Scope of the AGPL-3.0 grant
 
-`LICENSE` (AGPL-3.0) covers the TL;DR **browser extension client** — everything under
-`TL_DR/` except `TL_DR/server/` and `TL_DR/src/libs/` — plus the training material under
+`LICENSE` (AGPL-3.0) covers the Alcoia **browser extension client** — everything under
+`alcoia/` except `alcoia/server/` and `alcoia/src/libs/` — plus the training material under
 `tldr classifier/`.
 
 Two carve-outs:
 
 | Path | Status |
 |---|---|
-| `TL_DR/server/` | **Not covered by this grant.** Proprietary; scheduled to move to a separate private repository. Until that move happens, no licence is granted for it. |
-| `TL_DR/src/libs/` | Third-party code under its own licence — see below. |
+| `alcoia/server/` | **Not covered by this grant.** Proprietary; scheduled to move to a separate private repository. Until that move happens, no licence is granted for it. |
+| `alcoia/src/libs/` | Third-party code under its own licence — see below. |
 
 ## Bundled third-party code
 
@@ -23,16 +23,22 @@ Verified by reading the licence headers in each shipped file:
 | `src/libs/pdfjs/pdf.min.js` | Apache-2.0 | 2023 Mozilla Foundation |
 | `src/libs/pdfjs/pdf.worker.min.js` | Apache-2.0 | 2023 Mozilla Foundation |
 | `src/libs/jszip.min.js` | MIT or GPLv3 (dual); bundles pako (MIT) | Stuk |
-No font is bundled. `src/libs/fonts/` previously held two files named `Merriweather-*.woff2`
-which were 82-byte **text placeholders** ("Replace with real .woff2 binary for production"),
-not fonts, and nothing in the codebase referenced Merriweather at all. They have been removed.
-No OFL notice is shipped because there is no font to license — **add `OFL.txt` alongside the
-first real font binary that lands**, whether that is Merriweather, Literata or Inter.
+| `src/libs/fonts/source-serif-4-*.woff2` | **SIL OFL 1.1** — `OFL-SourceSerif4.txt` alongside | 2014 The Source Serif 4 Project Authors |
+| `src/libs/fonts/plus-jakarta-sans-*.woff2` | **SIL OFL 1.1** — `OFL-PlusJakartaSans.txt` alongside | 2020 The Plus Jakarta Sans Project Authors |
 
-**Fonts are currently fetched from Google.** `fonts.googleapis.com` is requested by
-`content.js` on every page the reader visits, plus `popup.html`, `highlights.html` and the PDF
-viewer. That is a third-party request tied to browsing activity and it belongs in `PRIVACY.md`
-§5. Self-hosting the woff2 files would remove it.
+Two fonts are bundled as of the UI pass: **Source Serif 4** (reading voice) and **Plus Jakarta
+Sans** (UI voice), latin and latin-ext subsets, roman and italic, variable weight. Both are SIL
+OFL 1.1, which permits bundling and redistribution provided the licence travels with the
+binaries and the Reserved Font Names are not applied to modified copies. Neither has been
+modified. Both licences ship in `src/libs/fonts/`. **Any further font binary must arrive with
+its licence file in the same directory.**
+
+~~Fonts are currently fetched from Google.~~ **Fixed.** `fonts.googleapis.com` is no longer
+requested anywhere: `content.js` injects the packaged `src/styles/fonts.css` instead, and the
+popup, notes, highlights, export, session-report, PDF and PPTX pages link it too. The previous
+arrangement sent Google one request per page the reader opened, carrying their IP and the
+referring page — a third-party request tied to browsing activity, in a product whose pitch is
+that it does not do that. `PRIVACY.md` §5 no longer needs to disclose it.
 
 ## What WebGazer's licence actually means here
 

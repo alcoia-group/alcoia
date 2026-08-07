@@ -1,0 +1,275 @@
+// classifier.js — Decision Tree for Alcoia
+// Auto-generated — do not edit by hand.
+// Regenerate via: tldr classifier/tldr_classifier_training(1).ipynb
+//   (NOT tldr_classifier_v2.ipynb — that notebook exports a different tree.
+//    The body of this file matches the export in tldr classifier/classifier(1).js.)
+//
+// TRAINING DATA — SYNTHETIC. NOT READING BEHAVIOUR.
+//   Generated from hand-written normal distributions, 500 rows per class across
+//   5 classes = 2500 clean rows. Every row is then duplicated with Gaussian noise
+//   added to each feature, giving 5000 rows. An 80/20 split yields 4000 train,
+//   1000 test. No human ever produced any of it.
+//
+// Trained on SYNTHETIC data with Gaussian-noise row duplication and a random
+// 80/20 split — a row's noisy twin can appear in test while the original is in
+// train. The 0.851 figure is inflated by leakage on top of being synthetic.
+// It measures neither reading behaviour nor honest generator recovery.
+// No real-participant evaluation has been performed. Do not cite as accuracy.
+//
+// Input: 9-feature object (avg_fixation_ms, fixation_std, regression_rate,
+//        saccade_length, saccade_std, gaze_drift_px, scroll_delta_px,
+//        velocity_mean, line_reread_count)
+// Output: { label: string, confidence: float }
+//
+// WARNING — missing keys do not throw. Every branch below is a `<=` comparison,
+// and `undefined <= x` is false. Drop a feature from the extractor without
+// retraining and this file will silently route down one branch forever while
+// still returning confident-looking labels. Retrain first, regenerate, then
+// change the extractor. See the project notes § THE TRAP.
+//
+// Note: the root split is scroll_delta_px — a telemetry feature, not a gaze one.
+
+export function classifyGazeState(f) {
+  if (f.scroll_delta_px <= 16.6988) {
+    if (f.line_reread_count <= 1.7894) {
+      if (f.avg_fixation_ms <= 450.6244) {
+        if (f.regression_rate <= 0.2163) {
+          if (f.velocity_mean <= 185.0838) {
+            return { label: 'focused', confidence: 0.556 };
+          } else {
+            return { label: 'focused', confidence: 1.000 };
+          }
+        } else {
+          if (f.saccade_length <= 48.0152) {
+            return { label: 'confused', confidence: 0.962 };
+          } else {
+            return { label: 'confused', confidence: 0.636 };
+          }
+        }
+      } else {
+        if (f.saccade_std <= 14.7128) {
+          if (f.avg_fixation_ms <= 646.0558) {
+            return { label: 'confused', confidence: 0.800 };
+          } else {
+            return { label: 'zoning_out', confidence: 0.632 };
+          }
+        } else {
+          if (f.saccade_std <= 36.0569) {
+            if (f.gaze_drift_px <= 37.6753) {
+              if (f.avg_fixation_ms <= 778.8824) {
+                return { label: 'confused', confidence: 0.778 };
+              } else {
+                return { label: 'zoning_out', confidence: 1.000 };
+              }
+            } else {
+              return { label: 'zoning_out', confidence: 1.000 };
+            }
+          } else {
+            if (f.gaze_drift_px <= 15.3839) {
+              return { label: 'zoning_out', confidence: 0.944 };
+            } else {
+              return { label: 'zoning_out', confidence: 1.000 };
+            }
+          }
+        }
+      }
+    } else {
+      if (f.scroll_delta_px <= 7.3524) {
+        if (f.regression_rate <= 0.3737) {
+          if (f.avg_fixation_ms <= 844.0301) {
+            if (f.line_reread_count <= 5.6911) {
+              if (f.avg_fixation_ms <= 674.8620) {
+                if (f.gaze_drift_px <= 29.5750) {
+                  return { label: 'confused', confidence: 0.602 };
+                } else {
+                  return { label: 'confused', confidence: 0.854 };
+                }
+              } else {
+                if (f.saccade_length <= 37.9284) {
+                  return { label: 'overloaded', confidence: 0.833 };
+                } else {
+                  return { label: 'confused', confidence: 0.500 };
+                }
+              }
+            } else {
+              if (f.saccade_length <= 38.9983) {
+                if (f.regression_rate <= 0.2648) {
+                  return { label: 'overloaded', confidence: 0.667 };
+                } else {
+                  return { label: 'overloaded', confidence: 0.957 };
+                }
+              } else {
+                if (f.fixation_std <= 167.9492) {
+                  return { label: 'confused', confidence: 0.583 };
+                } else {
+                  return { label: 'overloaded', confidence: 0.842 };
+                }
+              }
+            }
+          } else {
+            if (f.avg_fixation_ms <= 1090.1516) {
+              return { label: 'zoning_out', confidence: 0.667 };
+            } else {
+              return { label: 'zoning_out', confidence: 1.000 };
+            }
+          }
+        } else {
+          if (f.line_reread_count <= 5.5910) {
+            if (f.gaze_drift_px <= 22.2109) {
+              if (f.regression_rate <= 0.4779) {
+                if (f.fixation_std <= 166.5330) {
+                  return { label: 'overloaded', confidence: 0.588 };
+                } else {
+                  return { label: 'overloaded', confidence: 0.906 };
+                }
+              } else {
+                if (f.saccade_length <= 59.1363) {
+                  return { label: 'overloaded', confidence: 0.956 };
+                } else {
+                  return { label: 'overloaded', confidence: 0.667 };
+                }
+              }
+            } else {
+              if (f.velocity_mean <= 187.1903) {
+                if (f.gaze_drift_px <= 40.9787) {
+                  return { label: 'overloaded', confidence: 0.650 };
+                } else {
+                  return { label: 'confused', confidence: 0.789 };
+                }
+              } else {
+                return { label: 'confused', confidence: 0.781 };
+              }
+            }
+          } else {
+            if (f.saccade_std <= 22.3780) {
+              if (f.velocity_mean <= 45.9580) {
+                return { label: 'overloaded', confidence: 0.889 };
+              } else {
+                if (f.velocity_mean <= 186.7220) {
+                  return { label: 'overloaded', confidence: 1.000 };
+                } else {
+                  return { label: 'overloaded', confidence: 0.957 };
+                }
+              }
+            } else {
+              return { label: 'overloaded', confidence: 0.818 };
+            }
+          }
+        }
+      } else {
+        if (f.avg_fixation_ms <= 600.2897) {
+          if (f.fixation_std <= 212.1005) {
+            if (f.velocity_mean <= 274.9861) {
+              if (f.regression_rate <= 0.4422) {
+                if (f.fixation_std <= 161.0720) {
+                  return { label: 'confused', confidence: 0.987 };
+                } else {
+                  return { label: 'confused', confidence: 0.897 };
+                }
+              } else {
+                if (f.scroll_delta_px <= 9.8606) {
+                  return { label: 'confused', confidence: 0.560 };
+                } else {
+                  return { label: 'confused', confidence: 0.957 };
+                }
+              }
+            } else {
+              return { label: 'confused', confidence: 0.611 };
+            }
+          } else {
+            return { label: 'confused', confidence: 0.500 };
+          }
+        } else {
+          if (f.scroll_delta_px <= 9.8166) {
+            if (f.regression_rate <= 0.3395) {
+              return { label: 'confused', confidence: 0.500 };
+            } else {
+              return { label: 'overloaded', confidence: 0.833 };
+            }
+          } else {
+            if (f.gaze_drift_px <= 21.0091) {
+              return { label: 'confused', confidence: 0.556 };
+            } else {
+              return { label: 'confused', confidence: 0.947 };
+            }
+          }
+        }
+      }
+    }
+  } else {
+    if (f.saccade_length <= 149.0458) {
+      if (f.saccade_std <= 53.8375) {
+        if (f.regression_rate <= 0.3117) {
+          if (f.velocity_mean <= 526.8494) {
+            if (f.avg_fixation_ms <= 418.1136) {
+              if (f.velocity_mean <= 468.6265) {
+                if (f.saccade_std <= 46.7535) {
+                  return { label: 'focused', confidence: 0.993 };
+                } else {
+                  return { label: 'focused', confidence: 0.919 };
+                }
+              } else {
+                return { label: 'focused', confidence: 0.769 };
+              }
+            } else {
+              return { label: 'focused', confidence: 0.667 };
+            }
+          } else {
+            return { label: 'skimming', confidence: 0.875 };
+          }
+        } else {
+          return { label: 'confused', confidence: 0.867 };
+        }
+      } else {
+        if (f.saccade_length <= 84.6289) {
+          return { label: 'focused', confidence: 0.667 };
+        } else {
+          if (f.velocity_mean <= 399.8137) {
+            return { label: 'skimming', confidence: 0.724 };
+          } else {
+            return { label: 'skimming', confidence: 1.000 };
+          }
+        }
+      }
+    } else {
+      if (f.saccade_std <= 24.0925) {
+        return { label: 'focused', confidence: 0.500 };
+      } else {
+        if (f.regression_rate <= 0.1779) {
+          if (f.avg_fixation_ms <= 244.9123) {
+            if (f.saccade_length <= 175.0086) {
+              if (f.regression_rate <= 0.0942) {
+                return { label: 'skimming', confidence: 1.000 };
+              } else {
+                return { label: 'skimming', confidence: 0.778 };
+              }
+            } else {
+              return { label: 'skimming', confidence: 1.000 };
+            }
+          } else {
+            return { label: 'skimming', confidence: 0.808 };
+          }
+        } else {
+          return { label: 'skimming', confidence: 0.722 };
+        }
+      }
+    }
+  }
+  return { label: 'focused', confidence: 0.5 };
+}
+
+export const COGNITIVE_STATE_ACTIONS = {
+  focused:    'none',
+  skimming:   'none',
+  confused:   'explain',
+  zoning_out: 'nudge',
+  overloaded: 'simplify',
+};
+
+export const STATE_LABELS = {
+  focused:    'Focused',
+  skimming:   'Skimming',
+  confused:   'Confused',
+  zoning_out: 'Zoning Out',
+  overloaded: 'Overloaded',
+}; 
