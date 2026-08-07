@@ -30,11 +30,23 @@ const CHROME = process.env.CHROME
 
 // Serve the article over http — file:// needs a separate extension permission
 // toggle that would not reflect how the extension actually runs.
-const html = fs.readFileSync(path.join(HERE, 'article.html'), 'utf8');
+/* PAGE=zh runs the same checklist against a Chinese article. That page is not
+ * decoration: every word count in the pipeline used to be a whitespace split,
+ * which returns 1 for an entire CJK paragraph, so the extension produced no
+ * signal at all on those pages — silently, with every test passing. This is
+ * the guard against that returning. */
+const ZH = process.env.PAGE === 'zh';
+const html = fs.readFileSync(path.join(HERE, ZH ? 'article-zh.html' : 'article.html'), 'utf8');
 /* Also stands in for the backend, so the question path is exercised for real
  * rather than only its fallback. The question cites a sentence that is
  * genuinely in article.html — the server rejects spans that are not. */
-const CANNED_QUESTION = {
+const CANNED_QUESTION = ZH ? {
+  q: '眼睛所指向的位置与心智活动之间的关系被描述为怎样？',
+  options: ['真实但微弱', '强而直接', '完全不存在', '精确到每一个词'],
+  answerIndex: process.env.WRONG === '1' ? 1 : 0,
+  explanation: '文中称这种关系真实存在但相当微弱。',
+  span: '眼睛所指向的位置与心智所进行的活动之间的关系是真实存在的，但相当微弱，而且当测量设备比当初得出这些结论时所使用的实验室仪器更加廉价、更加嘈杂时，这种关系就会变得更加微弱。',
+} : {
   q: 'How is the relationship between eye position and attention described?',
   options: ['Real but weak', 'Strong and direct', 'Entirely absent', 'Exact to the word'],
   // WRONG=1 shifts the correct answer so the harness's click is wrong,
@@ -255,6 +267,7 @@ const receipt = await page.evaluate(() => {
 });
 
 console.log('\n================ RESULTS ================');
+console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
 console.log('page errors             :', findings.pageErrors.length, findings.pageErrors.slice(0, 5));
 console.log('console errors          :', findings.consoleErrors.length, findings.consoleErrors.slice(0, 8));

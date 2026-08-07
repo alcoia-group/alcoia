@@ -24,6 +24,8 @@
    That makes it the floor rather than the failure case.
 */
 
+import { readingAxis } from './telemetry/segmentation.js';
+
 const RULER_ID    = 'sra-focus-ruler';
 const DIM_OPACITY = 0.38;
 const SMOOTH_K    = 0.14;
@@ -58,7 +60,22 @@ export function createFocusRuler() {
   let curY  = null, curAt  = 0;
   let ticker = null;
 
-  const readingLineY = () => window.innerHeight * READING_LINE_FRACTION;
+  let axisCache = { at: 0, vertical: false, rtl: false };
+  function getAxis() {
+    const t = Date.now();
+    if (t - axisCache.at > 2000) axisCache = { at: t, ...readingAxis(document) };
+    return axisCache;
+  }
+  const getVertical = () => getAxis().vertical;
+
+  /* In vertical writing the reading position is an x coordinate, and vertical-rl
+     starts at the right edge. */
+  const readingLineY = () => {
+    const a = getAxis();
+    if (!a.vertical) return window.innerHeight * READING_LINE_FRACTION;
+    const f = a.rtl ? 1 - READING_LINE_FRACTION : READING_LINE_FRACTION;
+    return window.innerWidth * f;
+  };
 
   /* True when the pointer is over something that looks like body text. A
      cursor parked on a nav bar is not a reading position. */
@@ -111,16 +128,29 @@ export function createFocusRuler() {
     document.body.appendChild(ruler);
   }
 
+  /* Vertical Japanese and Chinese read down columns, so the clear band runs
+     vertically and the dimmed halves sit left and right. Drawing a horizontal
+     band over vertical text hides the line being read. */
   function applyY(y) {
-    const vh  = window.innerHeight;
+    const vertical = getVertical();
+    const extent = vertical ? window.innerWidth : window.innerHeight;
     const top = document.getElementById('sra-ruler-top');
     const bot = document.getElementById('sra-ruler-bot');
     const ln  = document.getElementById('sra-ruler-line');
     if (!top || !bot || !ln) return;
 
-    top.style.height = Math.max(0, y - bandPx) + 'px';
-    bot.style.height = Math.max(0, vh - y - bandPx) + 'px';
-    ln.style.top     = (y - 1) + 'px';
+    const near = Math.max(0, y - bandPx);
+    const far  = Math.max(0, extent - y - bandPx);
+
+    if (vertical) {
+      Object.assign(top.style, { width: near + 'px', height: '100%', top: '0', bottom: 'auto', left: '0', right: 'auto' });
+      Object.assign(bot.style, { width: far + 'px',  height: '100%', top: '0', bottom: 'auto', right: '0', left: 'auto' });
+      Object.assign(ln.style,  { width: '2px', height: '100%', left: (y - 1) + 'px', top: '0', right: 'auto' });
+    } else {
+      Object.assign(top.style, { height: near + 'px', width: 'auto', left: '0', right: '0', top: '0', bottom: 'auto' });
+      Object.assign(bot.style, { height: far + 'px',  width: 'auto', left: '0', right: '0', bottom: '0', top: 'auto' });
+      Object.assign(ln.style,  { height: '2px', width: 'auto', left: '0', right: '0', top: (y - 1) + 'px' });
+    }
   }
 
   function scheduleUpdate(rawY) {
@@ -139,7 +169,7 @@ export function createFocusRuler() {
   const onPointerMove = (e) => {
     if (!enabled) return;
     if (!cursorIsOnText(e.clientX, e.clientY)) return;
-    curY = e.clientY;
+    curY = getVertical() ? e.clientX : e.clientY;
     curAt = Date.now();
     scheduleUpdate(curY);
   };
