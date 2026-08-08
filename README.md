@@ -1,4 +1,16 @@
-# <img src="alcoia/assets/alcoia.png" width="5%" /> alcoia
+<p align="center">
+  <img src="alcoia/assets/alcoia-wordmark-cream.png" width="440" alt="alcoia">
+</p>
+
+<p align="center">
+  <em>/ælˈkɔɪ.ə/ · al-KOY-uh</em>
+</p>
+
+<p align="center">
+  It notices when you have stopped reading, and asks you about it.
+</p>
+
+---
 
 alcoia is a browser extension that notices when you are struggling with a page and offers help
 with that specific passage.

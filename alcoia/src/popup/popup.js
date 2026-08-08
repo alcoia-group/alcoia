@@ -40,6 +40,15 @@ const canonicalState = (s) => (STATE_UI[s] ? s : LEGACY_STATES[s] || null);
  * one. When it fails, every camera control leaves the panel rather than
  * sitting there doing nothing — detection is telemetry-first regardless, so
  * nothing else about the product changes on those devices. */
+/* Which browser this is, from the extension origin rather than the user
+ * agent — `moz-extension://` is unambiguous and cannot be spoofed by a page.
+ * Used for the two places where the browsers genuinely differ, not as a
+ * general-purpose fork. */
+const IS_FIREFOX = (() => {
+  try { return chrome.runtime.getURL('').startsWith('moz-extension://'); }
+  catch (e) { return false; }
+})();
+
 function cameraIsAvailable() {
   const ua = navigator.userAgent || '';
   const iOS = /iPad|iPhone|iPod/.test(ua)
@@ -366,9 +375,46 @@ document.addEventListener('DOMContentLoaded', () => {
     calibrateBtn.textContent = 'Calibrate';
   });
 
+  /* Chrome exposes a settings page for this; Firefox blocks extensions from
+   * opening about: URLs entirely, so there is nothing to navigate to and the
+   * honest answer is to say where the control lives. */
   $('troubleshootBtn').addEventListener('click', () => {
+    if (IS_FIREFOX) {
+      const help = $('cameraHelp');
+      if (help) help.hidden = !help.hidden;
+      return;
+    }
     chrome.tabs.create({ url: 'chrome://settings/content/camera' });
   });
+
+  /* ── Host access ──────────────────────────────────────────────────────
+   * Chrome grants host permissions at install. Firefox MV3 treats them as
+   * optional: the extension is installed but cannot read any page until the
+   * reader says so. Without this the extension would appear installed and
+   * do nothing, with no explanation anywhere. `permissions.request()` has to
+   * be called from a user gesture, which is why it lives on a click. */
+  const permBanner = $('permBanner');
+  const permGrantBtn = $('permGrantBtn');
+
+  function refreshHostPermission() {
+    if (!permBanner || !chrome.permissions?.contains) return;
+    try {
+      chrome.permissions.contains({ origins: ['<all_urls>'] }, (granted) => {
+        if (chrome.runtime.lastError) return;
+        permBanner.hidden = !!granted;
+        document.body.classList.toggle('no-host-access', !granted);
+      });
+    } catch (e) { /* API absent — assume granted, as on Chrome */ }
+  }
+
+  permGrantBtn?.addEventListener('click', () => {
+    chrome.permissions.request({ origins: ['<all_urls>'] }, () => {
+      if (chrome.runtime.lastError) return;
+      refreshHostPermission();
+    });
+  });
+
+  refreshHostPermission();
 
   // ── Reading modes ───────────────────────────────────────────────────────
   /* Deliberately no sra_eye key. A reading mode changes how the extension
@@ -421,6 +467,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── Logo (packaged path differs from the relative one in the markup) ───────
 try {
-  const logoImg = document.getElementById('sra-logo-img');
-  if (logoImg) logoImg.src = chrome.runtime.getURL('assets/alcoia.png');
+  const logo = document.getElementById('sra-logo-img');
+  const logoDark = document.getElementById('sra-logo-img-dark');
+  if (logo) logo.src = chrome.runtime.getURL('assets/alcoia-wordmark.png');
+  if (logoDark) logoDark.src = chrome.runtime.getURL('assets/alcoia-wordmark-white.png');
 } catch (e) { /* not in an extension context */ }

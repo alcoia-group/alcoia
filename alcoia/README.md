@@ -1,4 +1,11 @@
-# alcoia — reference
+<p align="center">
+  <img src="assets/alcoia-wordmark-cream.png" width="380" alt="alcoia">
+</p>
+
+<p align="center"><em>reference</em></p>
+
+---
+
 
 A browser extension that notices when reading slows down on a page and offers help with that
 passage. Detection runs on **browser telemetry** — pace against text difficulty and against your

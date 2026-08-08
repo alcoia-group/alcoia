@@ -17,15 +17,13 @@
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
-  "background": {
-    "service_worker": "background.js"
-  },
   "action": {
     "default_popup": "src/popup/popup.html",
     "default_icon": {
-      "16": "assets/alcoia.png",
-      "48": "assets/alcoia.png",
-      "128": "assets/alcoia.png"
+      "16": "assets/alcoia-mark-lilac.png",
+      "32": "assets/alcoia-mark-lilac.png",
+      "48": "assets/alcoia-mark-lilac.png",
+      "128": "assets/alcoia-mark-lilac.png"
     }
   },
   "content_scripts": [
@@ -59,8 +57,12 @@
     }
   ],
   "icons": {
-    "16": "assets/alcoia.png",
-    "48": "assets/alcoia.png",
-    "128": "assets/alcoia.png"
+    "16": "assets/alcoia-mark-lilac.png",
+    "32": "assets/alcoia-mark-lilac.png",
+    "48": "assets/alcoia-mark-lilac.png",
+    "128": "assets/alcoia-mark-lilac.png"
+  },
+  "background": {
+    "service_worker": "background.js"
   }
 }

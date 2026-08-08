@@ -140,6 +140,19 @@ function injectWebgazer(tabId, sendResponse) {
         },
         args: [webgazerUrl],
       }, () => {
+        /* `world: 'MAIN'` needs Firefox 128+ and is not available at all on
+         * some builds. When it is missing, executeScript rejects rather than
+         * throwing, so the failure arrives here as lastError. There is no
+         * useful retry — WebGazer has to run in the page's own world — but
+         * the content script's <script src> injection has already run by this
+         * point and works everywhere except under a strict page CSP. Report
+         * the reason instead of failing silently. */
+        const err = chrome.runtime.lastError;
+        if (err) {
+          console.warn('[alcoia] main-world injection unavailable:', err.message);
+          sendResponse({ status: 'error', error: 'main_world_unsupported' });
+          return;
+        }
         sendResponse({ status: 'ok' });
       });
     } catch (e) {

@@ -1,4 +1,5 @@
 node_modules/
+dist/
 
 # Internal working documents — kept out of the published repository.
 # NOTE: these are ignored, not deleted. They still exist in your working tree.
