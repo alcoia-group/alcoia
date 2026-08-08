@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/alcoia-wordmark-cream.png" width="380" alt="alcoia">
+  <img src="assets/alcoia-wordmark-cream.png" width="460" alt="alcoia">
 </p>
 
 <p align="center"><em>reference</em></p>
