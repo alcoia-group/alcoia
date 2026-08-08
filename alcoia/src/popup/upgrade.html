@@ -1,21 +1,314 @@
 <!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Upgrade • tl;dr</title>
-    <link rel="stylesheet" href="../styles/popup.css">
-    <style>
-      .upgrade-root{padding:20px}
-      .hero{font-weight:700;font-size:18px;margin-bottom:12px}
-      .note{color:#555}
-    </style>
-  </head>
-  <body>
-    <div class="upgrade-root">
-      <div class="hero">Upgrade • Premium (Offline placeholder)</div>
-      <div class="note">This is a local placeholder page for the Upgrade flow. Add marketing/checkout content here when online.</div>
-    </div>
-  </body>
-</html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Plans · alcoia</title>
+  <link rel="stylesheet" href="../styles/fonts.css">
+  <link rel="stylesheet" href="../styles/panel.css">
+  <!--
+    TODO (owner): these figures are provisional, carried across from
+    WEBSITE-BRIEF.md §12. Confirm before anything ships or takes payment.
+    No checkout is wired up — every button here is inert on purpose.
+  -->
+  <style>
+    body { padding-bottom: 72px; }
 
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; padding: 16px 28px;
+      background: var(--paper-2); border-bottom: 1px solid var(--border);
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .logo-img { display: block; flex: none; height: 24px; width: auto; }
+    body.dark-mode .logo-img.on-paper { display: none; }
+    .logo-img.on-dark { display: none; }
+    body.dark-mode .logo-img.on-dark { display: block; }
+    .logo-sub {
+      font-family: var(--alc-serif); font-size: 15px; color: var(--muted);
+      padding-left: 14px; border-left: 1px solid var(--border);
+    }
+
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 40px 28px 0; }
+
+    .lede { text-align: center; margin-bottom: 30px; }
+    .lede h1 {
+      font-family: var(--alc-serif);
+      font-size: clamp(1.9rem, 4vw, 2.6rem); font-weight: 400;
+      letter-spacing: -0.015em; line-height: 1.15; margin: 0 0 12px;
+    }
+    .lede p {
+      max-width: 56ch; margin: 0 auto;
+      font-family: var(--alc-serif); font-size: 15px; line-height: 1.7; color: var(--muted);
+    }
+
+    /* ── Billing toggle ── */
+    .billing {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      margin: 26px 0 30px;
+    }
+    .billing-opt {
+      font-family: var(--alc-ui); font-size: 12.5px; font-weight: 600;
+      color: var(--muted); background: none; border: none; cursor: pointer;
+      padding: 6px 4px;
+    }
+    .billing-opt.active { color: var(--text); }
+    .billing-opt:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+    .save-tag {
+      font-family: var(--alc-ui); font-size: 10.5px; font-weight: 700;
+      letter-spacing: 0.05em; text-transform: uppercase;
+      color: var(--sage-2); background: var(--sage-sf);
+      padding: 3px 8px; border-radius: 5px;
+    }
+
+    /* ── Tiers ── */
+    .tiers {
+      display: grid; gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      align-items: stretch;
+    }
+    .tier {
+      display: flex; flex-direction: column;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 22px 20px 20px;
+    }
+    .tier.featured { border-color: var(--accent-2); }
+    .tier-flag {
+      font-family: var(--alc-ui); font-size: 10px; font-weight: 700;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--accent-2); margin-bottom: 8px; min-height: 12px;
+    }
+    .tier-name {
+      font-family: var(--alc-serif); font-size: 19px; font-weight: 600; margin-bottom: 4px;
+    }
+    .tier-for { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-bottom: 16px; }
+    .tier-price {
+      font-family: var(--alc-serif); font-size: 30px; font-weight: 400;
+      line-height: 1; font-variant-numeric: tabular-nums;
+    }
+    .tier-price .unit {
+      font-family: var(--alc-ui); font-size: 12px; font-weight: 600; color: var(--muted);
+    }
+    .tier-note { font-size: 11px; color: var(--faint); margin-top: 6px; min-height: 15px; }
+    .tier .btn { width: 100%; margin: 18px 0 16px; }
+
+    .tier-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .tier-list li {
+      position: relative; padding-left: 18px;
+      font-size: 12px; line-height: 1.55; color: var(--text);
+    }
+    .tier-list li::before {
+      content: ''; position: absolute; left: 2px; top: 7px;
+      width: 6px; height: 6px; border-radius: 50%; background: var(--sage);
+    }
+    .tier-list li.muted { color: var(--muted); }
+    .tier-list li.muted::before { background: var(--border-2); }
+
+    /* ── Commitments + FAQ ── */
+    .band {
+      margin: 34px 0 0; padding: 22px 24px;
+      background: var(--sage-sf); border: 1px solid rgba(111,128,112,0.24);
+      border-radius: var(--radius);
+    }
+    .band h2 {
+      font-family: var(--alc-serif); font-size: 17px; font-weight: 600; margin: 0 0 8px;
+    }
+    .band p { margin: 0; font-size: 13px; line-height: 1.7; color: var(--text); }
+
+    .note-row {
+      margin-top: 16px; font-size: 12.5px; line-height: 1.7; color: var(--muted);
+    }
+
+    .faq { margin-top: 38px; }
+    .faq h2 {
+      font-family: var(--alc-serif); font-size: 21px; font-weight: 400; margin: 0 0 14px;
+    }
+    details {
+      border-bottom: 1px solid var(--border); padding: 13px 2px;
+    }
+    summary {
+      cursor: pointer; font-family: var(--alc-ui);
+      font-size: 13px; font-weight: 600; color: var(--text);
+      list-style: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: ' +'; color: var(--faint); }
+    details[open] summary::after { content: ' –'; }
+    details p {
+      margin: 10px 0 2px; font-family: var(--alc-serif);
+      font-size: 13.5px; line-height: 1.75; color: var(--muted);
+    }
+
+    @media (max-width: 560px) {
+      .header, .wrap { padding-left: 16px; padding-right: 16px; }
+      .logo-sub { display: none; }
+    }
+    @media (pointer: coarse) { .billing-opt { min-height: 44px; } }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <img id="logo-img" class="logo-img on-paper" src="../../assets/alcoia-wordmark.png" alt="alcoia">
+    <img id="logo-img-dark" class="logo-img on-dark" src="../../assets/alcoia-wordmark-white.png" alt="">
+    <div class="logo-sub">Plans</div>
+  </div>
+  <button class="btn btn-ghost" id="closeBtn">Close</button>
+</header>
+
+<div class="wrap">
+
+  <div class="lede">
+    <h1>Reading help that asks, instead of answering for you.</h1>
+    <p>
+      Detection runs on how you read — no camera, no permission prompt — on every plan,
+      including the free one.
+    </p>
+  </div>
+
+  <div class="billing" role="group" aria-label="Billing period">
+    <button class="billing-opt active" id="annualBtn" aria-pressed="true">Annual</button>
+    <span class="save-tag">2 months free</span>
+    <button class="billing-opt" id="monthlyBtn" aria-pressed="false">Monthly</button>
+  </div>
+
+  <div class="tiers">
+
+    <div class="tier">
+      <div class="tier-flag">&nbsp;</div>
+      <div class="tier-name">Free</div>
+      <div class="tier-for">Everything that helps you read, with nothing to sign up for.</div>
+      <div class="tier-price">$0</div>
+      <div class="tier-note">No account needed to install</div>
+      <button class="btn btn-ghost" disabled>Installed</button>
+      <ul class="tier-list">
+        <li>Difficulty scan on every paragraph</li>
+        <li>Focus ruler, bionic reading, dyslexia mode</li>
+        <li>Read aloud</li>
+        <li>15 AI assists a month</li>
+        <li class="muted">Account required for assists only</li>
+      </ul>
+    </div>
+
+    <div class="tier featured">
+      <div class="tier-flag">Most people want this</div>
+      <div class="tier-name">Reader</div>
+      <div class="tier-for">For anyone who finishes long things and wants to keep them.</div>
+      <div class="tier-price" id="readerPrice">$4.92<span class="unit">/mo</span></div>
+      <div class="tier-note" id="readerNote">$59 billed annually</div>
+      <button class="btn btn-primary" disabled>Coming soon</button>
+      <ul class="tier-list">
+        <li>Everything in Free, unlimited</li>
+        <li>Retrieval questions when you slow down</li>
+        <li>Vocabulary you lingered on, reviewed on a schedule</li>
+        <li>Session recall and reading receipts</li>
+        <li>PDF and PPTX</li>
+        <li>Sync across your devices</li>
+        <li class="muted">Optional webcam presence, off by default</li>
+      </ul>
+    </div>
+
+    <div class="tier">
+      <div class="tier-flag">&nbsp;</div>
+      <div class="tier-name">Teams &amp; classrooms</div>
+      <div class="tier-for">For a cohort, where students submit evidence rather than being watched.</div>
+      <div class="tier-price">$5<span class="unit">/seat/mo</span></div>
+      <div class="tier-note">25 seats minimum · annual only</div>
+      <button class="btn btn-ghost" disabled>Coming soon</button>
+      <ul class="tier-list">
+        <li>Everything in Reader</li>
+        <li>Which paragraphs the class struggled with, anonymous</li>
+        <li>Assigned readings</li>
+        <li>Receipt submission and export</li>
+        <li>Admin console and SSO</li>
+        <li>Data processing agreement</li>
+      </ul>
+    </div>
+
+    <div class="tier">
+      <div class="tier-flag">&nbsp;</div>
+      <div class="tier-name">Institution</div>
+      <div class="tier-for">Site licence, procurement, and somewhere to host it yourself.</div>
+      <div class="tier-price">Talk to us</div>
+      <div class="tier-note">&nbsp;</div>
+      <button class="btn btn-ghost" disabled>Contact</button>
+      <ul class="tier-list">
+        <li>Everything in Teams</li>
+        <li>Site licence</li>
+        <li>Self-hosted backend option</li>
+        <li>Procurement paperwork and onboarding</li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="band">
+    <h2>What we will never charge for</h2>
+    <p>
+      Dyslexia mode, the focus ruler, read aloud and bionic reading stay free, permanently.
+      They are the features some people need in order to read at all, and putting them behind
+      a plan would be charging for access rather than for help.
+    </p>
+  </div>
+
+  <p class="note-row">
+    <strong>Students:</strong> 40% off Reader with an academic email address, on request.
+    Regional pricing is available for Africa, South Asia and Latin America — the cost of a year
+    should not be a week's income.
+  </p>
+
+  <div class="faq">
+    <h2>Questions</h2>
+
+    <details>
+      <summary>Do I need a webcam?</summary>
+      <p>
+        No. Detection runs on how you move through the text — pace against difficulty, re-reading,
+        where you stop — and none of that needs a camera or a permission prompt. The webcam is an
+        optional extra that adds only whether you are at the screen, and it is off until you turn
+        it on.
+      </p>
+    </details>
+
+    <details>
+      <summary>Is my video uploaded?</summary>
+      <p>
+        Never. No frame, image or video ever leaves your machine — with the camera on, everything
+        is processed locally and only aggregates are kept. The text of the passage you are reading
+        <em>is</em> sent to a server to generate a question or an explanation. That is the one
+        thing that leaves your device, and we would rather say so here than let you find out later.
+      </p>
+    </details>
+
+    <details>
+      <summary>Can my school see my reading?</summary>
+      <p>
+        Only what you choose to submit. Receipts are built on your machine, shown to you in full
+        before they go anywhere, and never sent in the background. There is no mode that lets
+        anyone watch you read without your action, and there will not be one.
+      </p>
+    </details>
+
+    <details>
+      <summary>What happens if I cancel?</summary>
+      <p>
+        You keep the free plan, and everything saved on your device — notes, highlights, receipts —
+        stays where it is. Nothing is deleted and nothing is held hostage.
+      </p>
+    </details>
+
+    <details>
+      <summary>Can I export my data?</summary>
+      <p>
+        Yes. Notes, highlights and session reports all export as JSON from their own pages, on
+        every plan including the free one.
+      </p>
+    </details>
+  </div>
+
+</div>
+
+<script src="upgrade.js"></script>
+</body>
+</html>

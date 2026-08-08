@@ -193,6 +193,19 @@ body {
   .pill input:checked + .pill-track::after { transform: translateX(18px); }
 }
 
+/* Visible to screen readers, not to the eye. Used for labels that a sighted
+   reader gets from a placeholder or an adjacent control, but that a screen
+   reader still needs announced. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ── Key caps ────────────────────────────────────────────────────────────── */
 kbd {
   font-family: var(--alc-ui);
