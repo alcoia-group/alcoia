@@ -471,4 +471,8 @@ try {
   const logoDark = document.getElementById('sra-logo-img-dark');
   if (logo) logo.src = chrome.runtime.getURL('assets/alcoia-wordmark.png');
   if (logoDark) logoDark.src = chrome.runtime.getURL('assets/alcoia-wordmark-white.png');
+  const cj = document.getElementById('cjLogo');
+  const cjDark = document.getElementById('cjLogoDark');
+  if (cj) cj.src = chrome.runtime.getURL('assets/logo-cj-black.png');
+  if (cjDark) cjDark.src = chrome.runtime.getURL('assets/logo-cj-white.png');
 } catch (e) { /* not in an extension context */ }
