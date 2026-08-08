@@ -9,7 +9,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "node tests/browser/smoke.mjs",
-    "questions:review": "node tools/question-quality.mjs"
+    "questions:review": "node tools/question-quality.mjs",
+    "build": "node build.mjs",
+    "build:chrome": "node build.mjs chrome",
+    "build:firefox": "node build.mjs firefox"
   },
   "devDependencies": {
     "eslint": "^10.8.0",
