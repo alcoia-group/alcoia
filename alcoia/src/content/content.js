@@ -1100,7 +1100,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     try {
       const summary = await fetchSummary(text, mode, prevParagraphText);
       if (!summary) return;
-      renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source:'gaze', trigger:reason, triggerLabel });
+      renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source:'reading', trigger:reason, triggerLabel });
       saveHighlight(text, summary, reason);
       sessionTracker.recordSignal('cognitive', reason, text.slice(0, 150));
       readingMap.recordEvent(reason, text.slice(0, 40));

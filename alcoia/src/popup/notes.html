@@ -1,146 +1,197 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>alcoia — My Notes</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Notes · alcoia</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
-<style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-:root {
-  --bg:#F9F7F2; --surface:#FFFFFF; --border:rgba(126,96,174,0.14);
-  --text:#333333; --muted:#6B6862; --accent:#5F4589; --accent2:#5F4589;
-  --gold:#9A6B2F; --serif: var(--alc-serif); --danger:#B4795F;
-}
-body { background:var(--bg); color:var(--text); font-family:var(--serif); min-height:100vh; }
+  <style>
+    /* Page-level layout only. Tokens, buttons, fields and key caps come from
+       panel.css — this file should never redeclare a colour. */
 
-.header {
-  background:var(--surface); border-bottom:1px solid var(--border);
-  padding:18px 32px; display:flex; align-items:center;
-  justify-content:space-between; position:sticky; top:0; z-index:10;
-}
-.header-left { display:flex; align-items:center; gap:14px; }
-.logo-img { width:32px; height:32px; border-radius:8px; }
-.logo-text { font-size:20px; font-weight:700; letter-spacing:-0.3px; }
-.logo-sub  { font-size:12px; color:var(--muted); font-style:italic; }
-.header-right { display:flex; align-items:center; gap:10px; }
+    body { padding-bottom: 64px; }
 
-.btn {
-  padding:8px 16px; border-radius:8px; border:none; cursor:pointer;
-  font-family:var(--serif); font-size:13px; transition:opacity 0.15s,transform 0.12s;
-}
-.btn:hover { opacity:0.85; transform:translateY(-1px); }
-.btn-primary   { background:var(--accent); color:white; }
-.btn-ghost     { background:transparent; color:var(--muted); border:1px solid var(--border); }
-.btn-danger    { background:transparent; color:var(--danger); border:1px solid rgba(192,57,43,0.2); }
-.btn-danger:hover { background:rgba(192,57,43,0.06); }
+    .header {
+      position: sticky; top: 0; z-index: 10;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; flex-wrap: wrap;
+      padding: 16px 28px;
+      background: var(--paper-2);
+      border-bottom: 1px solid var(--border);
+    }
+    /* align-items: center is load-bearing — a flex row stretches children on
+       the cross axis by default and would distort the wordmark. */
+    .header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .logo-img { display: block; flex: none; height: 24px; width: auto; }
+    body.dark-mode .logo-img.on-paper { display: none; }
+    .logo-img.on-dark { display: none; }
+    body.dark-mode .logo-img.on-dark { display: block; }
+    .logo-sub {
+      font-family: var(--alc-serif);
+      font-size: 15px; color: var(--muted);
+      padding-left: 14px; border-left: 1px solid var(--border);
+    }
+    .header-right { display: flex; align-items: center; gap: 8px; }
+    .btn-danger { background: transparent; color: var(--wrong); border-color: rgba(180,121,95,0.4); }
+    .btn-danger:hover:not(:disabled) { background: rgba(180,121,95,0.08); }
 
-.container { max-width:860px; margin:0 auto; padding:32px 24px; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 24px 28px; }
 
-.stats-bar {
-  display:flex; align-items:center; gap:24px; margin-bottom:28px;
-  padding:14px 20px; background:var(--surface);
-  border:1px solid var(--border); border-radius:12px;
-}
-.stat { display:flex; flex-direction:column; gap:2px; }
-.stat-value { font-size:22px; font-weight:700; color:var(--accent); }
-.stat-label { font-size:11px; color:var(--muted); font-style:italic; }
-.stats-divider { width:1px; height:36px; background:var(--border); }
-.search-wrap { flex:1; }
-.search-input {
-  width:100%; padding:8px 14px; border-radius:8px;
-  border:1px solid var(--border); background:var(--bg);
-  font-family:var(--serif); font-size:13px; color:var(--text); outline:none;
-}
-.search-input:focus { border-color:var(--accent); }
+    /* ── Stats + search ── */
+    .stats-bar {
+      display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+      padding: 14px 18px; margin-bottom: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .stat { display: flex; align-items: baseline; gap: 7px; }
+    .stat-value {
+      font-family: var(--alc-serif);
+      font-size: 22px; font-weight: 600; color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-label { font-size: 11.5px; color: var(--muted); }
+    .stats-divider { width: 1px; height: 22px; background: var(--border); }
+    .search-wrap { flex: 1; min-width: 200px; }
+    .search-input {
+      width: 100%;
+      background: var(--paper); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 9px 12px;
+      color: var(--text); font-family: var(--alc-ui); font-size: 12.5px;
+      outline: none; transition: border-color 0.15s;
+    }
+    .search-input:focus { border-color: var(--accent-2); }
 
-.filter-row { display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap; }
-.filter-tab {
-  padding:5px 14px; border-radius:20px; border:1px solid var(--border);
-  background:transparent; font-family:var(--serif); font-size:12px;
-  font-style:italic; color:var(--muted); cursor:pointer; transition:all 0.15s;
-}
-.filter-tab:hover  { border-color:var(--accent); color:var(--accent); }
-.filter-tab.active { background:var(--accent); color:white; border-color:var(--accent); }
+    /* ── Filters ── */
+    .filter-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
+    .filter-tab {
+      padding: 6px 13px; border-radius: 20px;
+      border: 1px solid var(--border); background: var(--surface);
+      font-family: var(--alc-ui); font-size: 11.5px; font-weight: 600;
+      color: var(--muted); cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .filter-tab:hover { color: var(--text); }
+    .filter-tab.active { border-color: var(--accent-2); color: var(--accent-2); background: var(--accent-sf); }
+    .filter-tab:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 
-.empty { text-align:center; padding:80px 20px; color:var(--muted); }
-.empty-icon  { font-size:48px; margin-bottom:16px; }
-.empty-title { font-size:18px; font-weight:700; margin-bottom:8px; color:var(--text); }
-.empty-sub   { font-size:14px; font-style:italic; }
+    /* ── Note cards ── */
+    .notes-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 14px;
+    }
+    .note-card {
+      display: flex; flex-direction: column;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 15px 16px 13px;
+      transition: border-color 0.15s;
+    }
+    .note-card:hover { border-color: var(--border-2); }
+    .note-header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; margin-bottom: 10px;
+    }
+    .note-meta { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .note-badge {
+      font-family: var(--alc-ui);
+      font-size: 10px; font-weight: 700;
+      letter-spacing: 0.06em; text-transform: uppercase;
+      padding: 3px 8px; border-radius: 5px;
+      color: var(--muted); background: var(--paper-2);
+      white-space: nowrap;
+    }
+    /* Sage marks the passages the system itself acted on — the same rule the
+       overlay uses. Everything the reader chose stays neutral. */
+    .note-badge.struggling,
+    .note-badge.skimming,
+    .note-badge.reading    { color: var(--sage-2); background: var(--sage-sf); }
+    .note-badge.explanation,
+    .note-badge.simplified { color: var(--accent-2); background: var(--accent-sf); }
+    .note-date { font-size: 11px; color: var(--faint); white-space: nowrap; }
 
-.notes-grid { display:flex; flex-direction:column; gap:14px; }
+    .note-actions { display: flex; gap: 2px; flex: none; }
+    .note-action-btn {
+      width: 26px; height: 26px; border-radius: 6px;
+      border: none; background: transparent; color: var(--faint);
+      font-size: 13px; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s;
+    }
+    .note-action-btn:hover { background: var(--accent-sf); color: var(--accent-2); }
+    .note-action-btn.delete:hover { background: rgba(180,121,95,0.1); color: var(--wrong); }
 
-.note-card {
-  background:var(--surface); border:1px solid var(--border);
-  border-radius:12px; padding:18px 20px; transition:border-color 0.15s,box-shadow 0.15s;
-  position:relative;
-}
-.note-card:hover { border-color:rgba(126,96,174,0.3); box-shadow:0 2px 12px rgba(126,96,174,0.07); }
-.note-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
-.note-meta   { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .note-text {
+      font-family: var(--alc-serif);
+      font-size: 14px; line-height: 1.7; color: var(--text);
+      max-height: 8.5em; overflow: hidden;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .note-text.expanded { max-height: none; }
+    .note-expand-btn {
+      align-self: flex-start; margin-top: 8px;
+      background: none; border: none; padding: 0;
+      font-family: var(--alc-ui); font-size: 11.5px; font-weight: 600;
+      color: var(--accent-2); cursor: pointer;
+    }
+    .note-expand-btn:hover { text-decoration: underline; }
+    .note-source {
+      margin-top: 12px; padding-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--faint);
+    }
 
-.note-badge {
-  font-size:10px; font-style:italic; padding:2px 8px; border-radius:4px;
-  border:1px solid var(--border); color:var(--accent); background:rgba(126,96,174,0.06);
-}
-.note-badge.selection    { color:#5B7A99; border-color:rgba(91,122,153,0.2);  background:rgba(91,122,153,0.06); }
-.note-badge.confused     { color:#9A6B2F; border-color:rgba(154,107,47,0.2);   background:rgba(154,107,47,0.06); }
-.note-badge.overloaded   { color:#B4795F; border-color:rgba(180,121,95,0.2);   background:rgba(180,121,95,0.06); }
-.note-badge.explain_code { color:#7E6E5A; border-color:rgba(126,110,90,0.2);  background:rgba(126,110,90,0.06); }
+    /* ── Empty + loading ── */
+    .empty, .loading {
+      padding: 72px 24px; text-align: center;
+      border: 1px dashed var(--border); border-radius: var(--radius);
+    }
+    .empty-icon { display: none; }   /* no emoji in the interface */
+    .empty-title {
+      font-family: var(--alc-serif);
+      font-size: 19px; color: var(--text); margin-bottom: 8px;
+    }
+    .empty-sub { font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+    .loading { color: var(--muted); font-size: 12.5px; }
 
-.note-date { font-size:11px; color:var(--muted); font-style:italic; }
-.note-actions { display:flex; gap:4px; opacity:0; transition:opacity 0.15s; }
-.note-card:hover .note-actions { opacity:1; }
-.note-action-btn {
-  width:28px; height:28px; border-radius:6px; border:1px solid var(--border);
-  background:transparent; color:var(--muted); cursor:pointer;
-  display:flex; align-items:center; justify-content:center;
-  font-size:13px; transition:all 0.12s;
-}
-.note-action-btn:hover       { border-color:var(--accent); color:var(--accent); background:rgba(126,96,174,0.05); }
-.note-action-btn.delete:hover { border-color:var(--danger); color:var(--danger); background:rgba(192,57,43,0.05); }
+    /* ── Toast ── */
+    .toast {
+      position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(8px);
+      padding: 10px 18px; border-radius: var(--radius-sm);
+      background: var(--text); color: var(--paper);
+      font-family: var(--alc-ui); font-size: 12px; font-weight: 600;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      z-index: 50;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%); }
 
-.note-text {
-  font-size:14px; line-height:1.7; color:var(--text);
-  overflow:hidden; display:-webkit-box;
-  -webkit-line-clamp:4; -webkit-box-orient:vertical;
-}
-.note-text.expanded { -webkit-line-clamp:unset; }
-.note-expand-btn {
-  background:none; border:none; color:var(--accent);
-  font-family:var(--serif); font-size:12px; font-style:italic;
-  cursor:pointer; margin-top:6px; padding:0;
-}
-.note-source {
-  margin-top:10px; padding-top:10px; border-top:1px solid var(--border);
-  font-size:11px; color:var(--muted); font-style:italic;
-}
-
-.toast {
-  position:fixed; bottom:24px; right:24px; background:var(--text);
-  color:white; padding:10px 18px; border-radius:8px;
-  font-size:13px; font-style:italic; z-index:100;
-  opacity:0; transform:translateY(8px);
-  transition:opacity 0.2s,transform 0.2s; pointer-events:none;
-}
-.toast.show { opacity:1; transform:none; }
-.loading { text-align:center; padding:60px; color:var(--muted); font-style:italic; }
-</style>
+    @media (max-width: 560px) {
+      .header, .container { padding-left: 16px; padding-right: 16px; }
+      .logo-sub { display: none; }
+      .notes-grid { grid-template-columns: 1fr; }
+    }
+    @media (pointer: coarse) {
+      .filter-tab { min-height: 40px; }
+      .note-action-btn { width: 40px; height: 40px; }
+    }
+  </style>
 </head>
 <body>
 
 <header class="header">
   <div class="header-left">
-    <img id="logo-img" class="logo-img" src="../assets/alcoia.png" alt="alcoia">
-    <div>
-      <div class="logo-text">alcoia</div>
-      <div class="logo-sub">My Saved Notes</div>
-    </div>
+    <img id="logo-img" class="logo-img on-paper" src="../../assets/alcoia-wordmark.png" alt="alcoia">
+    <img id="logo-img-dark" class="logo-img on-dark" src="../../assets/alcoia-wordmark-white.png" alt="">
+    <div class="logo-sub">Notes</div>
   </div>
   <div class="header-right">
-    <button class="btn btn-ghost" id="exportBtn">Export JSON</button>
-    <button class="btn btn-danger" id="clearAllBtn">Clear All</button>
+    <button class="btn btn-ghost"  id="exportBtn">Export JSON</button>
+    <button class="btn btn-ghost btn-danger" id="clearAllBtn">Clear all</button>
     <button class="btn btn-primary" id="doneBtn">Done</button>
   </div>
 </header>
@@ -149,32 +200,33 @@ body { background:var(--bg); color:var(--text); font-family:var(--serif); min-he
   <div class="stats-bar">
     <div class="stat">
       <span class="stat-value" id="totalCount">0</span>
-      <span class="stat-label">total notes</span>
+      <span class="stat-label">saved</span>
     </div>
     <div class="stats-divider"></div>
     <div class="stat">
       <span class="stat-value" id="todayCount">0</span>
-      <span class="stat-label">saved today</span>
+      <span class="stat-label">today</span>
     </div>
     <div class="stats-divider"></div>
     <div class="search-wrap">
-      <input class="search-input" id="searchInput" type="text" placeholder="Search notes...">
+      <label class="sr-only" for="searchInput">Search notes</label>
+      <input class="search-input" id="searchInput" type="search" placeholder="Search your notes">
     </div>
   </div>
 
   <div class="filter-row" id="filterRow">
     <button class="filter-tab active" data-filter="all">All</button>
-    <button class="filter-tab" data-filter="selection">Selections</button>
-    <button class="filter-tab" data-filter="gaze">Eye-triggered</button>
+    <button class="filter-tab" data-filter="selection">You selected</button>
+    <button class="filter-tab" data-filter="reading">While reading</button>
     <button class="filter-tab" data-filter="explain_code">Code</button>
   </div>
 
   <div id="notesContainer">
-    <div class="loading">Loading notes...</div>
+    <div class="loading">Loading notes…</div>
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="notes.js"></script>
 </body>

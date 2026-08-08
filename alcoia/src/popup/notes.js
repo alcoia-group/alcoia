@@ -1,9 +1,20 @@
 // notes.js — alcoia Notes Dashboard
 // External script file (required — Chrome MV3 blocks inline scripts in extension pages)
 
-// Fix logo src using chrome.runtime.getURL (inline src may not resolve correctly)
+// Resolve the packaged logos. The relative src in the markup works, but
+// getURL is what survives being opened from anywhere.
 try {
-  document.getElementById('logo-img').src = chrome.runtime.getURL('assets/alcoia.png');
+  const light = document.getElementById('logo-img');
+  const dark  = document.getElementById('logo-img-dark');
+  if (light) light.src = chrome.runtime.getURL('assets/alcoia-wordmark.png');
+  if (dark)  dark.src  = chrome.runtime.getURL('assets/alcoia-wordmark-white.png');
+} catch (e) {}
+
+// Follow the theme the reader set in the popup.
+try {
+  chrome.storage.local.get({ sra_dark_mode: false }, (res) => {
+    document.body.classList.toggle('dark-mode', !!res.sra_dark_mode);
+  });
 } catch (e) {}
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -33,7 +44,10 @@ function renderAll() {
       const src  = n.meta?.source || '';
       const mode = n.meta?.mode   || '';
       if (activeFilter === 'selection')    return src === 'selection' && mode !== 'explain_code';
-      if (activeFilter === 'gaze')         return src === 'gaze';
+      // 'gaze' is the legacy value: notes from the reading path carried it even
+      // with the camera off, which is where the old "Eye-triggered" tab came
+      // from. Both are accepted so existing notes keep filtering.
+      if (activeFilter === 'reading')      return src === 'reading' || src === 'gaze';
       if (activeFilter === 'explain_code') return mode === 'explain_code';
       return true;
     });
@@ -49,10 +63,9 @@ function renderAll() {
   if (filtered.length === 0) {
     container.innerHTML = `
       <div class="empty">
-        <div class="empty-icon">${allNotes.length === 0 ? '📖' : '🔍'}</div>
-        <div class="empty-title">${allNotes.length === 0 ? 'No notes yet' : 'No results'}</div>
+        <div class="empty-title">${allNotes.length === 0 ? 'Nothing saved yet' : 'No matches'}</div>
         <div class="empty-sub">${allNotes.length === 0
-          ? 'Select text on any page and click "Save Note" in the popup.'
+          ? 'Select text on any page, or open a card while reading, and choose Save note.'
           : 'Try a different search or filter.'
         }</div>
       </div>`;
@@ -79,13 +92,21 @@ function buildCard(note) {
   const trigger  = note.meta?.trigger || '';
   const mode     = note.meta?.mode    || 'tldr';
   const badgeKey = trigger || mode;
+  /* Observation language only. The old table carried 'confused' and
+   * 'overloaded', which are internal states this product does not claim to
+   * measure — and they would have been sitting in the reader's own saved
+   * notes, which is the last place to make a claim you cannot support. */
   const badgeText = {
-    selection:    'selected text',
-    gaze:         'eye-triggered',
+    selection:    'you selected',
+    reading:      'while reading',
+    gaze:         'while reading',
     explain_code: 'code',
-    confused:     'confused',
-    overloaded:   'overloaded',
-    tldr:         'tldr',
+    struggling:   'you slowed down',
+    skimming:     'you sped up',
+    drifting:     'you had paused',
+    confused:     'you slowed down',
+    overloaded:   'you slowed down',
+    tldr:         'summary',
     explain_more: 'explanation',
     simplify:     'simplified',
   }[badgeKey] || badgeKey;
@@ -156,7 +177,7 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
-  a.download = `tldr-notes-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `alcoia-notes-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
   showToast('Notes exported');
