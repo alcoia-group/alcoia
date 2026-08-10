@@ -20,7 +20,7 @@
  * somebody edits the generated file, the change survives locally, and the
  * next build silently reverts it.
  */
-import fs from 'node:fs';   
+import fs from 'node:fs';    
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
