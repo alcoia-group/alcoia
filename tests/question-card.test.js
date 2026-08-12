@@ -286,3 +286,81 @@ describe('dismissal', () => {
     expect(onDismissed).toHaveBeenCalledTimes(1);
   });
 });
+
+/* Item 18: reachable from "the intervention card itself... the moment a
+ * reader most wants it is when one has just appeared". */
+describe('snooze', () => {
+  it('does not render a snooze control when onSnooze is not provided', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(QUESTION);
+    expect(ui.root.querySelector('.sra-q-snooze-toggle')).toBeNull();
+  });
+
+  it('is available before any option is picked', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+      onSnooze: () => {},
+    });
+    card.show(QUESTION);
+    expect(ui.root.querySelector('.sra-q-snooze-toggle')).toBeTruthy();
+  });
+
+  it('reveals a fixed, small set of durations on click', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+      onSnooze: () => {},
+    });
+    card.show(QUESTION);
+    ui.root.querySelector('.sra-q-snooze-toggle').click();
+    const buttons = ui.root.querySelectorAll('.sra-q-snooze-options button');
+    expect(buttons.length).toBeGreaterThanOrEqual(2);
+    expect(buttons.length).toBeLessThanOrEqual(4);
+  });
+
+  it('choosing a duration calls onSnooze with a positive duration and dismisses the card', () => {
+    const ui = fakeUI();
+    const onSnooze = vi.fn();
+    const onDismissed = vi.fn();
+    const onAnswered = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed, onSnooze,
+    });
+    card.show(QUESTION);
+    ui.root.querySelector('.sra-q-snooze-toggle').click();
+    ui.root.querySelector('.sra-q-snooze-options button').click();
+
+    expect(onSnooze).toHaveBeenCalledTimes(1);
+    expect(onSnooze.mock.calls[0][0]).toBeGreaterThan(0);
+    expect(typeof onSnooze.mock.calls[0][1]).toBe('string');
+    // Snoozing counts as a dismissal for item 10's backoff — this is the
+    // same dismiss() path "Skip this" and the close button already use, not
+    // a second bookkeeping call.
+    expect(onDismissed).toHaveBeenCalledTimes(1);
+    expect(onAnswered).not.toHaveBeenCalled();
+  });
+
+  it('is still offered after answering, for pausing future reminders — and does not double-count as a dismissal since the card was already answered', () => {
+    const ui = fakeUI();
+    const onSnooze = vi.fn();
+    const onDismissed = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed, onSnooze,
+    });
+    card.show(QUESTION);
+    pick(ui.root, 0);
+    rate(ui.root, null);
+
+    const toggle = ui.root.querySelector('.sra-q-snooze-toggle');
+    expect(toggle).toBeTruthy();
+    toggle.click();
+    ui.root.querySelector('.sra-q-snooze-options button').click();
+
+    expect(onSnooze).toHaveBeenCalledTimes(1);
+    expect(onDismissed).not.toHaveBeenCalled(); // already answered, not dismissed
+  });
+});

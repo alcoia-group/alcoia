@@ -366,18 +366,24 @@ const coverageAfterQueryString = await readCoverage(pageKey); // pathname-only k
 // helper extension page, the same call popup.js's sendToTab() makes, since
 // Playwright cannot easily drive the real toolbar-popup UI to exercise
 // popup.js itself.
-async function sendToArticleTab(msg) {
+// urlPattern defaults to matching every localhost:8731 tab, which is fine
+// when only one exists (the quiz check above). The snooze check below opens
+// a second article tab at the same origin with a different query string, so
+// it passes an exact pattern to disambiguate — a Chrome match pattern with
+// no trailing `*` matches only that literal URL, not one with a query
+// string appended.
+async function sendToArticleTab(msg, urlPattern = 'http://localhost:8731/*') {
   const helper = await ctx.newPage();
   await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
-  const result = await helper.evaluate((m) => new Promise((resolve) => {
-    chrome.tabs.query({ url: 'http://localhost:8731/*' }, (tabs) => {
+  const result = await helper.evaluate(({ m, pattern }) => new Promise((resolve) => {
+    chrome.tabs.query({ url: pattern }, (tabs) => {
       if (!tabs?.[0]) { resolve({ __debug: 'no tabs', all: 'n/a' }); return; }
       chrome.tabs.sendMessage(tabs[0].id, m, (resp) => {
         if (chrome.runtime.lastError) { resolve({ __debug: chrome.runtime.lastError.message }); return; }
         resolve(resp);
       });
     });
-  }), msg);
+  }), { m: msg, pattern: urlPattern });
   await helper.close();
   return result;
 }
@@ -519,6 +525,90 @@ if (!FAIL_QUESTIONS && !FAIL_TOKEN) {
   }
 }
 
+// Item 18: snooze. A fresh page/session so the 3-minute interruption gap
+// from the main flow above doesn't interfere with getting a real card to
+// snooze from. Tests the card's own control end to end: a real interruption
+// appears, its snooze control dismisses it and starts a real snooze, no
+// further interruption appears despite continued reading, and detection
+// (coverage accumulation) keeps running the whole time regardless.
+let snoozeResult = { attempted: false };
+if (!FAIL_QUESTIONS && !FAIL_TOKEN) {
+  const snoozePage = await ctx.newPage();
+  const snoozePageErrors = [];
+  snoozePage.on('pageerror', (e) => snoozePageErrors.push(String(e)));
+  await snoozePage.goto('http://localhost:8731/', { waitUntil: 'load' });
+  await snoozePage.waitForTimeout(1000);
+
+  async function readSnoozeCoverage() {
+    const helper = await ctx.newPage();
+    await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+    const result = await helper.evaluate(() => new Promise((r) => {
+      chrome.storage.local.get({ sra_doc_coverage: {} }, (data) => {
+        const doc = (data.sra_doc_coverage || {})['localhost/'];
+        r(doc ? { fingerprints: doc.fingerprints.length, dwellMs: doc.dwellMs } : { fingerprints: 0, dwellMs: 0 });
+      });
+    }));
+    await helper.close();
+    return result;
+  }
+
+  let cardSeen = false;
+  for (const y of [400, 900, 1400, 1900, 2400]) {
+    await snoozePage.mouse.wheel(0, y - (await snoozePage.evaluate(() => window.scrollY)));
+    await snoozePage.waitForTimeout(1200);
+    cardSeen = await snoozePage.evaluate(() => !!document.querySelector('.sra-q-snooze-toggle'));
+    if (cardSeen) break;
+  }
+
+  if (cardSeen) {
+    await snoozePage.evaluate(() => document.querySelector('.sra-q-snooze-toggle').click());
+    await snoozePage.waitForTimeout(200);
+    const durationsOffered = await snoozePage.evaluate(() =>
+      document.querySelectorAll('.sra-q-snooze-options button').length);
+    await snoozePage.evaluate(() => document.querySelector('.sra-q-snooze-options button[data-snooze="15m"]').click());
+    await snoozePage.waitForTimeout(500); // closePopup()'s fade-out
+
+    const cardGoneAfterSnooze = await snoozePage.evaluate(() => !document.querySelector('.sra-q-option'));
+    const toastShown = await snoozePage.evaluate(() =>
+      !!document.getElementById('sra-status-toast') && document.getElementById('sra-status-toast').textContent);
+
+    const coverageBefore = await readSnoozeCoverage();
+    // Keep reading while snoozed — several more struggle-shaped scrolls,
+    // enough that without the snooze this would very likely have produced
+    // at least one more interruption once the 3-minute gap allowed it.
+    for (const y of [3000, 2000, 3400, 2200]) {
+      await snoozePage.mouse.wheel(0, y - (await snoozePage.evaluate(() => window.scrollY)));
+      await snoozePage.waitForTimeout(900);
+    }
+    const noNewInterruptionWhileSnoozed = await snoozePage.evaluate(() => !document.querySelector('.sra-q-option'));
+    const coverageAfter = await readSnoozeCoverage();
+
+    // sendToArticleTab() (defined earlier) targets whichever tab matches
+    // localhost:8731 — with only one such tab open at this point (the main
+    // `page` was navigated to ?utm_source=... earlier, no longer matching
+    // the bare pattern reliably), this reaches snoozePage.
+    const status = await sendToArticleTab({ action: 'getSnoozeStatus' }, 'http://localhost:8731/');
+    await sendToArticleTab({ action: 'cancelSnooze' }, 'http://localhost:8731/');
+    const statusAfterCancel = await sendToArticleTab({ action: 'getSnoozeStatus' }, 'http://localhost:8731/');
+
+    snoozeResult = {
+      attempted: true,
+      cardHadSnoozeControl: true,
+      durationsOffered,
+      cardGoneAfterSnooze,
+      toastShown,
+      statusWhileActive: status,
+      noNewInterruptionWhileSnoozed,
+      detectionContinuedWhileSnoozed: coverageAfter.dwellMs >= coverageBefore.dwellMs && coverageAfter.fingerprints >= coverageBefore.fingerprints,
+      statusAfterCancel,
+      newPageErrors: snoozePageErrors.length,
+    };
+  } else {
+    snoozeResult = { attempted: true, cardHadSnoozeControl: false, note: 'no interruption appeared to snooze from in this run' };
+  }
+  await snoozePage.close();
+}
+
 const failureDegrade = FAIL_QUESTIONS ? {
   questionsEndpointCalled: apiHits.questions > 0,
   noQuestionCardShown: !questionCard.shown,
@@ -598,6 +688,7 @@ console.log('recallBtn/receiptBtn msg:', JSON.stringify(recallStatsCheck), '(exp
 console.log('quiz offer card         :', JSON.stringify(offerShown));
 console.log('  gone after dismiss    :', offerGoneAfterDismiss, ' stays dismissed on rescroll:', offerStaysDismissed);
 console.log('quiz page (item 17)     :', JSON.stringify(quizResult));
+console.log('snooze (item 18)        :', JSON.stringify(snoozeResult));
 if (failureDegrade) console.log('questions-endpoint fail :', JSON.stringify(failureDegrade), '(expect all true)');
 console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
 console.log('  new page errors       :', shortcuts.newPageErrors);
