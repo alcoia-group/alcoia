@@ -344,6 +344,21 @@
 }
 .sra-q-explain { margin-top: 10px; font-size: 13.5px; line-height: 1.7; }
 
+/* Item 19: the 2-4 load-bearing terms keyword-highlight.js picks out of a
+   post-failure explanation. Sage, not the brand lilac — this is the system
+   marking its own emphasis, the same rule as the evidence badge and the
+   correct-answer check. Plain <span>, deliberately not <mark>: dyslexia
+   mode's font override (dyslexia-utils.js) targets span among other
+   elements but not mark, and this needs to inherit that styling rather
+   than sit outside it. */
+.sra-term {
+  background: var(--alc-sage-sf);
+  color: var(--alc-sage-2);
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 600;
+}
+
 /* ── Word-lookup bubble (Ctrl+hover) ─────────────────────────────────────── */
 .sra-word-bubble {
   position: fixed;

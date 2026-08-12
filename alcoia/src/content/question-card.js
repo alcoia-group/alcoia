@@ -24,6 +24,7 @@
 
 import { calibratedLine } from './calibration-copy.js';
 import { SNOOZE_OPTIONS } from './snooze.js';
+import { renderHighlightedExplanation } from './keyword-highlight.js';
 
 /* Wrong answers are not scolded. The reader gets the correct option marked,
  * the sentence it came from, and an offer of a fuller explanation. */
@@ -202,7 +203,14 @@ export function createQuestionCard(deps = {}) {
  * adds load at the exact moment of consolidation and trains them to expect
  * the system to do the closing work (the project notes, product intent). The
  * explanation path is the failure path — reached only below, on a wrong
- * answer — and is never the default, regardless of confidence either. */
+ * answer — and is never the default, regardless of confidence either.
+ *
+ * The explanation text (not the question, not the options, not the quoted
+ * span — that is the passage itself) gets 2-4 load-bearing terms
+ * highlighted, sage, the same as everywhere else the system marks its own
+ * emphasis. See keyword-highlight.js for why this never runs on the
+ * correct-answer branch: it is only ever called from the `!correct` half
+ * below. */
 function revealAnswer(root, question, chosen, confidence, esc) {
   for (const btn of root.querySelectorAll('.sra-q-option')) {
     const i = Number(btn.dataset.index);
@@ -224,7 +232,7 @@ function revealAnswer(root, question, chosen, confidence, esc) {
   note.className = correct ? 'sra-q-result sra-q-result-correct' : 'sra-q-result sra-q-result-wrong';
   note.innerHTML = correct
     ? `<span class="sra-q-check" aria-hidden="true">✓</span><strong>${esc(calibrated || "That's right.")}</strong>`
-    : `<strong>${esc(calibrated || 'Not quite.')}</strong>${question.explanation ? ` ${esc(question.explanation)}` : ''}
+    : `<strong>${esc(calibrated || 'Not quite.')}</strong>${question.explanation ? ` ${renderHighlightedExplanation(question.explanation, esc)}` : ''}
        ${question.span ? `<div class="sra-q-span">“${esc(question.span)}”</div>` : ''}`;
   body.appendChild(note);
 }
@@ -243,7 +251,10 @@ async function offerExplanation(root, question, fetchExplanation, esc) {
     // Scoped to the span, not the whole paragraph — the reader missed one
     // specific thing and that is what to explain.
     const text = await fetchExplanation(question.span || question.q);
-    holder.innerHTML = text ? `<div>${esc(text)}</div>` : '';
+    // This fuller explanation is also failure-path-only (offerExplanation is
+    // only ever called from the !record.correct branch in show()), so it
+    // gets the same highlighting treatment as the inline explanation above.
+    holder.innerHTML = text ? `<div>${renderHighlightedExplanation(text, esc)}</div>` : '';
     if (!text) holder.remove();
   } catch (e) {
     holder.remove();

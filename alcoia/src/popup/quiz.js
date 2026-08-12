@@ -5,6 +5,7 @@
 // floating card — see calibration-copy.js.
 import { createQuizStore } from '../content/quiz-store.js';
 import { calibratedLine } from '../content/calibration-copy.js';
+import { renderHighlightedExplanation } from '../content/keyword-highlight.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s = '') => String(s).replace(/[&<>"']/g, (c) =>
@@ -92,7 +93,7 @@ function renderQuestion(record, index) {
     note.className = correct ? 'sra-q-result sra-q-result-correct' : 'sra-q-result sra-q-result-wrong';
     note.innerHTML = correct
       ? `<span class="sra-q-check" aria-hidden="true">✓</span><strong>${esc(calibrated || "That's right.")}</strong>`
-      : `<strong>${esc(calibrated || 'Not quite.')}</strong>${question.explanation ? ` ${esc(question.explanation)}` : ''}
+      : `<strong>${esc(calibrated || 'Not quite.')}</strong>${question.explanation ? ` ${renderHighlightedExplanation(question.explanation, esc)}` : ''}
          ${question.span ? `<div class="sra-q-span">“${esc(question.span)}”</div>` : ''}`;
     card.appendChild(note);
 
@@ -148,7 +149,7 @@ function renderResults(record) {
           <span class="result-mark ${correct ? 'correct' : 'wrong'}">${correct ? '✓' : '✕'}</span>
           <span class="result-q">${esc(q.q)}</span>
         </div>
-        ${!correct && q.explanation ? `<div class="result-explain">${esc(q.explanation)}</div>` : ''}
+        ${!correct && q.explanation ? `<div class="result-explain">${renderHighlightedExplanation(q.explanation, esc)}</div>` : ''}
         ${!correct && q.span ? `<div class="result-span">“${esc(q.span)}”</div>` : ''}
       </div>`;
   }).join('');
