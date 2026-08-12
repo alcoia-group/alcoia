@@ -584,7 +584,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         return;
       }
 
-      // Alt+S: summarise paragraph at current gaze / viewport centre
+      // Alt+S: summarise paragraph at viewport centre — the one manual path
+      // that reaches pdfHandler/pptxHandler via findParagraphAt() below
       if (e.key === 's' || e.key === 'S') {
         e.preventDefault();
         const para = await findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
