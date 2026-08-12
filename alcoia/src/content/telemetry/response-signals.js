@@ -32,6 +32,10 @@ export function createResponseSignals(opts = {}) {
       askedAt: now(),
       revisions: 0,
       scrolledBack: false,
+      // Tags the resulting record only — never transmitted. See the project notes,
+      // exploration sampling: labels not conditioned on the detector's own
+      // decision are the point, so they must stay identifiable downstream.
+      wasExplorationSample: context.wasExplorationSample === true,
     };
     return asked;
   }
@@ -48,22 +52,33 @@ export function createResponseSignals(opts = {}) {
     if (asked) asked.scrolledBack = true;
   }
 
-  /* Call with the reader's answer. Produces the signal the engine consumes. */
-  function answer(chosenIndex, question) {
+  /* Call with the reader's answer. Produces the signal the engine consumes.
+   *
+   * `confidence` — 'low', 'high', or omitted/null — is captured at the same
+   * moment as the answer, not probed afterward. A post-hoc "are you sure?"
+   * leaks the result if it appears more often after wrong answers; capturing
+   * it at commit time cannot leak, since it is asked identically regardless
+   * of what the answer turns out to be (the project notes, confidence calibration).
+   * Skippable — a reader who didn't rate it gets null here, not a forced
+   * guess, and null must never be treated as either 'low' or 'high'. */
+  function answer(chosenIndex, question, confidence) {
     if (!asked) return null;
     const correct = Number(chosenIndex) === Number(question?.answerIndex);
     const latencyMs = now() - asked.askedAt;
+    const normalizedConfidence = confidence === 'low' || confidence === 'high' ? confidence : null;
 
     const record = {
       type: 'response',
       subtype: correct ? 'correct' : 'incorrect',
       correct,
+      confidence: normalizedConfidence,
       latencyMs,
       slow: latencyMs > slowAnswerMs,
       revisions: asked.revisions,
       scrolledBack: asked.scrolledBack,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      wasExplorationSample: asked.wasExplorationSample,
     };
 
     history.push(record);
@@ -85,6 +100,7 @@ export function createResponseSignals(opts = {}) {
       latencyMs: now() - asked.askedAt,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      wasExplorationSample: asked.wasExplorationSample,
     };
     history.push(record);
     pending = record;

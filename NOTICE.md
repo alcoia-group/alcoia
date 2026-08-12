@@ -3,23 +3,27 @@
 ## Scope of the AGPL-3.0 grant
 
 `LICENSE` (AGPL-3.0) covers the alcoia **browser extension client** — everything under
-`alcoia/` except `alcoia/server/` and `alcoia/src/libs/` — plus the training material under
-`tldr classifier/`.
+`alcoia/` except `alcoia/src/libs/` — plus the training material under `tldr classifier/`.
 
-Two carve-outs:
+`alcoia/server/` has moved out of this repository entirely, to a separate private repo. It was
+never covered by this grant while it was here (proprietary, and this repo's LICENSE only ever
+applied to the client). See "Still open" below for what removing it from the working tree does,
+and does not, do to git history.
+
+One remaining carve-out:
 
 | Path | Status |
 |---|---|
-| `alcoia/server/` | **Not covered by this grant.** Proprietary; scheduled to move to a separate private repository. Until that move happens, no licence is granted for it. |
 | `alcoia/src/libs/` | Third-party code under its own licence — see below. |
 
 ## Bundled third-party code
 
-Verified by reading the licence headers in each shipped file:
+Verified by reading the licence headers in each shipped file. `src/libs/webgazer.min.js` (GPLv3)
+is no longer one of them — it was deleted along with the rest of the gaze path (see the project notes'
+migration note under "Signal hierarchy"). What remains bundled is all permissive or OFL:
 
 | File | Licence | Copyright |
 |---|---|---|
-| `src/libs/webgazer.min.js` | **GPLv3** (LGPLv3 available to companies valued under $1M) | 2016 Brown WebGazer Team |
 | `src/libs/pdfjs/pdf.min.js` | Apache-2.0 | 2023 Mozilla Foundation |
 | `src/libs/pdfjs/pdf.worker.min.js` | Apache-2.0 | 2023 Mozilla Foundation |
 | `src/libs/jszip.min.js` | MIT or GPLv3 (dual); bundles pako (MIT) | Stuk |
@@ -39,42 +43,54 @@ arrangement sent Google one request per page the reader opened, carrying their I
 referring page — a third-party request tied to browsing activity, in a product whose pitch is
 that it does not do that. `PRIVACY.md` §5 no longer needs to disclose it.
 
-## What WebGazer's licence actually means here
+## What WebGazer's licence used to mean here — resolved, kept for the record
 
-1. **While WebGazer ships inside the extension package, the client can never be
-   closed-source.** The shipped extension is a combined copyleft work, so the full
-   corresponding source must be offered to anyone who receives it, including via the
-   Chrome Web Store. This is permanent and it is the only consequence that constrains
-   future decisions.
+WebGazer (GPLv3) has been deleted from this repository, along with the rest of the gaze
+detection path — the classifier it fed, the feature extractor, the calibration flow that trained
+it, and the main-world bootstrap script that loaded it. This section used to explain the
+consequence of shipping it; it no longer applies, but is kept so the reasoning survives the
+removal, in case gaze detection or a similarly-licensed dependency is ever proposed again.
 
-2. **AGPL-3.0 is compatible.** §13 of GPLv3 and §13 of AGPLv3 each permit the
-   combination. `LICENSE` is correct and does not need changing.
+1. ✅ **Resolved: the "can never be closed-source while WebGazer ships" constraint is gone.**
+   While WebGazer shipped inside the package, the extension was a combined copyleft work and the
+   full corresponding source had to be offered to anyone who received it — permanent as long as
+   WebGazer stayed, and the reason this section existed. With WebGazer removed, nothing left under
+   `src/libs/` is copyleft (Apache-2.0, MIT-or-GPLv3-dual taken under MIT, and OFL 1.1 — see the
+   table above), so that specific forcing function no longer applies.
 
-3. **The $1M threshold is irrelevant to this project.** The LGPL option exists to allow
-   proprietary linking. This project is copyleft by choice, so crossing the threshold
-   simply leaves it under GPLv3 — where it already is. It is not a blocker on billing,
-   pricing or incorporation.
+2. **This does not change the licence choice itself.** `LICENSE` (AGPL-3.0) was always this
+   project's own choice for the client, not something WebGazer imposed — GPLv3 and AGPLv3 are
+   compatible under each licence's §13, so the combination was never a problem to begin with.
+   Removing WebGazer removes a *reason* the client could not have gone permissive; it is not a
+   reason to revisit AGPL-3.0 itself. Any change to that choice is a human decision — see
+   the project notes' "Requires human approval" — not a side effect of this deletion.
 
-4. **The server is unaffected.** It is a separate program in a separate process
-   communicating over a network API. WebGazer's copyleft does not reach it, and keeping
-   it in a private repo is unaffected.
+3. **AGPL's network clause still does almost nothing here.** An extension runs on the user's
+   machine; they already receive the code, and nobody deploys an extension as a network service.
+   The protection comes from ordinary distribution copyleft. Do not cite the network clause as a
+   deterrent in documentation or marketing.
 
-5. **AGPL's network clause does almost nothing here.** An extension runs on the user's
-   machine; they already receive the code, and nobody deploys an extension as a network
-   service. The protection comes from ordinary distribution copyleft. Do not cite the
-   network clause as a deterrent in documentation or marketing.
+4. **The server was always unaffected by any of this**, WebGazer included — it is a separate
+   program in a separate process communicating over a network API, and its move to a separate
+   private repo (see "Still open" below) is unrelated to the WebGazer removal.
 
-**WebGazer is unmaintained.** Official maintenance ended 24 February 2026. It still works;
-updates are not guaranteed.
+**WebGazer was unmaintained** at the time of removal — official maintenance ended 24 February
+2026 — which was one more reason deletion was preferable to continuing to carry it.
 
 ## Still open
 
-1. **`server/` has not actually been moved yet.** The carve-out above is a statement of
-   intent recorded in the repository. The code is still present and still public in git
-   history. Removing it from the working tree does not remove it from history; a history
-   rewrite or a fresh repository is required if that matters.
+1. **`server/` has been removed from the working tree, not from history.** It no longer
+   exists anywhere under `alcoia/` in this repository as of the change that added this
+   note. Two pure, dependency-free modules from it (`questions.js`, `receipt-signing.js`)
+   were copied into `tests/contract/` as vendored fixtures so the client's assumptions
+   about the server's contract — the verbatim-span requirement, the receipt canonicalisation
+   format — stay under test; they are not shipped and are not the AGPL-covered client. The
+   original `server/` code, including the deleted Express app and `.env` handling, is still
+   present and still public in this repo's git history. Removing it from the working tree
+   does not remove it from history; a history rewrite or a fresh repository is still required
+   if that matters.
 
-2. **Exit path from WebGazer — logged, not scheduled.** Gaze is now demoted to presence and
-   coarse region. A small MediaPipe FaceMesh implementation (Apache 2.0) would cover what
-   remains, remove the GPL obligation and drop a dead dependency. Do not undertake this
-   without asking.
+2. ✅ **Exit path from WebGazer — taken.** This used to log a possible future replacement (a
+   small MediaPipe FaceMesh implementation, Apache-2.0) for whatever gaze capability remained.
+   The decision made instead was removal, not replacement: no gaze detection ships at all now,
+   so there is nothing left to replace and no GPL obligation to drop a replacement for.

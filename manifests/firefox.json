@@ -1,6 +1,6 @@
 {
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["src/shared/config.js", "background.js"]
   },
   "browser_specific_settings": {
     "gecko": {

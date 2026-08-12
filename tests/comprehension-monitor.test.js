@@ -254,6 +254,120 @@ describe('the fairness safeguard: unusual for this reader, not unusual by a fixe
   });
 });
 
+describe('personal WPM baseline: resistance to outliers', () => {
+  it('a single implausibly fast read does not drag the running median', () => {
+    const m = createComprehensionMonitor();
+    const text = EASY(120);
+    const wordCount = analyzeDifficulty(text, { lang: 'en' }).wordCount;
+    const steadyMs = Math.round((wordCount / 250) * 60000);   // ~250 wpm, steady
+
+    for (let i = 0; i < 9; i++) {
+      m.enterParagraph(el(text));
+      vi.advanceTimersByTime(steadyMs);
+      m.leaveParagraph();
+    }
+    const baseline = m.getBaselineWpm();
+    expect(baseline).toBeGreaterThan(200);
+    expect(baseline).toBeLessThan(300);
+
+    // add() only rejects values outside [30, 900], so this one point is
+    // accepted as a sample — but a median of ten values where nine cluster
+    // near 250 and one sits at 850 is unmoved by it; a running mean would
+    // have been dragged toward 850 by roughly 60 wpm.
+    m.enterParagraph(el(text));
+    vi.advanceTimersByTime(Math.round((wordCount / 850) * 60000));
+    m.leaveParagraph();
+
+    expect(m.getBaselineWpm()).toBe(baseline);
+  });
+});
+
+describe('expected reading time scales with word count and difficulty', () => {
+  it('scales roughly in proportion with word count, for a fixed grade and baseline', () => {
+    const m = createComprehensionMonitor();
+    m.seedWpmFromCalibration(240, 'en');
+
+    const shortText = EASY(100);   // comfortably over MIN_WORD_COUNT (70)
+    const longText  = EASY(300);
+    const shortWords = analyzeDifficulty(shortText, { lang: 'en' }).wordCount;
+    const longWords  = analyzeDifficulty(longText,  { lang: 'en' }).wordCount;
+
+    m.enterParagraph(el(shortText));
+    const shortMs = m.getCurrentExpectation().expectedMs;
+    m.leaveParagraph();
+
+    m.enterParagraph(el(longText));
+    const longMs = m.getCurrentExpectation().expectedMs;
+    m.leaveParagraph();
+
+    const wordRatio = longWords / shortWords;
+    const msRatio    = longMs / shortMs;
+    expect(msRatio).toBeGreaterThan(wordRatio * 0.8);
+    expect(msRatio).toBeLessThan(wordRatio * 1.2);
+  });
+
+  it('expects more time per word for a harder grade than an easier one, once a baseline exists', () => {
+    const m = createComprehensionMonitor();
+    m.seedWpmFromCalibration(240, 'en');
+
+    const easyText = EASY(150);
+    const hardText = DIFFICULT(150);
+    const easyWords = analyzeDifficulty(easyText, { lang: 'en' }).wordCount;
+    const hardWords = analyzeDifficulty(hardText, { lang: 'en' }).wordCount;
+
+    m.enterParagraph(el(easyText));
+    const easyMsPerWord = m.getCurrentExpectation().expectedMs / easyWords;
+    m.leaveParagraph();
+
+    m.enterParagraph(el(hardText));
+    const hardMsPerWord = m.getCurrentExpectation().expectedMs / hardWords;
+    m.leaveParagraph();
+
+    expect(hardMsPerWord).toBeGreaterThan(easyMsPerWord);
+  });
+});
+
+/* the project notes invariant 5: "unknown is a valid, correct, common state... never
+ * substitute plausible defaults for missing data." text-difficulty.js's
+ * syntacticLoad() names the case where it cannot measure structure at all
+ * (structureIsUnreadable(): a script like Thai or Khmer with no terminal
+ * punctuation, so the whole paragraph parses as one "sentence") — and then
+ * returns `score: 60, grade: 'standard'` for it anyway, labelled
+ * `basis: 'structure_unavailable'` so a caller COULD tell the difference.
+ * comprehension-monitor.js never checks `basis`; it treats this exactly like
+ * a real 'standard' grade for baseline calibration and speed-mismatch
+ * comparisons alike. That is a plausible default standing in for missing
+ * data, which is the specific thing invariant 5 forbids. Documented here as
+ * a finding, not fixed — this test file adds coverage for the code as it
+ * stands, per this item's own instructions. */
+describe('difficulty basis: structure unavailable (documents a finding, not a fix)', () => {
+  it('is labelled structure_unavailable but scored as an ordinary standard paragraph', () => {
+    // detectLanguage() caches its result against `document` for 5s; earlier
+    // tests in this file already primed that cache for 'en' at this same
+    // fake-timer instant, so it has to be pushed stale before the language
+    // change below will actually take effect.
+    vi.advanceTimersByTime(6000);
+    document.documentElement.lang = 'th';
+
+    // No sentence-terminal punctuation anywhere and > 60 words: exactly the
+    // condition structureIsUnreadable() exists to catch.
+    const text = Array(90).fill('word').join(' ');
+    const r = analyzeDifficulty(text, { lang: 'th' });
+    expect(r.basis).toBe('structure_unavailable');
+    expect(r.grade).toBe('standard');
+    expect(r.score).toBe(60);
+
+    const m = createComprehensionMonitor();
+    m.enterParagraph(el(text));
+    // The monitor proceeds as though this were a real standard-difficulty
+    // measurement — getCurrentExpectation() returns a normal expectation,
+    // not null / an abstention.
+    const exp = m.getCurrentExpectation();
+    expect(exp).not.toBeNull();
+    expect(exp.expectedMs).toBeGreaterThan(0);
+  });
+});
+
 describe('scroll backtrack', () => {
   it('flags scrolling down and then sharply back up', () => {
     const m = createComprehensionMonitor();

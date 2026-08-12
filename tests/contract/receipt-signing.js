@@ -1,4 +1,15 @@
-/* receipt-signing.js — issue and check receipt signatures
+/* tests/contract/receipt-signing.js — VENDORED SNAPSHOT, not shipped source.
+ *
+ * The API server moved to a separate private repo (see the project notes, "Migration
+ * in progress"). This file is a copy of its pure, dependency-free receipt
+ * signing logic, kept here only so the wording and tamper-evidence guarantees
+ * it makes — which receipt.js's UI copy in this repo depends on being
+ * accurate — stay under test rather than disappearing silently when the
+ * server code left. Do not import this from shipped code. If this drifts
+ * from the server repo's real copy, update it by hand when the contract
+ * changes, the same way any other fixture is updated.
+ *
+ * Original header, preserved for context:
  *
  * WHAT THIS PROVES, EXACTLY
  * A valid signature proves the receipt is byte-for-byte what this server

@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Diagnostics · alcoia</title>
+  <link rel="stylesheet" href="../styles/fonts.css">
+  <link rel="stylesheet" href="../styles/panel.css">
+  <!--
+    Safe to screenshot: this page never reads the current tab, a page title,
+    a page URL, or passage text — everything here comes from
+    chrome.storage.local and chrome.runtime.getManifest(). See diag-log.js's
+    header for why the local error log is sanitised on the way in, too.
+  -->
+  <style>
+    body { padding-bottom: 40px; }
+
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; padding: 16px 24px;
+      background: var(--paper-2); border-bottom: 1px solid var(--border);
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .logo-img { display: block; flex: none; height: 22px; width: auto; }
+    body.dark-mode .logo-img.on-paper { display: none; }
+    .logo-img.on-dark { display: none; }
+    body.dark-mode .logo-img.on-dark { display: block; }
+    .logo-sub {
+      font-family: var(--alc-serif); font-size: 15px; color: var(--muted);
+      padding-left: 14px; border-left: 1px solid var(--border);
+    }
+
+    .wrap { max-width: 640px; margin: 0 auto; padding: 24px 24px 0; }
+
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); margin-bottom: 16px; overflow: hidden;
+    }
+    .card-title {
+      font-family: var(--alc-ui); font-size: 11px; font-weight: 700;
+      letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+      padding: 13px 16px 0;
+    }
+    .card-note { font-size: 11.5px; color: var(--faint); padding: 0 16px 13px; line-height: 1.6; }
+
+    .kv-grid { padding: 4px 16px 13px; display: flex; flex-direction: column; gap: 9px; }
+    .kv-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    .kv-key { font-size: 12.5px; color: var(--muted); }
+    .kv-val {
+      font-family: var(--alc-ui); font-size: 12.5px; font-weight: 600;
+      text-align: right; word-break: break-word;
+    }
+    .kv-val.unavailable { color: var(--faint); font-weight: 400; font-style: italic; }
+    .kv-val.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.02em; }
+
+    .card-actions { display: flex; gap: 8px; padding: 4px 16px 15px; }
+
+    .log-list { display: flex; flex-direction: column; }
+    .log-row {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+      padding: 9px 16px; border-top: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .log-ctx { font-family: var(--alc-ui); font-weight: 700; color: var(--accent-2); flex: none; }
+    .log-msg { color: var(--muted); flex: 1; min-width: 0; overflow-wrap: break-word; }
+    .log-at { color: var(--faint); font-size: 10.5px; flex: none; white-space: nowrap; }
+    .log-empty { padding: 14px 16px 17px; font-size: 12px; color: var(--faint); font-style: italic; }
+
+    @media (max-width: 480px) {
+      .header, .wrap { padding-left: 16px; padding-right: 16px; }
+      .logo-sub { display: none; }
+      .log-row { flex-wrap: wrap; }
+      .log-at { order: 3; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <img id="logo-img" class="logo-img on-paper" src="../../assets/alcoia-wordmark.png" alt="alcoia">
+    <img id="logo-img-dark" class="logo-img on-dark" src="../../assets/alcoia-wordmark-white.png" alt="">
+    <div class="logo-sub">Diagnostics</div>
+  </div>
+  <button class="btn btn-ghost" id="closeBtn">Close</button>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+    <div class="card-title">Extension</div>
+    <div class="kv-grid">
+      <div class="kv-row"><span class="kv-key">Version</span><span class="kv-val" id="val-version">—</span></div>
+      <div class="kv-row"><span class="kv-key">Build</span><span class="kv-val" id="val-buildTarget">—</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Account</div>
+    <div class="card-note">
+      Plan and assist usage are decided by the account server, which is not part of this
+      extension and is not reachable yet from this page — see it displayed here, never
+      guessed at, once that server exists.
+    </div>
+    <div class="kv-grid">
+      <div class="kv-row"><span class="kv-key">Plan</span><span class="kv-val unavailable" id="val-plan">Not available</span></div>
+      <div class="kv-row"><span class="kv-key">Assists this period</span><span class="kv-val unavailable" id="val-assists">Not available</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Install token</div>
+    <div class="card-note">
+      Identifies this install, not you — issued by the server, never derived from your
+      device or network. Only the last few characters are shown here on purpose, since
+      this page is meant to be safe to screenshot.
+    </div>
+    <div class="kv-grid">
+      <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val" id="val-tokenStatus">—</span></div>
+      <div class="kv-row"><span class="kv-key">Token</span><span class="kv-val mono" id="val-tokenMasked">—</span></div>
+    </div>
+    <div class="card-actions">
+      <button class="btn btn-ghost" id="deleteTokenBtn">Delete token</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Settings (local)</div>
+    <div class="kv-grid" id="settingsGrid"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Recent errors</div>
+    <div class="card-note">
+      Every AI call that failed silently for you, most recent first. Nothing here ever
+      includes a page URL, a page title, or passage text.
+    </div>
+    <div class="log-list" id="errorLog"></div>
+    <div class="card-actions">
+      <button class="btn btn-ghost" id="clearLogBtn">Clear</button>
+    </div>
+  </div>
+
+</div>
+
+<script type="module" src="diagnostics.js"></script>
+</body>
+</html>

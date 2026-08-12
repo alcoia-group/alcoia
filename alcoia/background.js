@@ -1,5 +1,12 @@
 // background service worker (MV3)
-// Handles messages from content scripts and popup (notes saving, WebGazer injection)
+// Handles messages from content scripts and popup (notes saving, AI proxy)
+
+// Shared backend-origin config (src/shared/config.js). Chrome's MV3 service
+// worker is a classic (non-module) worker, so it pulls the file in directly;
+// Firefox's event page instead loads it as a preceding <script> via
+// manifests/firefox.json's `background.scripts` array, which already runs
+// in the same global scope — importScripts does not exist there.
+if (typeof importScripts === 'function') importScripts('src/shared/config.js');
 
 // ── Local PDF redirect ─────────────────────────────────────────────────────────
 // Chrome's native PDF viewer runs in a sandboxed renderer that content scripts
@@ -58,14 +65,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // is the same path for any other endpoint (questions, and whatever comes
   // next). Both exist for the same reason: a content script's fetch carries
   // the host page's origin, which the server's CORS policy rejects.
+  //
+  // The install token (src/shared/install-token.js) is acquired by content.js,
+  // not here, and arrives as `msg.token`. That split is a platform constraint,
+  // not a design preference: install-token.js is a real ES module loaded via
+  // dynamic import(), and Chrome disallows dynamic import() from inside a
+  // service worker entirely ("import() is disallowed on
+  // ServiceWorkerGlobalScope by the HTML specification") — confirmed the hard
+  // way, via the browser smoke test, not assumed. Content scripts have no
+  // such restriction, so the token lives there; this worker stays a dumb
+  // relay that requires one to already be present. No token, no request.
   if (msg.action === 'summarize' || msg.action === 'apiPost') {
-    const url = msg.url || 'http://localhost:3000/api/summarize';
+    const url = msg.url || self.ALCOIA_CONFIG.SUMMARIZE_URL;
+    if (!msg.token) { sendResponse({ ok: false, error: 'no_install_token' }); return; }
     fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Alcoia-Install-Token': msg.token },
       body: JSON.stringify(msg.body || {}),
     })
       .then(async (resp) => {
+        // The server validated the token itself and said no — expired,
+        // revoked, or never valid. Flagged distinctly so content.js's
+        // install-token manager can clear its stored copy and fetch a
+        // fresh one on the next call, the same self-heal a reader
+        // deleting it by hand would get.
+        if (resp.status === 401 || resp.status === 403) {
+          sendResponse({ ok: false, status: resp.status, tokenRejected: true });
+          return;
+        }
         if (!resp.ok) { sendResponse({ ok: false, status: resp.status }); return; }
         const data = await resp.json();
         sendResponse({ ok: true, data });
@@ -76,87 +103,5 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // keep the message channel open for the async response
   }
 
-  if (msg.action === 'injectWebgazerBootstrap') {
-    const tabId = sender && sender.tab && sender.tab.id;
-    if (!tabId) { sendResponse({ status: 'error', error: 'no_tab' }); return; }
-
-    // This path ends in webgazer.begin(), which calls getUserMedia. The content
-    // script already refuses to ask unless the reader enabled the camera, but
-    // the worker must not take that on trust — anything that can post a message
-    // could otherwise start the webcam. Checked here as well, deliberately.
-    chrome.storage.local.get({ sra_eye: false }, (cfg) => {
-      if (cfg.sra_eye !== true) {
-        sendResponse({ status: 'error', error: 'eye_tracking_disabled' });
-        return;
-      }
-      injectWebgazer(tabId, sendResponse);
-    });
-    return true;
-  }
-
   return false;
 });
-
-function injectWebgazer(tabId, sendResponse) {
-  {
-    try {
-      const webgazerUrl = chrome.runtime.getURL('src/libs/webgazer.min.js');
-      chrome.scripting.executeScript({
-        target: { tabId },
-        world: 'MAIN',
-        func: (wgUrl) => {
-          try {
-            if (window.__sra_webgazer_bootstrap_loaded) return;
-            window.__sra_webgazer_bootstrap_loaded = true;
-            const s = document.createElement('script');
-            s.src = wgUrl;
-            s.onload = function () {
-              try {
-                if (typeof webgazer !== 'undefined') {
-                  webgazer.setRegression('ridge').setGazeListener(function (d) {
-                    try { window.postMessage({ source: 'sra-webgazer', gaze: d }, '*'); } catch (e) {}
-                  }).begin();
-                  try { webgazer.showPredictionPoints(false); } catch (e) {}
-                  window.postMessage({ source: 'sra-control', type: 'cameraReady' }, '*');
-                } else {
-                  console.warn('webgazer not available after load (scripting inject)');
-                }
-              } catch (e) { console.warn('webgazer init error (scripting inject)', e); }
-            };
-            s.onerror = function () { console.warn('Failed to load webgazer from', wgUrl); };
-            (document.head || document.documentElement).appendChild(s);
-
-            window.addEventListener('message', function (ev) {
-              try {
-                if (ev && ev.source === window && ev.data &&
-                    ev.data.source === 'sra-control' && ev.data.type === 'setPredictionPoints') {
-                  if (typeof webgazer !== 'undefined' && typeof webgazer.showPredictionPoints === 'function') {
-                    webgazer.showPredictionPoints(!!ev.data.enabled);
-                  }
-                }
-              } catch (e) {}
-            }, false);
-          } catch (e) { console.warn('webgazer scripting bootstrap failed', e); }
-        },
-        args: [webgazerUrl],
-      }, () => {
-        /* `world: 'MAIN'` needs Firefox 128+ and is not available at all on
-         * some builds. When it is missing, executeScript rejects rather than
-         * throwing, so the failure arrives here as lastError. There is no
-         * useful retry — WebGazer has to run in the page's own world — but
-         * the content script's <script src> injection has already run by this
-         * point and works everywhere except under a strict page CSP. Report
-         * the reason instead of failing silently. */
-        const err = chrome.runtime.lastError;
-        if (err) {
-          console.warn('[alcoia] main-world injection unavailable:', err.message);
-          sendResponse({ status: 'error', error: 'main_world_unsupported' });
-          return;
-        }
-        sendResponse({ status: 'ok' });
-      });
-    } catch (e) {
-      sendResponse({ status: 'error', error: String(e) });
-    }
-  }
-}
