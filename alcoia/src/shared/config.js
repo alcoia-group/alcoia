@@ -26,5 +26,8 @@
   root.ALCOIA_CONFIG = Object.freeze({
     BACKEND_ORIGIN: BACKEND_ORIGIN,
     SUMMARIZE_URL: BACKEND_ORIGIN + '/api/summarize',
+    // Issues the opaque per-install token every AI call must carry. See
+    // src/shared/install-token.js and the project notes' Access control section.
+    TOKEN_URL: BACKEND_ORIGIN + '/api/token',
   });
 })(typeof self !== 'undefined' ? self : this);

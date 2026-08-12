@@ -23,8 +23,8 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   // editing source.
   const BACKEND_DEFAULT     = self.ALCOIA_CONFIG.SUMMARIZE_URL;
   const MIN_SELECTION_CHARS = 15;
-  // Interruption cooldowns and budget now live in intervention-policy.js —
-  // one place, applied to telemetry and gaze alike.
+  // Interruption cooldowns and budget live in intervention-policy.js — one
+  // place, applied to every telemetry-driven decision.
   // Popup geometry, the open-popup registry and the eviction cap now live in
   // ui-controller.js — it owns everything the reader sees.
   // Fingerprints of paragraphs currently awaiting an AI response (race-condition guard)
@@ -128,6 +128,41 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   }
 
   // ── Load modules ───────────────────────────────────────────────────────
+  // Loaded here, not from background.js: install-token.js is a real ES
+  // module, and Chrome disallows dynamic import() from inside a service
+  // worker outright. Content scripts have no such restriction. background.js
+  // stays a dumb relay that requires a token to already be attached — see
+  // its 'summarize'/'apiPost' handler and install-token.js's own header.
+  const installTokenModule = await loadModule('src/shared/install-token.js');
+  const installToken = installTokenModule.createInstallTokenManager({
+    tokenUrl: self.ALCOIA_CONFIG.TOKEN_URL,
+  });
+  // Same origin as wherever the AI call is actually going — a developer who
+  // pointed the popup's Backend URL setting at a local server gets their
+  // token from that same server, not the shipped default.
+  const tokenUrl = () => {
+    try { return new URL('/api/token', backendUrl || BACKEND_DEFAULT).href; }
+    catch (e) { return self.ALCOIA_CONFIG.TOKEN_URL; }
+  };
+  // Every AI request goes through here: resolve the token, attach it, relay
+  // the background worker's response. `ok:false` covers every failure this
+  // item's brief lists — unreachable, non-ok, malformed, or simply no token
+  // yet — and every caller below already treats an ok:false/falsy result as
+  // "nothing to show", so no separate error UI is needed on top of this.
+  async function callBackend(action, url, body) {
+    const token = await installToken.getToken(tokenUrl());
+    if (!token) return { ok: false, error: 'no_install_token' };
+    return await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ action, url, body, token }, (resp) => {
+          if (chrome.runtime.lastError || !resp) { resolve({ ok: false, error: 'no_response' }); return; }
+          if (resp.tokenRejected) { installToken.invalidate(); }
+          resolve(resp);
+        });
+      } catch (e) { resolve({ ok: false, error: String(e && e.message || e) }); }
+    });
+  }
+
   const overlayUtils = await loadModule('src/content/overlay-utils.js');
   const compModule  = await loadModule('src/content/comprehension-monitor.js');
   const readCalModule = await loadModule('src/content/reading-calibration.js');
@@ -184,14 +219,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     esc,
     signReceipt: async (receipt) => {
       const url = (backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/receipt/sign');
-      const j = await new Promise((resolve) => {
-        try {
-          chrome.runtime.sendMessage({ action: 'apiPost', url, body: { receipt } }, (resp) => {
-            if (chrome.runtime.lastError || !resp || !resp.ok) { resolve(null); return; }
-            resolve(resp.data);
-          });
-        } catch (e) { resolve(null); }
-      });
+      const resp = await callBackend('apiPost', url, { receipt });
+      const j = resp.ok ? resp.data : null;
       return j && j.receipt ? j.receipt : null;
     },
   });
@@ -338,16 +367,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       // host PAGE's origin (e.g. https://en.wikipedia.org), which the server's
       // CORS policy correctly rejects. The background worker's fetch carries no
       // page origin, so it passes CORS while keeping the server locked down to
-      // the extension only. Falls back to a direct fetch if messaging fails.
-      const j = await new Promise((resolve) => {
-        try {
-          chrome.runtime.sendMessage({ action: 'summarize', url, body }, (resp) => {
-            if (chrome.runtime.lastError || !resp) { resolve(null); return; }
-            if (!resp.ok) { _warn(`Server ${resp.status || ''} ${resp.error || ''}`); resolve(null); return; }
-            resolve(resp.data);
-          });
-        } catch (e) { resolve(null); }
-      });
+      // the extension only. callBackend() attaches the install token and
+      // relays whatever background.js returns.
+      const resp = await callBackend('summarize', url, body);
+      if (!resp.ok) { _warn(`Server ${resp.status || ''} ${resp.error || ''}`); return null; }
+      const j = resp.data;
       if (!j) return null;
 
       const result = j.summary || j.result || null;
@@ -503,22 +527,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     // a content script's fetch carries the host page's origin and the server
     // rejects it. A direct fetch here works only when the page happens to be
     // same-origin with the server, which is true in tests and false in life.
-    const j = await new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage({ action: 'apiPost', url: questionsUrl(), body }, (resp) => {
-          if (chrome.runtime.lastError || !resp) { resolve(null); return; }
-          if (!resp.ok) {
-            // 422 means nothing passed the server's citation check; 503 means
-            // no key. Both are ordinary outcomes and both fall back to
-            // explaining rather than showing the reader an error.
-            _log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
-            resolve(null);
-            return;
-          }
-          resolve(resp.data);
-        });
-      } catch (e) { resolve(null); }
-    });
+    const resp = await callBackend('apiPost', questionsUrl(), body);
+    if (!resp.ok) {
+      // 422 means nothing passed the server's citation check; 503 means no
+      // key; no_install_token means the token couldn't be resolved. All are
+      // ordinary failure outcomes and all degrade to silence — see
+      // handleAsk(), which treats an empty result as nothing to show rather
+      // than falling back to an explanation.
+      _log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
+      return [];
+    }
+    const j = resp.data;
     if (!j) return [];
     return Array.isArray(j.questions) ? j.questions : [];
   }

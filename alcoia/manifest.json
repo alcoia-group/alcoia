@@ -41,6 +41,7 @@
       "resources": [
         "src/content/*.js",
         "src/content/telemetry/*.js",
+        "src/shared/*.js",
         "src/styles/*.css",
         "src/libs/fonts/*.woff2",
         "src/libs/jszip.min.js",
