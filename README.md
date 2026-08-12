@@ -58,7 +58,11 @@ Reader attention is the scarcest resource in this product, and a wrong interrupt
 a missed one.
 
 - At most one interruption every 3 minutes
-- At most five per session
+- A session cap that scales with how much you've actually read — a few paragraphs into an
+  article and a few chapters into a textbook do not earn the same number of interruptions —
+  with an absolute ceiling so nothing runs away
+- Closing questions without answering, three times in a row, raises the bar before the system
+  backs off entirely — a clearer signal than anything it can infer on its own
 - Never twice on the same paragraph
 - Never on `unknown`
 - Every interruption carries visible evidence — "You slowed down a lot here" — which turns an
@@ -139,7 +143,7 @@ extension's own setup, keyboard shortcuts and configuration reference.
 
 ```bash
 npm run lint                    # ESLint — a defect linter, not a style linter
-npm test                        # 298 tests
+npm test                        # 304 tests
 npm run test:browser            # loads the extension in Chromium, English article
 PAGE=zh npm run test:browser    # same checklist against a Chinese article
 ```

@@ -254,6 +254,13 @@
   opacity: 1;
 }
 .sra-q-result { margin-top: 12px; font-size: 13.5px; line-height: 1.65; }
+/* A correct answer is a moment the system itself produced — sage, the same
+   as the evidence badge and the quoted span, and nothing else in this card
+   uses it for anything but confirmation. It is bare on purpose: no
+   explanation ships alongside it, so there is nothing here to style beyond
+   the checkmark and the one line of text. */
+.sra-q-result-correct { color: var(--alc-sage-2); }
+.sra-q-check { margin-right: 5px; font-weight: 700; }
 .sra-q-span {
   margin-top: 9px;
   padding-left: 11px;
