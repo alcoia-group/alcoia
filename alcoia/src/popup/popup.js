@@ -264,6 +264,36 @@ document.addEventListener('DOMContentLoaded', () => {
   openPage('upgradeBtn',        'src/popup/upgrade.html');
   openPage('diagnosticsBtn',    'src/popup/diagnostics.html');
 
+  /* ── Quiz gate ─────────────────────────────────────────────────────────
+   * Reads the exact same function (content.js's checkQuizCoverage, which
+   * calls coverage-gate.js's evaluate()) that the end-of-reading offer
+   * uses — if this diverged from that, the overlay could say ready while
+   * this button said no (the project notes, "The quiz — decided"). Disabled with
+   * the stated reason rather than a silent no-op below threshold. */
+  const quizBtn = $('quizBtn');
+  const quizGateNote = $('quizGateNote');
+  let quizKey = null;
+
+  function refreshQuizGate() {
+    sendToTab({ action: 'checkQuizCoverage' }, (resp, err) => {
+      if (!quizBtn || !quizGateNote) return;
+      const ready = !err && resp && resp.ready === true;
+      quizKey = (!err && resp && resp.key) || null;
+      quizBtn.disabled = !ready;
+      quizGateNote.textContent = (!err && resp && resp.reason)
+        || 'not enough reading tracked on this page yet';
+    });
+  }
+  refreshQuizGate();
+
+  quizBtn?.addEventListener('click', () => {
+    if (quizBtn.disabled) return;
+    const url = chrome.runtime.getURL('src/popup/quiz.html') +
+      (quizKey ? '?key=' + encodeURIComponent(quizKey) : '');
+    chrome.tabs.create({ url });
+    window.close();
+  });
+
   // ── Reading speed ──────────────────────────────────────────────────────
   const readingCalBtn = $('readingCalBtn');
   readingCalBtn.addEventListener('click', () => {

@@ -351,6 +351,81 @@ await page.goto('http://localhost:8731/?utm_source=smoke-test', { waitUntil: 'lo
 await page.waitForTimeout(1500);
 const coverageAfterQueryString = await readCoverage(pageKey); // pathname-only key — the query string above is not part of it
 
+// item 16: content.js's checkQuizCoverage message handler is what both the
+// popup button and (indirectly, via coverage-gate.js) the end-of-reading
+// offer rely on — checked directly here via chrome.tabs.sendMessage from a
+// helper extension page, the same call popup.js's sendToTab() makes, since
+// Playwright cannot easily drive the real toolbar-popup UI to exercise
+// popup.js itself.
+async function sendToArticleTab(msg) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const result = await helper.evaluate((m) => new Promise((resolve) => {
+    chrome.tabs.query({ url: 'http://localhost:8731/*' }, (tabs) => {
+      if (!tabs?.[0]) { resolve({ __debug: 'no tabs', all: 'n/a' }); return; }
+      chrome.tabs.sendMessage(tabs[0].id, m, (resp) => {
+        if (chrome.runtime.lastError) { resolve({ __debug: chrome.runtime.lastError.message }); return; }
+        resolve(resp);
+      });
+    });
+  }), msg);
+  await helper.close();
+  return result;
+}
+
+// Pins the message-listener fix above: popup.js's recallBtn/receiptBtn send
+// exactly these `{ action: ... }` shapes via sendToTab, and previously got
+// no response at all (the listener discarded any message without `.type`).
+const recallStatsCheck = await sendToArticleTab({ action: 'recallStats' });
+const quizCoverageCheck = await sendToArticleTab({ action: 'checkQuizCoverage' });
+// The reading simulated above is ~9s of dwell — realistic, and well under
+// the 60s minimum by design (see coverage-gate.js's DEFAULT_THRESHOLDS), so
+// this should consistently read not-ready with the exact required reason.
+const quizGateBelowThreshold = quizCoverageCheck ? {
+  ready: quizCoverageCheck.ready,
+  reason: quizCoverageCheck.reason,
+  correctReason: quizCoverageCheck.reason === 'not enough reading tracked on this page yet',
+} : null;
+
+// Now push the same document's *measured* dwell time over the threshold —
+// same paragraphs, same coverage percentage, modelling a reader who spent
+// longer on them — and confirm the unprompted offer actually renders, is
+// dismissible, and never reappears for this document once dismissed. This
+// is the one place the full offer -> render -> dismiss -> stays-dismissed
+// path is exercised in a real page rather than only against fake storage.
+const helperWrite = await ctx.newPage();
+await helperWrite.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+await helperWrite.evaluate((key) => new Promise((r) => {
+  chrome.storage.local.get({ sra_doc_coverage: {} }, (data) => {
+    const docs = data.sra_doc_coverage || {};
+    if (docs[key]) docs[key].dwellMs = 70000;
+    chrome.storage.local.set({ sra_doc_coverage: docs }, r);
+  });
+}), pageKey);
+await helperWrite.close();
+
+// The page reload above (for the ?query-string check) reset scrollY to 0,
+// so this needs to actually reach the bottom again, not just nudge — a
+// short article's bottom can be well past what the earlier reading
+// simulation scrolled to.
+await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+await page.waitForTimeout(800);
+const offerShown = await page.evaluate(() => {
+  const card = [...document.querySelectorAll('.sra-popup')]
+    .find((el) => el.querySelector('.sra-quiz-start-btn'));
+  return card ? { shown: true, text: card.querySelector('.sra-q-text')?.textContent || null } : { shown: false };
+});
+if (offerShown.shown) {
+  await page.evaluate(() => document.querySelector('.sra-q-skip')?.click());
+  await page.waitForTimeout(400); // closePopup() fades out over 250ms before removing the element
+}
+const offerGoneAfterDismiss = await page.evaluate(() =>
+  !document.querySelector('.sra-quiz-start-btn'));
+await page.mouse.wheel(0, -30); // scroll again — must not reappear (once per document)
+await page.waitForTimeout(500);
+const offerStaysDismissed = await page.evaluate(() =>
+  !document.querySelector('.sra-quiz-start-btn'));
+
 const failureDegrade = FAIL_QUESTIONS ? {
   questionsEndpointCalled: apiHits.questions > 0,
   noQuestionCardShown: !questionCard.shown,
@@ -425,6 +500,10 @@ console.log('receipt (Alt+I)         :', JSON.stringify(receipt));
 console.log('coverage gate           :', JSON.stringify(coverage));
 console.log('  survives ?query reload:', JSON.stringify(coverageAfterQueryString),
   coverageAfterQueryString.paragraphsCovered >= coverage.paragraphsCovered ? '(did not reset — good)' : '(RESET — bug)');
+console.log('quiz gate (popup path)  :', JSON.stringify(quizGateBelowThreshold), '(expect ready:false, correctReason:true)');
+console.log('recallBtn/receiptBtn msg:', JSON.stringify(recallStatsCheck), '(expect status:"ok" — was silently broken pre-fix)');
+console.log('quiz offer card         :', JSON.stringify(offerShown));
+console.log('  gone after dismiss    :', offerGoneAfterDismiss, ' stays dismissed on rescroll:', offerStaysDismissed);
 if (failureDegrade) console.log('questions-endpoint fail :', JSON.stringify(failureDegrade), '(expect all true)');
 console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
 console.log('  new page errors       :', shortcuts.newPageErrors);

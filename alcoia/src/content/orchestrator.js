@@ -32,9 +32,15 @@ export async function createOrchestrator(deps) {
   const engineModule = await loadModule('src/content/state-engine.js');
   const policyModule = await loadModule('src/content/intervention-policy.js');
   const coverageModule = await loadModule('src/content/coverage-gate.js');
+  const offerModule = await loadModule('src/content/quiz-offer.js');
   const stateEngine  = engineModule.createReadingStateEngine();
   const interventionPolicy = policyModule.createInterventionPolicy();
   const coverageGate = coverageModule.createCoverageGate();
+  // Reader-initiated — never touches interventionPolicy, spends no budget.
+  const quizOffer = offerModule.createQuizOfferChecker({
+    coverageGate, documentKey: coverageModule.documentKey,
+    onEligible: (result) => { try { host.onQuizOfferEligible?.(result); } catch (e) {} },
+  });
 
   // Telemetry detectors. These need no permission and work on any device —
   // paragraph tracking in particular used to hang off a webcam gaze point,
@@ -79,6 +85,9 @@ export async function createOrchestrator(deps) {
    * reading-rate maths and the regression detector's paragraph indices. */
   function syncParagraph() {
     if (!s().comprehensionCheckEnabled) return;
+    // Every call, not just on a transition — a reader stopped at the end
+    // produces no further transition, and the idle tick catches that case.
+    quizOffer.check();
     let transition = null;
     try {
       // A reader tracking text with the mouse gives a measured reading
@@ -89,9 +98,7 @@ export async function createOrchestrator(deps) {
 
     let speedSignal = null;
     if (transition.left) {
-      // Feeds the interruption budget's session cap — see intervention-policy's
-      // recordCoverage(). Content read, not time in a session, is what earns
-      // a reader more interruptions.
+      // Feeds intervention-policy's session cap — content read earns budget.
       try {
         interventionPolicy.recordCoverage({
           words: transition.left.words, dwellMs: transition.left.dwellMs, media: transition.left.media,
@@ -108,8 +115,7 @@ export async function createOrchestrator(deps) {
           try { host.onParagraphRead(leftText, transition.left.dwellMs); } catch (e) {}
         }
       }
-      // Feeds the coverage gate (item 15/16): the one function that decides
-      // whether this document has been read enough to offer the quiz on.
+      // Feeds coverage-gate.js — "read enough to offer the quiz on".
       try {
         const key = coverageModule.documentKey();
         if (key) {
@@ -286,10 +292,7 @@ export async function createOrchestrator(deps) {
     stateEngine,
     interventionPolicy,
     paragraphTracker,
-    // The one function deciding "read enough to test" — item 16 wires this
-    // to the end-of-reading offer and the popup's quiz button, both reading
-    // the same threshold so they cannot disagree. documentKey() is exposed
-    // alongside it since both callers need to compute the same key.
+    // "Read enough to test" — the popup's quiz button reads this directly.
     coverageGate,
     documentKey: coverageModule.documentKey,
   };
