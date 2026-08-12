@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInterventionPolicy, STATE_ACTIONS } from '../alcoia/src/content/intervention-policy.js';
+import { createInterventionPolicy, STATE_ACTIONS, EXPLORATION_SAMPLE_RATE } from '../alcoia/src/content/intervention-policy.js';
 import { STATES } from '../alcoia/src/content/state-engine.js';
 
 function fixedClock(start = 1_000_000) {
@@ -31,7 +31,9 @@ describe('what earns an interruption', () => {
   });
 
   it.each([STATES.ON_PACE, STATES.ABSENT])('takes no action on %s', (label) => {
-    const p = createInterventionPolicy({ now: fixedClock().now });
+    // random: () => 1 disables exploration sampling — that mechanism is
+    // covered on its own further down; this test is about the base table.
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 1 });
     expect(STATE_ACTIONS[label]).toBe('none');
     expect(p.evaluate({ label, confidence: 0.9, evidence: [] }).allow).toBe(false);
   });
@@ -161,5 +163,219 @@ describe('budget', () => {
     p.reset();
     expect(p.stats().count).toBe(0);
     expect(p.evaluate(struggling({ signal: { text: 'a' } })).allow).toBe(true);
+  });
+});
+
+describe('the session cap scales with content read', () => {
+  it('starts at the base allowance with nothing read yet', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    expect(p.stats().cap).toBe(5);
+  });
+
+  it('reading tracked prose paragraphs earns more interruptions', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    for (let i = 0; i < 8; i++) p.recordCoverage({ words: 120, dwellMs: 1000 });
+    // 8 paragraphs / 4-per-unit = 2 units earned on top of the base of 5.
+    expect(p.stats().cap).toBe(7);
+  });
+
+  it('measured reading time alone also earns more interruptions', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordCoverage({ words: 0, dwellMs: 9 * 60000 }); // 9 minutes, no paragraph counted
+    // 9 minutes / 3-per-unit = 3 units.
+    expect(p.stats().cap).toBe(8);
+  });
+
+  it('media landmarks (figures, tables) never count toward the cap', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    for (let i = 0; i < 20; i++) p.recordCoverage({ words: 0, dwellMs: 5000, media: true });
+    expect(p.stats().cap).toBe(5);
+    expect(p.stats().paragraphsRead).toBe(0);
+    expect(p.stats().msRead).toBe(0);
+  });
+
+  it('is clamped at the absolute ceiling however much is read', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    for (let i = 0; i < 400; i++) p.recordCoverage({ words: 120, dwellMs: 60000 });
+    expect(p.stats().cap).toBe(25);
+    expect(p.stats().absoluteCeiling).toBe(25);
+  });
+
+  it('a session that has read more actually gets to interrupt more than one that has read less', () => {
+    const clock = fixedClock();
+    const short = createInterventionPolicy({ now: clock.now });
+    const long  = createInterventionPolicy({ now: clock.now });
+    for (let i = 0; i < 40; i++) long.recordCoverage({ words: 120, dwellMs: 60000 });
+
+    let shortAllowed = 0, longAllowed = 0;
+    for (let i = 0; i < 15; i++) {
+      if (take(short, struggling({ signal: { text: `s${i}` } })).allow) shortAllowed++;
+      if (take(long,  struggling({ signal: { text: `l${i}` } })).allow) longAllowed++;
+      clock.advance(200_000);
+    }
+    expect(longAllowed).toBeGreaterThan(shortAllowed);
+    expect(shortAllowed).toBe(5);
+  });
+
+  it('honours a configured budget override for the scaling constants', () => {
+    const p = createInterventionPolicy({
+      now: fixedClock().now,
+      budget: { baseAllowance: 1, paragraphsPerUnit: 1, absoluteCeiling: 3 },
+    });
+    p.recordCoverage({ words: 50, dwellMs: 1000 });
+    p.recordCoverage({ words: 50, dwellMs: 1000 });
+    expect(p.stats().cap).toBe(3); // 1 base + 2 units, clamped at ceiling 3
+  });
+});
+
+describe('dismissal-aware backoff', () => {
+  const dense = (over = {}) => struggling({ signal: { text: 'dense text' }, ...over });
+
+  it('does not affect the first two dismissals', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordDismissal();
+    expect(p.evaluate(dense()).allow).toBe(true);
+  });
+
+  it('raises the confidence bar on the second consecutive dismissal', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordDismissal();
+    p.recordDismissal();
+    const lowConf = p.evaluate(struggling({ confidence: 0.6, signal: { text: 'x' } }));
+    expect(lowConf.allow).toBe(false);
+    expect(lowConf.reason).toMatch(/raised bar/);
+
+    const highConf = p.evaluate(struggling({ confidence: 0.8, signal: { text: 'x' } }));
+    expect(highConf.allow).toBe(true);
+  });
+
+  it('stops asking outright after three consecutive dismissals, even at high confidence', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordDismissal();
+    p.recordDismissal();
+    p.recordDismissal();
+    const d = p.evaluate(struggling({ confidence: 0.99, signal: { text: 'x' } }));
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/holding off/);
+  });
+
+  it('does not touch nudge actions (drifting readers are not being tested)', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordDismissal();
+    p.recordDismissal();
+    p.recordDismissal();
+    const d = p.evaluate({ label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting' } });
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('nudge');
+  });
+
+  it('any answer, right or wrong, clears the backoff', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordDismissal();
+    p.recordDismissal();
+    p.recordDismissal();
+    expect(p.evaluate(dense()).allow).toBe(false);
+
+    p.recordAnswered();
+    expect(p.evaluate(dense()).allow).toBe(true);
+  });
+
+  it('reports the running count in stats', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordDismissal();
+    p.recordDismissal();
+    expect(p.stats().consecutiveDismissals).toBe(2);
+    p.recordAnswered();
+    expect(p.stats().consecutiveDismissals).toBe(0);
+  });
+});
+
+/* Labels collected so far all come from paragraphs the state machine already
+ * flagged. Exploration sampling asks anyway on a slice of paragraphs the
+ * detector would have left alone, so the resulting labels aren't conditioned
+ * on the detector's own decision. See the project notes. */
+describe('exploration sampling', () => {
+  const onPace = (over = {}) => ({
+    label: STATES.ON_PACE, confidence: 0.9, evidence: [],
+    signal: { text: 'an on-pace paragraph' },
+    ...over,
+  });
+
+  it('the rate is a named constant in the 10-15% band', () => {
+    expect(EXPLORATION_SAMPLE_RATE).toBeGreaterThanOrEqual(0.10);
+    expect(EXPLORATION_SAMPLE_RATE).toBeLessThanOrEqual(0.15);
+  });
+
+  it('samples when the injected RNG lands under the rate', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => EXPLORATION_SAMPLE_RATE - 0.01 });
+    const d = p.evaluate(onPace());
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('ask');
+    expect(d.wasExplorationSample).toBe(true);
+  });
+
+  it('declines to sample when the injected RNG lands over the rate', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => EXPLORATION_SAMPLE_RATE + 0.01 });
+    const d = p.evaluate(onPace());
+    expect(d.allow).toBe(false);
+    expect(d.wasExplorationSample).toBe(false);
+  });
+
+  it('fires on a paragraph whose state is on_pace', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const d = p.evaluate(onPace());
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('ask');
+    expect(d.wasExplorationSample).toBe(true);
+  });
+
+  it('never fires on a drifting reader, even when the RNG would sample', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const d = p.evaluate({ label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting para' } });
+    expect(d.wasExplorationSample).toBe(false);
+    expect(d.action).not.toBe('ask');
+  });
+
+  it('never fires on an absent reader, even when the RNG would sample', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const d = p.evaluate({ label: STATES.ABSENT, confidence: 0.9, evidence: [] });
+    expect(d.allow).toBe(false);
+    expect(d.wasExplorationSample).toBe(false);
+  });
+
+  it('still respects the confidence floor', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const d = p.evaluate(onPace({ confidence: 0.3 }));
+    expect(d.allow).toBe(false);
+  });
+
+  it('still respects the 3-minute gap and spends the budget like any interruption', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now, random: () => 0 });
+
+    const first = take(p, onPace({ signal: { text: 'a' } }));
+    expect(first.allow).toBe(true);
+    expect(p.stats().count).toBe(1);
+
+    clock.advance(60_000);
+    const tooSoon = p.evaluate(onPace({ signal: { text: 'b' } }));
+    expect(tooSoon.allow).toBe(false);
+  });
+
+  it('still never interrupts twice on the same paragraph', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now, random: () => 0 });
+    const state = onPace({ signal: { text: 'the same on-pace paragraph' } });
+
+    expect(take(p, state).allow).toBe(true);
+    clock.advance(600_000);
+    expect(p.evaluate(state).allow).toBe(false);
+  });
+
+  it('does not tag a normal struggling ask as an exploration sample', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const d = p.evaluate(struggling());
+    expect(d.allow).toBe(true);
+    expect(d.wasExplorationSample).toBe(false);
   });
 });

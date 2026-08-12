@@ -9,18 +9,20 @@
 
 A browser extension that notices when reading slows down on a page and offers help with that
 passage. Detection runs on **browser telemetry** — pace against text difficulty and against your
-own baseline, re-reading, selection, tab focus — which needs no permission and no camera. The
-webcam is an **optional secondary sensor, off by default**, contributing only presence and coarse
-region.
+own baseline, re-reading, selection, tab focus — which needs no permission and no camera. There is
+no webcam mode: it has been removed, not merely demoted, and no `getUserMedia` call exists in the
+shipped code.
 
 The primary intervention is a **question about what you just read**, not a summary: an answer is
 the only ground truth in the system, and summarising removes the difficulty that produces
 retention.
 
-> **Reading this file:** the sections below are a feature and configuration reference. Some of the
-> deeper sections still describe the gaze-first architecture this project has moved away from —
-> where this file and [`../README.md`](../README.md) or [`../the project notes`](../the project notes) disagree,
-> those two are current and this one is not.
+> **Reading this file:** the sections below are a feature and configuration reference, and much of
+> it predates the gaze-path removal (see `../the project notes`'s migration note under "Signal hierarchy").
+> Any section below describing WebGazer, a camera control, gaze coordinates, or a `sra_eye`/
+> `sra_camera_*`/`sra_calibration`/`sra_webgazer_*`/`sra_personal_baseline` storage key documents
+> code that no longer exists. Where this file and [`../README.md`](../README.md) or
+> [`../the project notes`](../the project notes) disagree, those two are current and this one is not.
 
 ---
 
@@ -48,7 +50,7 @@ retention.
 
 ## Overview
 
-alcoia is a Chrome extension that watches how you read using your webcam and responds intelligently when it detects you are confused, overloaded, zoning out, or reading too quickly through difficult text. It generates AI summaries, speaks paragraphs aloud, and adapts its visual presentation — all without you lifting a finger.
+alcoia is a Chrome extension that watches how you read — pace against text difficulty and your own baseline, re-reading, selection, tab focus — using only browser telemetry, no camera, and asks a retrieval question when it detects struggling or dense-text skimming. It can also generate AI summaries, speak paragraphs aloud, and adapt its visual presentation, all without you lifting a finger.
 
 The extension supports:
 - Ordinary web pages (articles, documentation, Wikipedia, etc.)
@@ -122,10 +124,10 @@ Four named presets that configure all toggles at once. Select in the popup's **R
 
 | Persona | What it sets |
 |---|---|
-| **Research** | Eye tracking on · selection on · highlight on · comprehension on · focus ruler on · pin popups · idle blink on |
-| **Study** | Eye tracking on · TTS on · comprehension on · autohide after 10s · idle blink on |
-| **Casual** | Eye tracking off · selection only · autohide after 6s |
-| **Speed** | Eye tracking on · focus ruler on · autohide after 4s · idle blink on · no comprehension check |
+| **Research** | selection on · highlight on · comprehension on · focus ruler on · pin popups |
+| **Study** | TTS on · comprehension on · autohide after 10s |
+| **Casual** | selection only · autohide after 6s |
+| **Speed** | focus ruler on · autohide after 4s · no comprehension check |
 
 ### Accessibility
 | Feature | Description |
@@ -326,10 +328,10 @@ alcoia/
 │   └── styles/
 │       └── overlay.css        Popup, calibration, highlight, nudge styles
 │
-└── server/
-    ├── index.js               Express proxy to Groq API
-    └── .env                   GROQ_API_KEY (not committed)
 ```
+
+The backend (Express proxy to Groq) used to live under `server/` in this tree. It has moved to a
+separate private repository — see "Running the Backend Server" below.
 
 ### Cross-world communication
 
@@ -361,9 +363,8 @@ See the Architecture section above for the annotated tree. Key relationships:
 
 ### Prerequisites
 - Google Chrome (or Chromium-based browser)
-- Node.js 18+ (for the backend server)
-- A Groq API key (free tier available at console.groq.com)
-- A webcam
+- Node.js 18+ (for this repo's own tooling — lint, tests, build)
+- A running instance of the backend (separate private repo) with a Groq API key configured there
 
 ### Load the extension
 
@@ -383,26 +384,14 @@ This is required for the PDF and PPTX viewers to fetch local files.
 
 ## Running the Backend Server
 
-The extension requires a local backend that proxies requests to the Groq API.
+The extension requires a backend that proxies requests to the Groq API. That backend's source no
+longer lives in this repository — it moved to a separate private repo as part of the ongoing
+client/server split (see `the project notes`, "Migration in progress"). Get its setup instructions from
+that repo.
 
-```bash
-cd alcoia/server
-npm install
-```
-
-Create a `.env` file in the `server/` directory:
-
-```
-GROQ_API_KEY=gsk_your_key_here
-```
-
-Start the server:
-
-```bash
-node index.js
-```
-
-The server listens on `http://localhost:3000` by default. It exposes one endpoint:
+Point the extension at wherever your instance runs — see `the project notes`'s Item 4 notes on the backend
+origin for how the default is configured. By default it still expects a local instance at
+`http://localhost:3000` for development. It exposes one endpoint:
 
 ```
 POST /api/summarize
@@ -425,15 +414,14 @@ Content-Type: application/json
 
 1. Navigate to any page with text.
 2. Open the extension popup (click the alcoia icon).
-3. Go to the **Session** tab → click **Start Camera** → allow camera access.
-4. A dot-calibration overlay appears. Click each green dot as it appears (two passes, 18 clicks total).
-5. The calibration is saved. It will not appear again on future pages.
+3. That's it — telemetry detection starts immediately, no permission prompt and no setup step.
 
 ### Optional: reading calibration (recommended)
 
-In the **Session** tab, click **Reading Calibration**. A paragraph is shown with words highlighted one at a time. Read at your natural pace — no clicking needed. This captures ~80 training points from your actual reading zone and builds your personal WPM baseline.
-
-**Run reading calibration once. Run dot calibration once. Both persist across all future pages.**
+In the popup's **Reading** tab, click **Measure my reading speed**. A passage is shown, blurred
+until you start; read it at your natural pace and press the button the moment you finish. This
+sets your personal words-per-minute baseline, which every pace judgement is compared against. No
+camera involved, and it persists across all future pages until you run it again.
 
 ### Reading personas
 
@@ -441,16 +429,15 @@ In the popup's **Reading Mode** section, click a persona button (**Research**, *
 
 ### Day-to-day
 
-Once camera is on, the extension runs silently. It will:
-- Show an AI popup when it detects confusion or overload
-- Explain images you gaze at while confused (2-second dwell triggers automatically)
+The extension runs silently once it is on. It will:
+- Ask a retrieval question when it detects struggling or dense-text skimming
 - Offer a summary when you read through a dense paragraph too quickly
 - Offer a summary when you scroll back up to re-read
 
 You can also:
 - **Select any text** → instant summary appears
 - **`Ctrl+hover` over any image** → instant image explanation
-- **Press `Alt+S`** → summarise the paragraph at gaze/viewport centre
+- **Press `Alt+S`** → summarise the paragraph at the viewport centre
 - **Press `Alt+T`** → toggle read-aloud
 - **Press `Alt+F`** → toggle focus ruler
 - **Press `Alt+M`** → toggle reading map sidebar
@@ -466,17 +453,20 @@ After reading, open the popup → **Session** tab → **Session Report**. Sessio
 
 | Shortcut | Action |
 |---|---|
-| `Alt+S` | Summarise paragraph at current gaze / viewport centre |
+| `Alt+S` | Summarise paragraph at the viewport centre |
 | `Alt+T` | Toggle Read Aloud (TTS) on/off |
 | `Alt+F` | Toggle Focus Ruler on/off |
 | `Alt+M` | Toggle Reading Map sidebar |
 | `Alt+N` | Open Saved Notes page |
 | `Alt+G` | Open Session Report page |
+| `Alt+I` | Show the reading receipt |
+| `Alt+R` | Review what you've read this session |
 | `Esc` | Close the active summary popup |
-| `Alt+1` | Simulate: Confused state (for testing) |
-| `Alt+2` | Simulate: Overloaded state |
-| `Alt+3` | Simulate: Zoning Out state |
+| `Alt+1` | Simulate: Struggling state (for testing) |
+| `Alt+2` | Simulate: Struggling state, forced to the simplify renderer |
+| `Alt+3` | Simulate: Drifting state |
 | `Alt+4` | Simulate: Skimming state |
+| `Alt+5` | Simulate: On-pace state |
 
 All shortcuts are listed in the **Session** tab of the popup for discoverability.
 
@@ -489,14 +479,12 @@ All settings are stored in `chrome.storage.local` and survive browser restarts.
 | Storage key | Default | Description |
 |---|---|---|
 | `sra_enabled` | `true` | Master on/off |
-| `sra_eye` | `true` | Eye tracking on/off |
 | `sra_selection` | `true` | Text-selection summaries |
 | `sra_highlight_para` | `true` | Highlight source paragraph |
 | `sra_autohide` | `false` | Auto-dismiss popups |
 | `sra_autohide_timeout` | `12` | Auto-dismiss delay (seconds) |
 | `sra_pin_default` | `false` | Pin popups open by default |
-| `sra_debug` | `false` | Show gaze prediction dots |
-| `sra_idle_blink` | `true` | Edge pulse when zoning out |
+| `sra_debug` | `false` | Narrate detection state to the console |
 | `sra_comprehension` | `true` | Comprehension speed checks |
 | `sra_tts` | `false` | Read Aloud on confusion |
 | `sra_focus_ruler` | `false` | Focus ruler (dim band) |
@@ -505,14 +493,9 @@ All settings are stored in `chrome.storage.local` and survive browser restarts.
 | `sra_bionic` | `false` | Bionic reading |
 | `sra_dark_mode` | `false` | Dark mode for extension UI and in-page popups |
 | `sra_active_persona` | `''` | Last applied reading persona (`research` / `study` / `casual` / `speed`) |
-| `sra_backend_url` | `http://localhost:3000/api/summarize` | AI backend endpoint |
-| `sra_ever_calibrated` | `false` | Whether dot calibration has run |
-| `sra_calibration` | `{dx:0, dy:0}` | Gaze correction offset |
-| `sra_webgazer_model` | `null` | Serialised WebGazer regression training data (max 500 KB), restored on page load |
-| `sra_personal_baseline` | `null` | Personal gaze feature baseline |
-| `sra_baseline_wpm` | `null` | Personal WPM baseline |
-| `sra_current_state` | `''` | Last classified cognitive state |
-| `sra_camera_ready` | `false` | Camera initialisation status |
+| `sra_backend_url` | set from `src/shared/config.js` | AI backend endpoint |
+| `sra_baseline_wpm` | `null` | Personal WPM baseline, from self-paced reading calibration |
+| `sra_current_state` | `''` | Last classified reading state |
 | `sra_notes` | `[]` | Saved notes array |
 | `sra_sessions` | `[]` | Session report data (last 20) |
 | `sra_highlights` | `{}` | Paragraph highlights by URL key |
@@ -566,7 +549,7 @@ Toggle in the popup header. Themes the popup UI and all in-page overlays (summar
 |---|---|
 | CORS restriction | Backend only accepts requests from `chrome-extension://` and `localhost` origins |
 | Rate limiting | 30 requests per minute per IP on `/api/summarize` |
-| Secret isolation | `GROQ_API_KEY` lives in `server/.env` only, never in extension files |
+| Secret isolation | `GROQ_API_KEY` lives in the backend repo's `.env` only, never in extension files |
 | `.gitignore` | `.env` is excluded from version control |
 | No remote code | All libraries (WebGazer, PDF.js, JSZip) are bundled locally; no CDN calls from the extension |
 | Input sanitisation | All text rendered in popups is HTML-escaped before insertion |
@@ -583,7 +566,7 @@ Toggle in the popup header. Themes the popup UI and all in-page overlays (summar
 
 ### Changing the AI model
 
-Edit `server/index.js` — update the `model` field in the Groq API call. The extension is model-agnostic.
+Edit `index.js` in the backend repo — update the `model` field in the Groq API call. The extension is model-agnostic.
 
 ### Retraining the classifier
 
@@ -603,7 +586,6 @@ In `popup.js`, add a key to the `PERSONAS` constant with the desired toggle valu
 | Permission | Reason |
 |---|---|
 | `storage` | Save settings, calibration, notes, sessions |
-| `scripting` | Inject WebGazer into page context (MAIN world) |
 | `activeTab` | Communicate with the current tab |
 | `tabs` | Read tab URL for file:// interception; create new tabs |
 | `webNavigation` | Monitor navigation for file:// redirect |

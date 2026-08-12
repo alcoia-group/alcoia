@@ -1,12 +1,21 @@
-/* questions.js — retrieval questions from a passage
+/* tests/contract/questions.js — VENDORED SNAPSHOT, not shipped source.
+ *
+ * The API server moved to a separate private repo (see the project notes, "Migration
+ * in progress"). This file is a copy of its pure, dependency-free question
+ * logic, kept here only so the client's assumptions about the server's
+ * contract — most importantly, that every question's `span` must appear
+ * verbatim in the passage or be rejected — stay under test in this repo
+ * rather than disappearing silently. Do not import this from shipped code;
+ * the client never authors questions, it only consumes them. If this drifts
+ * from the server repo's real copy, that is expected — update it by hand
+ * when the contract changes, the same way any other fixture is updated.
+ *
+ * Original header, preserved for context:
  *
  * Questions, not summaries, are the primary intervention. A summary removes
  * the desirable difficulty that produces retention; a question that the reader
  * has to answer is the only thing in this system that produces ground truth
  * about whether they understood anything.
- *
- * No express here on purpose — this is the part worth testing, and it should
- * be testable without standing a server up.
  *
  * The hard requirement is `span`. Every question must cite the sentence in the
  * passage that contains its answer, verbatim. A model that cannot point at its
