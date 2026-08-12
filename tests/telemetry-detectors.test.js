@@ -75,6 +75,64 @@ describe('paragraph-tracker', () => {
     t.update();
     expect(t.getActive()).toBeNull();
   });
+
+  it('tracks a media block as a candidate even with no text', () => {
+    // A table with no text used to be invisible (not in BLOCK_SELECTOR, and
+    // even if it had been, empty text falls under any minWords floor). It
+    // must show up as its own candidate regardless of word count.
+    const doc = {
+      querySelectorAll: () => [
+        { tagName: 'p', innerText: words(50), textContent: words(50),
+          getBoundingClientRect: () => ({ top: 0, bottom: 200, height: 200 }) },
+        { tagName: 'table', innerText: '', textContent: '',
+          getBoundingClientRect: () => ({ top: 250, bottom: 450, height: 200 }) },
+      ],
+    };
+    const t = createParagraphTracker({ document: doc, viewportHeight: () => 800 });
+    t.rescan();
+    expect(t.count()).toBe(2);
+  });
+
+  it("ends a paragraph's dwell at a figure instead of letting the figure's viewing time inflate it", () => {
+    // Reproduces the bug: without a figure candidate in between, dwell on the
+    // first paragraph kept accruing through the whole time the reader spent
+    // on the chart, so an easy paragraph read at a normal pace looked like it
+    // took far longer than its word count justified.
+    const clock = fixedClock();
+    let scroll = 0;
+    const textBlock = (docTop) => ({
+      tagName: 'p',
+      innerText: words(50), textContent: words(50),
+      getBoundingClientRect: () => ({ top: docTop - scroll, bottom: docTop - scroll + 200, height: 200 }),
+    });
+    const figureBlock = (docTop, height) => ({
+      tagName: 'figure',
+      innerText: '', textContent: '',
+      getBoundingClientRect: () => ({ top: docTop - scroll, bottom: docTop - scroll + height, height }),
+    });
+    const doc = { querySelectorAll: () => [textBlock(250), figureBlock(500, 300), textBlock(900)] };
+    const t = createParagraphTracker({ document: doc, viewportHeight: () => 800, now: clock.now });
+
+    t.update();                          // line 320: paragraph (250-450) straddles
+    expect(t.getActive().index).toBe(0);
+
+    clock.advance(9000);
+    scroll = 250;                        // paragraph -> 0-200; figure -> 250-550, straddles 320
+    const toFigure = t.update();
+    expect(toFigure.left.index).toBe(0);
+    expect(toFigure.left.dwellMs).toBe(9000);   // bounded at the figure, not inflated by it
+    expect(toFigure.entered.index).toBe(1);
+    expect(toFigure.entered.media).toBe(true);
+
+    clock.advance(4000);
+    scroll = 700;                        // figure -> -200..100; next paragraph -> 200-400, straddles 320
+    const toNext = t.update();
+    expect(toNext.left.index).toBe(1);
+    expect(toNext.left.media).toBe(true);
+    expect(toNext.left.dwellMs).toBe(4000);     // the figure's own dwell, not folded into either paragraph
+    expect(toNext.entered.index).toBe(2);
+    expect(toNext.entered.media).toBe(false);
+  });
 });
 
 describe('scroll-regression', () => {
