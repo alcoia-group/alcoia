@@ -137,6 +137,12 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   const installToken = installTokenModule.createInstallTokenManager({
     tokenUrl: self.ALCOIA_CONFIG.TOKEN_URL,
   });
+  // Every failure here already degrades to silence for the reader
+  // (invariant 9) — this only makes that silence inspectable afterward, on
+  // the diagnostics page. Never fed passage text, a URL or a page title;
+  // see diag-log.js's own header for why.
+  const diagLogModule = await loadModule('src/shared/diag-log.js');
+  const diagLog = diagLogModule.createDiagLog();
   // Same origin as wherever the AI call is actually going — a developer who
   // pointed the popup's Backend URL setting at a local server gets their
   // token from that same server, not the shipped default.
@@ -151,15 +157,20 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   // "nothing to show", so no separate error UI is needed on top of this.
   async function callBackend(action, url, body) {
     const token = await installToken.getToken(tokenUrl());
-    if (!token) return { ok: false, error: 'no_install_token' };
+    if (!token) { diagLog.log(action, 'no_install_token'); return { ok: false, error: 'no_install_token' }; }
     return await new Promise((resolve) => {
       try {
         chrome.runtime.sendMessage({ action, url, body, token }, (resp) => {
-          if (chrome.runtime.lastError || !resp) { resolve({ ok: false, error: 'no_response' }); return; }
-          if (resp.tokenRejected) { installToken.invalidate(); }
+          if (chrome.runtime.lastError || !resp) { diagLog.log(action, 'no_response'); resolve({ ok: false, error: 'no_response' }); return; }
+          if (resp.tokenRejected) {
+            installToken.invalidate();
+            diagLog.log(action, `token_rejected_${resp.status}`);
+          } else if (!resp.ok) {
+            diagLog.log(action, resp.error || `status_${resp.status}`);
+          }
           resolve(resp);
         });
-      } catch (e) { resolve({ ok: false, error: String(e && e.message || e) }); }
+      } catch (e) { diagLog.log(action, String(e && e.message || e)); resolve({ ok: false, error: String(e && e.message || e) }); }
     });
   }
 
