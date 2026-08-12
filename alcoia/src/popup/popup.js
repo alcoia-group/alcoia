@@ -272,13 +272,11 @@ document.addEventListener('DOMContentLoaded', () => {
    * the stated reason rather than a silent no-op below threshold. */
   const quizBtn = $('quizBtn');
   const quizGateNote = $('quizGateNote');
-  let quizKey = null;
 
   function refreshQuizGate() {
     sendToTab({ action: 'checkQuizCoverage' }, (resp, err) => {
       if (!quizBtn || !quizGateNote) return;
       const ready = !err && resp && resp.ready === true;
-      quizKey = (!err && resp && resp.key) || null;
       quizBtn.disabled = !ready;
       quizGateNote.textContent = (!err && resp && resp.reason)
         || 'not enough reading tracked on this page yet';
@@ -286,12 +284,22 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   refreshQuizGate();
 
+  // Generation (selecting passages, the one server call) happens in
+  // content.js via runQuiz(), reached here through the startQuiz message —
+  // not a direct chrome.tabs.create — because content.js is what opens the
+  // quiz tab once a quiz actually exists to show, and popup.js has no
+  // passage data of its own to hand it.
   quizBtn?.addEventListener('click', () => {
     if (quizBtn.disabled) return;
-    const url = chrome.runtime.getURL('src/popup/quiz.html') +
-      (quizKey ? '?key=' + encodeURIComponent(quizKey) : '');
-    chrome.tabs.create({ url });
-    window.close();
+    const idle = quizBtn.textContent;
+    quizBtn.disabled = true;
+    quizBtn.textContent = 'Preparing…';
+    sendToTab({ action: 'startQuiz' }, (resp, err) => {
+      if (!err && resp && resp.started) { window.close(); return; }
+      quizBtn.disabled = false;
+      quizBtn.textContent = idle;
+      if (quizGateNote) quizGateNote.textContent = "Couldn't prepare a quiz right now — try again in a moment.";
+    });
   });
 
   // ── Reading speed ──────────────────────────────────────────────────────

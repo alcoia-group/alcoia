@@ -100,8 +100,17 @@ const server = http.createServer((req, res) => {
         return;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
+      // A quiz (item 17) asks for count >= 5 in one call — the mock returns
+      // that many so the happy path can be exercised for real, rather than
+      // always answering with the single CANNED_QUESTION every other
+      // (count: 1) caller in this file expects.
+      let requestedCount = 1;
+      try { requestedCount = Number(JSON.parse(body || '{}').count) || 1; } catch (e) {}
+      const questions = requestedCount >= 5
+        ? Array.from({ length: requestedCount }, (_, i) => ({ ...CANNED_QUESTION, q: `${CANNED_QUESTION.q} (${i + 1})` }))
+        : [CANNED_QUESTION];
       res.end(JSON.stringify(isQuestions
-        ? { questions: [CANNED_QUESTION], cached: false }
+        ? { questions, cached: false }
         : { summary: 'A canned explanation for the smoke test.' }));
     });
     return;
@@ -426,6 +435,90 @@ await page.waitForTimeout(500);
 const offerStaysDismissed = await page.evaluate(() =>
   !document.querySelector('.sra-quiz-start-btn'));
 
+// Item 17: the quiz page. session-recall.js needs at least one paragraph to
+// individually clear its own MIN_DWELL_MS (4s) before select() returns
+// anything — the reading simulated earlier spreads ~1.2s per paragraph, so a
+// dedicated dwell is needed here rather than assuming the earlier scroll
+// already produced a candidate.
+let quizResult = { attempted: false };
+if (!FAIL_QUESTIONS && !FAIL_TOKEN) {
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(300);
+  await page.mouse.wheel(0, 260); // settle on one paragraph
+  await page.waitForTimeout(4500); // clears session-recall's MIN_DWELL_MS
+  await page.mouse.wheel(0, 260); // leave it — this is what records the dwell
+
+  // sendToArticleTab() below opens its own short-lived helper page to send
+  // the message, which ALSO fires the context's 'page' event — collecting
+  // every new page and filtering by URL avoids grabbing that helper instead
+  // of the real quiz tab background.js opens once runQuiz() finishes.
+  const newPages = [];
+  const onNewPage = (p) => newPages.push(p);
+  ctx.on('page', onNewPage);
+  const startQuiz = await sendToArticleTab({ action: 'startQuiz' });
+  let quizPage = null;
+  if (startQuiz?.started) {
+    for (let i = 0; i < 20 && !quizPage; i++) {
+      await page.waitForTimeout(200);
+      quizPage = newPages.find((p) => p.url().includes('quiz.html')) || null;
+    }
+  }
+  ctx.off('page', onNewPage);
+
+  if (quizPage) {
+    const quizPageErrors = [];
+    quizPage.on('pageerror', (e) => quizPageErrors.push(String(e)));
+    await quizPage.waitForLoadState('load');
+    await quizPage.waitForTimeout(500);
+    const answers = [];
+    for (let i = 0; i < 10; i++) { // bounded loop — a real quiz is 5-8 questions
+      const state = await quizPage.evaluate(() => ({
+        hasQuestion: !!document.querySelector('.sra-q-option'),
+        hasResults: !!document.getElementById('deleteThisBtn'),
+      }));
+      if (state.hasResults) break;
+      if (!state.hasQuestion) break;
+      await quizPage.evaluate(() => document.querySelector('.sra-q-option[data-index="0"]').click());
+      await quizPage.evaluate(() => document.querySelector('.sra-q-conf-skip')?.click());
+      await quizPage.waitForTimeout(150);
+      const graded = await quizPage.evaluate(() => !!document.querySelector('.sra-q-result'));
+      answers.push(graded);
+      await quizPage.evaluate(() => {
+        const next = [...document.querySelectorAll('button')].find((b) => /Next question|See results/.test(b.textContent));
+        next?.click();
+      });
+      await quizPage.waitForTimeout(200);
+    }
+    const resultsShown = await quizPage.evaluate(() => ({
+      tally: document.querySelector('.results-tally')?.textContent || null,
+      rowCount: document.querySelectorAll('.result-row').length,
+    }));
+
+    // Deletion must actually delete (the project notes) — confirmed by reopening the
+    // same document's quiz URL and checking nothing resumes.
+    await quizPage.evaluate(() => document.getElementById('deleteThisBtn')?.click());
+    await quizPage.waitForTimeout(200);
+    const emptyAfterDelete = await quizPage.evaluate(() => document.querySelector('.empty-state')?.textContent || null);
+    await quizPage.reload();
+    await quizPage.waitForTimeout(500);
+    const emptyAfterReload = await quizPage.evaluate(() => document.querySelector('.empty-state')?.textContent || null);
+
+    quizResult = {
+      attempted: true,
+      started: true,
+      questionsAnswered: answers.length,
+      allGraded: answers.length > 0 && answers.every(Boolean),
+      resultsShown,
+      emptyAfterDelete,
+      deletionPersisted: !!emptyAfterReload,
+      newErrorsDuringQuiz: quizPageErrors.length,
+    };
+    await quizPage.close();
+  } else {
+    quizResult = { attempted: true, started: false, note: 'runQuiz() declined — see reason below' };
+  }
+}
+
 const failureDegrade = FAIL_QUESTIONS ? {
   questionsEndpointCalled: apiHits.questions > 0,
   noQuestionCardShown: !questionCard.shown,
@@ -504,6 +597,7 @@ console.log('quiz gate (popup path)  :', JSON.stringify(quizGateBelowThreshold),
 console.log('recallBtn/receiptBtn msg:', JSON.stringify(recallStatsCheck), '(expect status:"ok" — was silently broken pre-fix)');
 console.log('quiz offer card         :', JSON.stringify(offerShown));
 console.log('  gone after dismiss    :', offerGoneAfterDismiss, ' stays dismissed on rescroll:', offerStaysDismissed);
+console.log('quiz page (item 17)     :', JSON.stringify(quizResult));
 if (failureDegrade) console.log('questions-endpoint fail :', JSON.stringify(failureDegrade), '(expect all true)');
 console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
 console.log('  new page errors       :', shortcuts.newPageErrors);
