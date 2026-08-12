@@ -127,3 +127,37 @@ describe('backend origin configuration', () => {
     expect(popupHtml.indexOf('shared/config.js')).toBeLessThan(popupHtml.indexOf('popup.js"></script>'));
   });
 });
+
+/* Package hygiene: the shipped package used to carry no LICENSE at all, and
+ * all four icon sizes pointed at one PNG rescaled by the browser. Importing
+ * build.mjs above already ran the build as a side effect, so the dist output
+ * exists by the time these run. */
+describe('package hygiene', () => {
+  it('ships a LICENSE file in every target', () => {
+    for (const target of TARGETS) {
+      const p = path.join(ROOT, 'dist', target, 'LICENSE');
+      expect(fs.existsSync(p), `dist/${target}/LICENSE should exist`).toBe(true);
+      expect(fs.readFileSync(p, 'utf8').length).toBeGreaterThan(0);
+    }
+  });
+
+  it('points 16, 48 and 128 at three distinct icon files', () => {
+    for (const target of TARGETS) {
+      const m = buildManifest(target);
+      for (const iconSet of [m.icons, m.action.default_icon]) {
+        const files = new Set([iconSet['16'], iconSet['48'], iconSet['128']]);
+        expect(files.size, 'icons at 16/48/128 should not share one file').toBe(3);
+      }
+    }
+  });
+
+  it('ships the icon files it declares', () => {
+    for (const target of TARGETS) {
+      const m = buildManifest(target);
+      for (const rel of Object.values(m.icons)) {
+        const p = path.join(ROOT, 'dist', target, rel);
+        expect(fs.existsSync(p), `dist/${target}/${rel} should exist`).toBe(true);
+      }
+    }
+  });
+});
