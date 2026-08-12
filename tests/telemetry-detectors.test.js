@@ -1,8 +1,10 @@
-import { describe, it, expect } from 'vitest';
+// @vitest-environment jsdom
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createParagraphTracker } from '../alcoia/src/content/telemetry/paragraph-tracker.js';
 import { createScrollRegressionDetector, FAST_RETURN_MS, SLOW_RETURN_MS } from '../alcoia/src/content/telemetry/scroll-regression.js';
 import { createInteractionSignals, LONG_BLUR_MS } from '../alcoia/src/content/telemetry/interaction-signals.js';
 import { createScrollDynamics } from '../alcoia/src/content/telemetry/scroll-dynamics.js';
+import { createComprehensionMonitor } from '../alcoia/src/content/comprehension-monitor.js';
 
 function fixedClock(start = 1_000_000) {
   let t = start;
@@ -132,6 +134,163 @@ describe('paragraph-tracker', () => {
     expect(toNext.left.dwellMs).toBe(4000);     // the figure's own dwell, not folded into either paragraph
     expect(toNext.entered.index).toBe(2);
     expect(toNext.entered.media).toBe(false);
+  });
+});
+
+/* Integration: paragraph-tracker feeding comprehension-monitor the way
+ * orchestrator.js's syncParagraph() actually does — leaveParagraph() runs on
+ * every exit, but enterParagraph() is skipped when the entered block carries
+ * media: true. That skip is the fix; these tests exercise it end to end
+ * rather than only checking the tracker's own dwellMs bookkeeping. */
+describe('media dwell attribution end to end (paragraph-tracker + comprehension-monitor)', () => {
+  function fakeChromeStorage() {
+    const store = {};
+    return {
+      storage: {
+        local: {
+          get(keys, cb) {
+            const result = {};
+            for (const [k, def] of Object.entries(keys || {})) result[k] = k in store ? store[k] : def;
+            cb(result);
+          },
+          set(obj, cb) { Object.assign(store, obj); if (cb) cb(); },
+        },
+      },
+    };
+  }
+
+  const EASY = (n) => {
+    const s = 'The cat sat on the mat and looked at the dog. ';
+    return s.repeat(Math.ceil(n / 10)).trim();
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0));
+    document.documentElement.lang = 'en';
+    globalThis.chrome = fakeChromeStorage();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete globalThis.chrome;
+  });
+
+  /* Mirrors orchestrator.js's syncParagraph(): unconditional leaveParagraph()
+   * on exit, enterParagraph() skipped for a media entry. */
+  function syncParagraph(monitor, transition) {
+    let signal = null;
+    if (transition.left) signal = monitor.leaveParagraph();
+    if (transition.entered?.el && !transition.entered.media) monitor.enterParagraph(transition.entered.el);
+    return signal;
+  }
+
+  function textBlock(text, docTop, getScroll) {
+    return {
+      tagName: 'p', innerText: text, textContent: text,
+      getBoundingClientRect: () => ({ top: docTop - getScroll(), bottom: docTop - getScroll() + 200, height: 200 }),
+    };
+  }
+
+  function mediaBlock(tag, docTop, height, getScroll) {
+    return {
+      tagName: tag, innerText: '', textContent: '',
+      getBoundingClientRect: () => ({ top: docTop - getScroll(), bottom: docTop - getScroll() + height, height }),
+    };
+  }
+
+  function warmUpBaseline(monitor) {
+    // too_slow only fires once a personal baseline exists (hasSamples()); without
+    // one this test would pass trivially regardless of whether the fix works.
+    const warm = EASY(120);
+    for (let i = 0; i < 5; i++) {
+      monitor.enterParagraph({ innerText: warm, textContent: warm });
+      vi.advanceTimersByTime(25000);
+      monitor.leaveParagraph();
+    }
+    expect(monitor.getBaselineWpm()).toBeGreaterThan(0);
+  }
+
+  it.each([['figure'], ['pre']])(
+    'a long dwell on a %s between two paragraphs produces no too_slow signal against either neighbour',
+    (mediaTag) => {
+      const monitor = createComprehensionMonitor();
+      warmUpBaseline(monitor);
+
+      let scroll = 0;
+      const doc = {
+        querySelectorAll: () => [
+          textBlock(EASY(120), 250, () => scroll),
+          mediaBlock(mediaTag, 500, 300, () => scroll),
+          textBlock(EASY(120), 900, () => scroll),
+        ],
+      };
+      const tracker = createParagraphTracker({ document: doc, viewportHeight: () => 800 });
+
+      let t = tracker.update();                 // enters paragraph A
+      let sig = syncParagraph(monitor, t);
+      expect(sig).toBeNull();
+      expect(monitor.getCurrentExpectation()).not.toBeNull();   // A is being timed
+
+      vi.advanceTimersByTime(25000);             // A read at the warm-up pace — not slow
+      scroll = 250;                              // A -> 0-200; media -> 250-550, straddles 320
+      t = tracker.update();
+      sig = syncParagraph(monitor, t);
+      expect(sig).toBeNull();                    // A's own pace was normal
+      expect(t.entered.media).toBe(true);
+      expect(monitor.getCurrentExpectation()).toBeNull();       // the media block is not timed at all
+
+      // The reader studies the figure/code block for far longer than any text
+      // paragraph this size would take. Under the old code this dwell either
+      // fell through to whichever text paragraph was nearest, or kept accruing
+      // to A — either way it was enough to trip too_slow. Here nothing is
+      // timing it, so it cannot produce a signal against anything.
+      vi.advanceTimersByTime(60000);
+      scroll = 700;                              // media -> -200..100; C -> 200-400, straddles 320
+      t = tracker.update();
+      sig = syncParagraph(monitor, t);
+      expect(sig).toBeNull();                    // nothing was ever entered for the media block
+      expect(t.entered.media).toBe(false);
+      expect(monitor.getCurrentExpectation()).not.toBeNull();   // C starts its own fresh timing
+
+      vi.advanceTimersByTime(25000);             // C read at the same normal pace as A
+      scroll = 5000;                             // scrolls everything far past the reading line
+      t = tracker.update();
+      sig = syncParagraph(monitor, t);
+      expect(sig).toBeNull();                    // C's dwell is untouched by the 60s spent on the media block
+    },
+  );
+
+  it('does not suppress a genuine too_slow signal on ordinary text — the skip is targeted at media, not blanket', () => {
+    const monitor = createComprehensionMonitor();
+    warmUpBaseline(monitor);
+
+    let scroll = 0;
+    const doc = {
+      querySelectorAll: () => [
+        textBlock(EASY(120), 250, () => scroll),
+        textBlock(EASY(120), 500, () => scroll),
+        textBlock(EASY(120), 900, () => scroll),
+      ],
+    };
+    const tracker = createParagraphTracker({ document: doc, viewportHeight: () => 800 });
+
+    let t = tracker.update();                    // enters paragraph A
+    syncParagraph(monitor, t);
+
+    vi.advanceTimersByTime(25000);                // A at the normal warm-up pace
+    scroll = 250;
+    t = tracker.update();
+    expect(syncParagraph(monitor, t)).toBeNull();
+    expect(t.entered.media).toBe(false);
+
+    vi.advanceTimersByTime(25000 * 4);            // B read at a quarter of the established pace
+    scroll = 700;
+    t = tracker.update();
+    const sig = syncParagraph(monitor, t);
+    expect(sig).not.toBeNull();
+    expect(sig.type).toBe('speed_mismatch');
+    expect(sig.subtype).toBe('too_slow');
   });
 });
 
