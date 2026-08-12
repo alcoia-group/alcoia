@@ -15,7 +15,28 @@
 
 import { countWords, detectLanguage, readingAxis } from './segmentation.js';
 
-const BLOCK_SELECTOR = 'p, li, blockquote';
+const TEXT_SELECTOR = 'p, li, blockquote';
+
+/* Figures, tables, code blocks and bare images used to be invisible to this
+ * tracker — not in BLOCK_SELECTOR, so never a candidate for the reading line.
+ * A reader who stopped to study one didn't get their own dwell bucket; the
+ * time landed on whichever text paragraph was nearest, inflating that
+ * paragraph's elapsed reading time and making a reader studying a chart
+ * register as "slow on easy text". Tracking them as candidates — with no
+ * word-count floor, since most have little or no text — fixes the boundary;
+ * `media: true` on the entry is what tells the caller not to run pace maths
+ * against something that was never prose. `img`/`svg`/`canvas` already
+ * wrapped in a tracked `figure` are excluded so a captioned image isn't
+ * counted twice. */
+const MEDIA_SELECTOR =
+  'figure, table, pre, img:not(figure img), svg:not(figure svg), canvas:not(figure canvas)';
+const BLOCK_SELECTOR = `${TEXT_SELECTOR}, ${MEDIA_SELECTOR}`;
+
+function isMediaEl(el) {
+  const tag = (el.tagName || el.nodeName || '').toLowerCase();
+  return tag === 'figure' || tag === 'table' || tag === 'pre'
+    || tag === 'img' || tag === 'svg' || tag === 'canvas';
+}
 
 /* Fraction of viewport height treated as the reading line. Slightly above
  * centre: readers sit ahead of the middle rather than on it. */
@@ -54,9 +75,10 @@ export function createParagraphTracker(opts = {}) {
     const found = [];
     let i = 0;
     for (const el of doc.querySelectorAll(BLOCK_SELECTOR)) {
-      const words = wordCount(el);
-      if (words < minWords) continue;
-      const entry = { el, index: i++, words };
+      const media = isMediaEl(el);
+      const words = media ? 0 : wordCount(el);
+      if (!media && words < minWords) continue;
+      const entry = { el, index: i++, words, media };
       found.push(entry);
       indexOf.set(el, entry.index);
     }
@@ -108,15 +130,15 @@ export function createParagraphTracker(opts = {}) {
 
     const t = now();
     const left = active
-      ? { el: active.el, index: active.index, words: active.words, dwellMs: t - active.enteredAt }
+      ? { el: active.el, index: active.index, words: active.words, media: active.media, dwellMs: t - active.enteredAt }
       : null;
 
-    active = next ? { el: next.el, index: next.index, words: next.words, enteredAt: t } : null;
+    active = next ? { el: next.el, index: next.index, words: next.words, media: next.media, enteredAt: t } : null;
 
     const transition = {
       type: 'paragraph_change',
       left,
-      entered: active ? { el: active.el, index: active.index, words: active.words } : null,
+      entered: active ? { el: active.el, index: active.index, words: active.words, media: active.media } : null,
       at: t,
     };
     pending = transition;
