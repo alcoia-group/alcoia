@@ -39,6 +39,39 @@ describe('response-signals', () => {
     expect(rec.subtype).toBe('incorrect');
   });
 
+  /* Confidence is captured at commit time, alongside the answer — see
+   * the project notes' confidence-calibration shape. Skippable: an omitted rating
+   * must resolve to null, never to a guessed 'low' or 'high'. */
+  describe('commit-time confidence', () => {
+    it.each(['low', 'high'])('records a valid %s rating', (level) => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present(QUESTION);
+      expect(r.answer(0, QUESTION, level).confidence).toBe(level);
+    });
+
+    it('defaults to null when the reader skips rating it', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present(QUESTION);
+      expect(r.answer(0, QUESTION).confidence).toBeNull();
+    });
+
+    it('normalizes anything that is not exactly low/high to null, never a guess', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      for (const bogus of [undefined, null, '', 'medium', 'HIGH', 3]) {
+        r.present(QUESTION);
+        expect(r.answer(0, QUESTION, bogus).confidence).toBeNull();
+      }
+    });
+
+    it('is independent of correctness — recorded the same way whether right or wrong', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present(QUESTION);
+      expect(r.answer(0, QUESTION, 'high').confidence).toBe('high'); // correct
+      r.present(QUESTION);
+      expect(r.answer(2, QUESTION, 'high').confidence).toBe('high'); // wrong
+    });
+  });
+
   it('flags an answer that took a long time without treating it as wrong', () => {
     const clock = fixedClock();
     const r = createResponseSignals({ now: clock.now, slowAnswerMs: 10000 });
@@ -74,6 +107,27 @@ describe('response-signals', () => {
     const r = createResponseSignals({ now: fixedClock().now });
     expect(r.answer(0, QUESTION)).toBeNull();
     expect(r.dismiss()).toBeNull();
+  });
+
+  it('tags an exploration-sample record so it stays identifiable downstream', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { paragraphKey: 'p1', wasExplorationSample: true });
+    const rec = r.answer(0, QUESTION);
+    expect(rec.wasExplorationSample).toBe(true);
+  });
+
+  it('defaults wasExplorationSample to false for an ordinary ask', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION);
+    const rec = r.answer(0, QUESTION);
+    expect(rec.wasExplorationSample).toBe(false);
+  });
+
+  it('carries the exploration tag through a dismissal too', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { wasExplorationSample: true });
+    const rec = r.dismiss();
+    expect(rec.wasExplorationSample).toBe(true);
   });
 
   it('reports session stats for the receipt', () => {
@@ -125,7 +179,10 @@ describe('responses outrank telemetry in the engine', () => {
 
   it('a correct answer earns no interruption', () => {
     const engine = createReadingStateEngine();
-    const policy = createInterventionPolicy();
+    // random: () => 1 disables exploration sampling for this assertion — the
+    // question here is whether a correct answer's resulting on_pace state
+    // earns an interruption on its own merits, not a probabilistic one.
+    const policy = createInterventionPolicy({ random: () => 1 });
     const s = engine.update({ telemetry: { type: 'response', subtype: 'correct', correct: true } });
     expect(policy.evaluate(s).allow).toBe(false);
   });

@@ -2,7 +2,8 @@
   PPTX Handler (ES module)
   - Attempts to parse a .pptx file when URL indicates one or when a link/iframe exists
   - Uses JSZip (from CDN) if available to read slide xml and extract text
-  - Creates lightweight overlay divs for text boxes so gaze mapping can work
+  - Creates lightweight overlay divs for text boxes, positioned so
+    findParagraphAt(x, y) below can hit-test a click against one
 
   Notes: PPTX support is best-effort. Many viewers transform or rasterize slides; overlay will be used when raw pptx is available.
 

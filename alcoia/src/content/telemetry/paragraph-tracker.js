@@ -153,6 +153,10 @@ export function createParagraphTracker(opts = {}) {
     rescan: scan,
     getActive: () => (active ? { ...active } : null),
     getIndex: (el) => (el && indexOf.has(el) ? indexOf.get(el) : null),
-    count: () => paragraphs.length,
+    // Default keeps counting every tracked candidate, media included — the
+    // reading-line heuristic needs that to find a figure at all. Coverage
+    // maths (coverage-gate.js) wants only the paragraphs that were ever
+    // prose, since a media landmark can never itself be "read".
+    count: (opts = {}) => (opts.excludeMedia ? paragraphs.filter((p) => !p.media).length : paragraphs.length),
   };
 }
