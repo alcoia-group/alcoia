@@ -63,18 +63,24 @@ export default [
     },
   },
 
-  // The page-world bootstrap runs as a classic script, not a module.
+  // The local-file PDF/PPTX viewer pages (src/pdf-viewer, src/pptx-viewer) load
+  // pdf.js/JSZip via an injected <script> tag rather than import — the same
+  // reason background.js declares `webgazer` above: the identifier is real in
+  // that page's global scope, just not one this linter can see from the file
+  // alone. Classic scripts, not modules — no import/export in either.
   {
-    files: ['alcoia/src/content/webgazer-bootstrap.js', 'alcoia/src/content/sra-page-bridge.js'],
-    languageOptions: {
-      sourceType: 'script',
-      globals: { ...browserExtension, webgazer: 'readonly' },
-    },
+    files: ['alcoia/src/pdf-viewer/viewer.js'],
+    languageOptions: { sourceType: 'script', globals: { ...browserExtension, pdfjsLib: 'readonly' } },
+  },
+  {
+    files: ['alcoia/src/pptx-viewer/viewer.js'],
+    languageOptions: { sourceType: 'script', globals: { ...browserExtension, JSZip: 'readonly' } },
   },
 
-  // Server is Node.
+  // Vendored CommonJS snapshots of the (now separate-repo) server's pure
+  // modules — see tests/contract/*.js for why these exist here at all.
   {
-    files: ['alcoia/server/**/*.js'],
+    files: ['tests/contract/**/*.js'],
     languageOptions: {
       sourceType: 'commonjs',
       globals: globals.node,

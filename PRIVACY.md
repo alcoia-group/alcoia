@@ -39,6 +39,14 @@ before it goes into a published policy — treat these as leads, not findings:**
   invariant in `the project notes` and should be verifiable by a reader from the network panel.
 - Confirm what, if anything, the backend logs — including whether paragraph text appears
   in request logs, and for how long.
+- **New as of the quiz feature:** `chrome.storage.local` also now briefly holds selected
+  paragraph text (`sra_quiz_pending`) for the one call to generate a quiz's questions, cleared
+  once the quiz page reads it. The quiz record itself, in IndexedDB, holds only the generated
+  questions (including each one's `span` — a single verbatim sentence cited as the answer's
+  evidence, not the paragraph it came from), the reader's chosen answers, and their confidence
+  ratings — no paragraph text, no page title, no URL beyond a hostname+pathname key. Confirm
+  this against the actual code (`src/content/quiz-store.js`, `src/content/content.js`'s
+  `runQuiz()`) before it goes in a published policy, same as every other line here.
 
 ## 3. What is not collected
 

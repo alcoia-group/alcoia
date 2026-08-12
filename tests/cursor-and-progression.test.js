@@ -56,6 +56,20 @@ describe('cursor-tracking', () => {
     clock.advance(100);
     expect(c.update(300, 200, clock.now())).toBeNull();
   });
+
+  /* Pins the resolution of the cursor_reading defect (the project notes, Known
+   * defects): this module used to also emit a `type: 'cursor_reading'`
+   * object via signal(), meant to reach state-engine.js as a corroborating
+   * signal — but nothing ever wired state-engine.js's CORROBORATION table
+   * for it and orchestrator.js never called signal() to drain it, so the
+   * object was produced and then silently discarded. That emission path is
+   * deleted outright rather than wired up retroactively; this is the only
+   * surface the module has now. */
+  it('has no signal() or other engine-emission surface', () => {
+    const c = createCursorTracker();
+    expect(c.signal).toBeUndefined();
+    expect(Object.keys(c).sort()).toEqual(['getPointerY', 'isTracking', 'reset', 'update']);
+  });
 });
 
 describe('progression-entropy', () => {
