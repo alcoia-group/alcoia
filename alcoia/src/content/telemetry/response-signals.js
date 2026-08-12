@@ -32,6 +32,10 @@ export function createResponseSignals(opts = {}) {
       askedAt: now(),
       revisions: 0,
       scrolledBack: false,
+      // Tags the resulting record only — never transmitted. See the project notes,
+      // exploration sampling: labels not conditioned on the detector's own
+      // decision are the point, so they must stay identifiable downstream.
+      wasExplorationSample: context.wasExplorationSample === true,
     };
     return asked;
   }
@@ -64,6 +68,7 @@ export function createResponseSignals(opts = {}) {
       scrolledBack: asked.scrolledBack,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      wasExplorationSample: asked.wasExplorationSample,
     };
 
     history.push(record);
@@ -85,6 +90,7 @@ export function createResponseSignals(opts = {}) {
       latencyMs: now() - asked.askedAt,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      wasExplorationSample: asked.wasExplorationSample,
     };
     history.push(record);
     pending = record;

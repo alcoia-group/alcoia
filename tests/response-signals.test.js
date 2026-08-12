@@ -76,6 +76,27 @@ describe('response-signals', () => {
     expect(r.dismiss()).toBeNull();
   });
 
+  it('tags an exploration-sample record so it stays identifiable downstream', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { paragraphKey: 'p1', wasExplorationSample: true });
+    const rec = r.answer(0, QUESTION);
+    expect(rec.wasExplorationSample).toBe(true);
+  });
+
+  it('defaults wasExplorationSample to false for an ordinary ask', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION);
+    const rec = r.answer(0, QUESTION);
+    expect(rec.wasExplorationSample).toBe(false);
+  });
+
+  it('carries the exploration tag through a dismissal too', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { wasExplorationSample: true });
+    const rec = r.dismiss();
+    expect(rec.wasExplorationSample).toBe(true);
+  });
+
   it('reports session stats for the receipt', () => {
     const clock = fixedClock();
     const r = createResponseSignals({ now: clock.now });
