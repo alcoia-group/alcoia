@@ -43,6 +43,18 @@ export const DEFAULT_BUDGET = Object.freeze({
   skimmingGrades:    ['difficult', 'very_difficult'],
 });
 
+/* Every label collected so far comes from a paragraph the state machine
+ * already flagged, so a model trained on it can only learn to reproduce
+ * today's thresholds — including their errors. Asking anyway on a slice of
+ * paragraphs the detector would have left alone is the only way to collect
+ * labels that are not conditioned on the detector's own decision, and data
+ * collected before this exists is permanently unusable for that purpose.
+ *
+ * 10-15%: high enough that a session produces a usable number of exploration
+ * labels, low enough that it doesn't turn the product into a quiz app for
+ * readers who are doing fine. 0.125 is the midpoint of that band. */
+export const EXPLORATION_SAMPLE_RATE = 0.125;
+
 function paragraphKey(state, fallbackEl) {
   const el = (state.signal && state.signal.el) || fallbackEl || null;
   const text = (state.signal && state.signal.text) ||
@@ -51,24 +63,43 @@ function paragraphKey(state, fallbackEl) {
 }
 
 export function createInterventionPolicy(config = {}) {
-  const budget = { ...DEFAULT_BUDGET, ...(config.budget || {}) };
-  const now    = config.now || (() => Date.now());
+  const budget         = { ...DEFAULT_BUDGET, ...(config.budget || {}) };
+  const now            = config.now || (() => Date.now());
+  // Injectable so the sampling rate is assertable under a deterministic RNG.
+  const random         = config.random || Math.random;
+  const explorationRate = config.explorationRate ?? EXPLORATION_SAMPLE_RATE;
 
   let lastAt = 0;
   let count  = 0;
   const seenParagraphs = new Set();
 
-  /* Returns { allow, action, reason, evidence, paragraphKey }.
+  /* Returns { allow, action, reason, evidence, paragraphKey, wasExplorationSample }.
    * `reason` is always populated, including on refusal — it is the only way
    * to debug why an interruption did or didn't happen. */
   function evaluate(state, ctx = {}) {
-    const deny = (reason) => ({ allow: false, action: 'none', reason, evidence: [], paragraphKey: null });
+    const deny = (reason) =>
+      ({ allow: false, action: 'none', reason, evidence: [], paragraphKey: null, wasExplorationSample: false });
 
     if (!state || !state.label) return deny('no state');
     if (state.label === STATES.UNKNOWN) return deny('state is unknown');
 
-    const action = STATE_ACTIONS[state.label] || 'none';
-    if (action === 'none') return deny(`no action for ${state.label}`);
+    let action = STATE_ACTIONS[state.label] || 'none';
+    let wasExplorationSample = false;
+
+    if (action === 'none') {
+      /* Exploration bypasses only this test — the state-to-action table —
+       * never the checks below it. Drifting and absent readers are excluded
+       * outright: neither is reading the paragraph in front of them, and
+       * invariant 8 forbids testing someone who did not read, regardless of
+       * what exploration wants to learn. */
+      const explorationEligible = state.label !== STATES.DRIFTING && state.label !== STATES.ABSENT;
+      if (explorationEligible && random() < explorationRate) {
+        action = 'ask';
+        wasExplorationSample = true;
+      } else {
+        return deny(`no action for ${state.label}`);
+      }
+    }
 
     if (state.confidence < budget.minConfidence) {
       return deny(`confidence ${state.confidence.toFixed(2)} below ${budget.minConfidence}`);
@@ -98,11 +129,14 @@ export function createInterventionPolicy(config = {}) {
     return {
       allow: true,
       action,
-      reason: `${state.label} at ${state.confidence.toFixed(2)}`,
+      reason: wasExplorationSample
+        ? `exploration sample on ${state.label}`
+        : `${state.label} at ${state.confidence.toFixed(2)}`,
       // Evidence goes in front of the reader. An interruption that cannot say
       // what it noticed should not be shown.
       evidence: state.evidence || [],
       paragraphKey: key,
+      wasExplorationSample,
     };
   }
 
