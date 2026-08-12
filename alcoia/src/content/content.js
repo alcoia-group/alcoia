@@ -1382,10 +1382,10 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   async function detectAndInitHandlers() {
     const url = window.location.href;
     if (/\.pdf($|[?#])/i.test(url) || document.querySelector('embed[type="application/pdf"]')) {
-      try { const m = await loadModule('src/content/pdf-handler.js'); pdfHandler = await m.initPDFHandler({backendUrl,fetchSummary,renderPopup}); } catch(e) {_warn('PDF:',e);}
+      try { const m = await loadModule('src/content/pdf-handler.js'); pdfHandler = await m.initPDFHandler(); } catch(e) {_warn('PDF:',e);}
     }
     if (/\.pptx($|[?#])/i.test(url) || document.querySelector('a[href$=".pptx"]')) {
-      try { const m = await loadModule('src/content/pptx-handler.js'); pptxHandler = await m.initPPTXHandler({backendUrl,fetchSummary,renderPopup}); } catch(e) {_warn('PPTX:',e);}
+      try { const m = await loadModule('src/content/pptx-handler.js'); pptxHandler = await m.initPPTXHandler(); } catch(e) {_warn('PPTX:',e);}
     }
   }
 

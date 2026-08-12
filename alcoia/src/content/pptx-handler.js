@@ -5,10 +5,18 @@
   - Creates lightweight overlay divs for text boxes so gaze mapping can work
 
   Notes: PPTX support is best-effort. Many viewers transform or rasterize slides; overlay will be used when raw pptx is available.
+
+  This module only locates and extracts text — it never calls a backend or
+  renders anything. Fetching a summary and showing a popup for the extracted
+  text is content.js's job (triggerAIForParagraph), the same as it is for an
+  ordinary DOM paragraph. It used to accept backendUrl/fetchSummary/renderPopup
+  and never call any of them — the project notes flagged the unused-var warnings this
+  left behind. Removed rather than wired up: inventing what this module would
+  do with its own fetch/render path, duplicate of content.js's, is a design
+  decision nobody made, not a bug fix.
 */
 
-export async function initPPTXHandler(opts = {}) {
-  const { backendUrl, fetchSummary, renderPopup } = opts;
+export async function initPPTXHandler() {
   let overlays = [];
   let parsed = false;
 
@@ -62,10 +70,8 @@ export async function initPPTXHandler(opts = {}) {
   async function findParagraphAt(clientX, clientY) {
     await ensureParsed();
     for (const o of overlays) {
-      // re-measure overlay rect before deciding
-      const nodes = document.getElementsByClassName('sra-pptx-box');
-      for (const n of nodes) { const r = n.getBoundingClientRect(); /* update overlays that match by content */ }
-      const r = o.rect; if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) return o;
+      const r = o.rect;
+      if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) return o;
     }
     return null;
   }
