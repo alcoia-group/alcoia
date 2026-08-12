@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildReceipt, hashUrl, auditReceipt, receiptIsSubstantive, canonicalise, RECEIPT_VERSION,
 } from '../alcoia/src/content/receipt.js';
-import Sig from '../alcoia/server/receipt-signing.js';
+import Sig from './contract/receipt-signing.js';
 
 const SOURCES = {
   session: { startedAt: 1_700_000_000_000, durationMs: 600_000 },

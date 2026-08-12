@@ -3,14 +3,17 @@
 ## Scope of the AGPL-3.0 grant
 
 `LICENSE` (AGPL-3.0) covers the alcoia **browser extension client** — everything under
-`alcoia/` except `alcoia/server/` and `alcoia/src/libs/` — plus the training material under
-`tldr classifier/`.
+`alcoia/` except `alcoia/src/libs/` — plus the training material under `tldr classifier/`.
 
-Two carve-outs:
+`alcoia/server/` has moved out of this repository entirely, to a separate private repo. It was
+never covered by this grant while it was here (proprietary, and this repo's LICENSE only ever
+applied to the client). See "Still open" below for what removing it from the working tree does,
+and does not, do to git history.
+
+One remaining carve-out:
 
 | Path | Status |
 |---|---|
-| `alcoia/server/` | **Not covered by this grant.** Proprietary; scheduled to move to a separate private repository. Until that move happens, no licence is granted for it. |
 | `alcoia/src/libs/` | Third-party code under its own licence — see below. |
 
 ## Bundled third-party code
@@ -56,8 +59,8 @@ that it does not do that. `PRIVACY.md` §5 no longer needs to disclose it.
    pricing or incorporation.
 
 4. **The server is unaffected.** It is a separate program in a separate process
-   communicating over a network API. WebGazer's copyleft does not reach it, and keeping
-   it in a private repo is unaffected.
+   communicating over a network API. WebGazer's copyleft does not reach it, and its move to
+   a separate private repo is unaffected by anything in this file.
 
 5. **AGPL's network clause does almost nothing here.** An extension runs on the user's
    machine; they already receive the code, and nobody deploys an extension as a network
@@ -69,10 +72,16 @@ updates are not guaranteed.
 
 ## Still open
 
-1. **`server/` has not actually been moved yet.** The carve-out above is a statement of
-   intent recorded in the repository. The code is still present and still public in git
-   history. Removing it from the working tree does not remove it from history; a history
-   rewrite or a fresh repository is required if that matters.
+1. **`server/` has been removed from the working tree, not from history.** It no longer
+   exists anywhere under `alcoia/` in this repository as of the change that added this
+   note. Two pure, dependency-free modules from it (`questions.js`, `receipt-signing.js`)
+   were copied into `tests/contract/` as vendored fixtures so the client's assumptions
+   about the server's contract — the verbatim-span requirement, the receipt canonicalisation
+   format — stay under test; they are not shipped and are not the AGPL-covered client. The
+   original `server/` code, including the deleted Express app and `.env` handling, is still
+   present and still public in this repo's git history. Removing it from the working tree
+   does not remove it from history; a history rewrite or a fresh repository is still required
+   if that matters.
 
 2. **Exit path from WebGazer — logged, not scheduled.** Gaze is now demoted to presence and
    coarse region. A small MediaPipe FaceMesh implementation (Apache 2.0) would cover what

@@ -146,7 +146,10 @@ describe('responses outrank telemetry in the engine', () => {
 
   it('a correct answer earns no interruption', () => {
     const engine = createReadingStateEngine();
-    const policy = createInterventionPolicy();
+    // random: () => 1 disables exploration sampling for this assertion — the
+    // question here is whether a correct answer's resulting on_pace state
+    // earns an interruption on its own merits, not a probabilistic one.
+    const policy = createInterventionPolicy({ random: () => 1 });
     const s = engine.update({ telemetry: { type: 'response', subtype: 'correct', correct: true } });
     expect(policy.evaluate(s).allow).toBe(false);
   });

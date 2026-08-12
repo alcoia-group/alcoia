@@ -33,11 +33,13 @@ export const TARGETS = ['chrome', 'firefox'];
 
 /* Excluded from the shipped package.
  *
- * `server/` matters most: it lives inside alcoia/ for convenience but it is a
- * separate program, it is not covered by the AGPL grant, and it holds the
- * prompts and the .env. Zipping it into a store submission would publish all
- * three. */
-const EXCLUDE = new Set(['server', 'README.md', '.env', '.env.example', 'node_modules']);
+ * `server/` used to be the entry that mattered most here — it lived inside
+ * `alcoia/` for convenience but was a separate, un-AGPL-covered program that
+ * held prompts and a `.env`. It has since moved out entirely, to a separate
+ * private repo (see the project notes, "Migration in progress"), so there is nothing
+ * left under `alcoia/` for that entry to match. This set stays for whatever
+ * lands under `alcoia/` next that shouldn't ship. */
+const EXCLUDE = new Set(['README.md', '.env', '.env.example', 'node_modules']);
 
 export function buildManifest(target) {
   const base = JSON.parse(fs.readFileSync(path.join(MANIFESTS, 'base.json'), 'utf8'));

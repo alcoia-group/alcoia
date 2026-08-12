@@ -137,15 +137,15 @@ npm install          # tooling only; the extension itself ships unbundled
 
 Then load `alcoia/` as an unpacked extension at `chrome://extensions` with Developer mode on.
 
-The backend (question generation, explanations, receipt signing) lives in `alcoia/server/`. See
-[`alcoia/README.md`](alcoia/README.md) for the full setup, keyboard shortcuts and configuration
-reference.
+The backend (question generation, explanations, receipt signing) lives in a separate private
+repository — it is not part of this repo. See [`alcoia/README.md`](alcoia/README.md) for the
+extension's own setup, keyboard shortcuts and configuration reference.
 
 ## Verify
 
 ```bash
 npm run lint                    # ESLint — a defect linter, not a style linter
-npm test                        # 242 tests
+npm test                        # 280 tests
 npm run test:browser            # loads the extension in Chromium, English article
 PAGE=zh npm run test:browser    # same checklist against a Chinese article
 ```
@@ -164,8 +164,9 @@ alcoia/                  the extension (AGPL-3.0)
   src/popup/             the toolbar panel and its pages
   src/styles/            fonts.css, overlay.css, panel.css
   src/libs/              WebGazer (GPLv3), pdf.js, jszip, fonts (SIL OFL 1.1)
-  server/                Express + Groq proxy — not covered by the AGPL grant
 tests/                   Vitest suites and the Chromium browser check
+  contract/              vendored, dependency-free snapshots of the (separate-repo) server's
+                         pure question/receipt logic, kept under test here only
 the project notes                repository context — read before changing anything
 WEBSITE-BRIEF.md         build brief for the marketing site
 LEGAL-DISCLOSURE-MAP.md  code-derived data map for the privacy policy
@@ -179,5 +180,5 @@ package is a combined copyleft work: the complete corresponding source must be o
 who receives it, and the client can never be closed-source while WebGazer ships inside it.
 
 Fonts (Literata, Plus Jakarta Sans) are **SIL OFL 1.1**, with their licences alongside the
-binaries. `alcoia/server/` is **not** covered by the AGPL grant. Details in
-[`NOTICE.md`](NOTICE.md).
+binaries. The API server is a separate program in a separate private repository and was never
+covered by this grant. Details in [`NOTICE.md`](NOTICE.md).

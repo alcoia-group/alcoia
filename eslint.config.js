@@ -72,9 +72,10 @@ export default [
     },
   },
 
-  // Server is Node.
+  // Vendored CommonJS snapshots of the (now separate-repo) server's pure
+  // modules — see tests/contract/*.js for why these exist here at all.
   {
-    files: ['alcoia/server/**/*.js'],
+    files: ['tests/contract/**/*.js'],
     languageOptions: {
       sourceType: 'commonjs',
       globals: globals.node,
