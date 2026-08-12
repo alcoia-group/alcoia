@@ -255,7 +255,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   function showReceipt() { receiptPanel.show(buildCurrentReceipt()); }
 
-  // Opens the quiz page (item 17) in a new tab. Content scripts cannot call
+  // Opens the quiz page in a new tab. Content scripts cannot call
   // chrome.tabs.create directly — relayed through background.js's existing
   // 'openTab' handler, the same one popup.js's notes/highlights/etc. use via
   // chrome.tabs.create itself (an extension page can call it directly; a
@@ -263,6 +263,56 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   function openQuizPage(key) {
     const url = chrome.runtime.getURL('src/popup/quiz.html') + (key ? '?key=' + encodeURIComponent(key) : '');
     try { chrome.runtime.sendMessage({ action: 'openTab', url }); } catch (e) {}
+  }
+
+  /* the project notes: "5-8 questions... one server call per quiz... one passage
+   * batch in, N questions out." session-recall.js's weighted select() picks
+   * the paragraphs; they are joined into ONE passage and sent in ONE
+   * fetchQuestions() call with count set to the top of the range — the
+   * existing /api/questions contract already accepts a count, so this reuses
+   * it rather than inventing a batch endpoint the server does not have.
+   * `clampCount` in the server's own question-validation contract caps count
+   * at 5 today (see tests/contract/questions.js), so a real deployment may
+   * return fewer than 8 even when asked for more; nothing here assumes a
+   * specific number back, only a minimum worth showing as a quiz. */
+  const QUIZ_TARGET_COUNT = 8;
+  const QUIZ_MIN_QUESTIONS = 5;
+  let quizGenerating = false;
+
+  /* Selects, generates and stashes a quiz for the current document, then
+   * opens the quiz page to pick it up. Returns true only if a quiz was
+   * actually produced — the caller (the offer card, or the popup via
+   * startQuiz) uses that to show or not show a busy/failure state. Nothing
+   * here writes passage text to disk: the joined text lives only in this
+   * function's memory and in the one outgoing request body. */
+  async function runQuiz() {
+    if (quizGenerating) return false;
+    const key = orchestrator.documentKey();
+    if (!key) return false;
+
+    quizGenerating = true;
+    try {
+      const picked = sessionRecall.select(QUIZ_TARGET_COUNT);
+      if (!picked.length) return false;
+
+      const combinedText = picked.map((p) => p.text).join('\n\n');
+      const questions = await fetchQuestions(combinedText, { count: QUIZ_TARGET_COUNT, kind: 'recall' });
+      // Fewer than the floor is a generation failure, not a shorter quiz —
+      // invariant 9's "a wrong intervention is worse than a missed one"
+      // extends here as "no quiz is better than a thin, unrepresentative one".
+      if (questions.length < QUIZ_MIN_QUESTIONS) return false;
+
+      await new Promise((resolve) => chrome.storage.local.set({
+        sra_quiz_pending: { key, questions: questions.slice(0, QUIZ_TARGET_COUNT), createdAt: Date.now() },
+      }, resolve));
+
+      openQuizPage(key);
+      return true;
+    } catch (e) {
+      return false;
+    } finally {
+      quizGenerating = false;
+    }
   }
 
   /* The unprompted end-of-reading offer. Reader-initiated once shown — no
@@ -291,8 +341,12 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     const dismiss = () => closePopup(root, fingerprint);
     root.querySelector('.sra-close-btn').onclick = dismiss;
     root.querySelector('.sra-q-skip').onclick = dismiss;
-    root.querySelector('.sra-quiz-start-btn').onclick = () => {
-      openQuizPage(result.key);
+    root.querySelector('.sra-quiz-start-btn').onclick = async () => {
+      const btn = root.querySelector('.sra-quiz-start-btn');
+      btn.disabled = true;
+      btn.textContent = 'Preparing…';
+      const ok = await runQuiz();
+      if (!ok) { btn.disabled = false; btn.textContent = 'Take the quiz'; return; }
       dismiss();
     };
 
@@ -1253,6 +1307,21 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
           sendResponse({ status: 'ok', key, ...result });
         } catch (e) {
           sendResponse({ status: 'ok', key: null, ready: false, reason: 'not enough reading tracked on this page yet', coveragePct: null, dwellMs: 0 });
+        }
+      })();
+      return true;
+    }
+    if (msg.action === 'startQuiz') {
+      // From the popup's "Take the quiz" button — same generation path
+      // (runQuiz) the end-of-reading offer's own button calls, so there is
+      // exactly one place that selects passages and makes the one server
+      // call, not a second copy per entry point.
+      (async () => {
+        try {
+          const ok = await runQuiz();
+          sendResponse({ status: 'ok', started: ok });
+        } catch (e) {
+          sendResponse({ status: 'ok', started: false });
         }
       })();
       return true;
