@@ -28,6 +28,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(HERE, 'alcoia');
 const DIST = path.join(HERE, 'dist');
 const MANIFESTS = path.join(HERE, 'manifests');
+const LICENSE = path.join(HERE, 'LICENSE');
 
 export const TARGETS = ['chrome', 'firefox'];
 
@@ -69,6 +70,12 @@ function build(target) {
   copyTree(SRC, out);
   const manifest = buildManifest(target);
   fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+
+  // The shipped package used to carry no LICENSE at all — AGPL-3.0 covers
+  // the client, but nothing said so inside dist/*/. Copied here rather than
+  // duplicated into alcoia/ itself, so there is exactly one LICENSE file to
+  // keep current rather than two that can drift apart.
+  fs.copyFileSync(LICENSE, path.join(out, 'LICENSE'));
 
   let files = 0;
   (function count(dir) {
