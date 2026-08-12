@@ -293,6 +293,40 @@
   padding: 6px 4px;
 }
 .sra-q-conf-skip:hover { color: inherit; }
+
+/* Snooze (item 18): a quiet text control on the card itself — the moment a
+   reader most wants to pause reminders is the moment one has just appeared.
+   Deliberately styled like sra-q-conf-skip's "Rather not say", not like a
+   primary action: it is available, not promoted. */
+.sra-q-snooze-toggle {
+  flex: none;
+  font-family: var(--alc-ui);
+  font-size: 11.5px;
+  color: var(--alc-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 8px 4px;
+}
+.sra-q-snooze-toggle:hover { color: inherit; }
+.sra-q-snooze-options {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-top: 10px;
+}
+.sra-q-snooze-label { font-family: var(--alc-serif); font-size: 12px; color: var(--alc-muted); }
+.sra-q-snooze-options button {
+  font-family: var(--alc-ui);
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: var(--alc-radius-sm);
+  border: 1px solid var(--alc-border);
+  background: rgba(255,255,255,0.55);
+  color: inherit;
+  cursor: pointer;
+}
+.sra-q-snooze-options button:hover { background: var(--alc-accent-sf); border-color: var(--alc-border-2); }
+
 .sra-q-result { margin-top: 12px; font-size: 13.5px; line-height: 1.65; }
 /* A correct answer is a moment the system itself produced — sage, the same
    as the evidence badge and the quoted span, and nothing else in this card

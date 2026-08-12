@@ -342,6 +342,19 @@ export function createUIController(deps = {}) {
     }, 1800);
   }
 
+  /* Item 18: confirms a snooze actually started, since "the reader must
+   * never be unable to tell why nothing is happening" while it's active.
+   * Same visual family as showSimulateToast, generalised to any message. */
+  function showStatusToast(text, ms = 3000) {
+    toast('sra-status-toast', text, {
+      position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+      background: '#5F4589', color: 'white', padding: '9px 18px', borderRadius: '10px',
+      fontFamily: 'var(--alc-ui, system-ui, sans-serif)', fontSize: '12px', fontWeight: '600',
+      zIndex: '2147483646', opacity: '0', transition: 'opacity 0.2s ease',
+      pointerEvents: 'none', whiteSpace: 'pre', boxShadow: '0 6px 20px rgba(60,48,32,0.28)',
+    }, ms);
+  }
+
   /* Re-clamp visible popups when the viewport changes, so a resize cannot
    * strand a card off-screen. Guarded against double installation because the
    * content script can be injected more than once into the same page. */
@@ -373,7 +386,7 @@ export function createUIController(deps = {}) {
     placePopup, closePopup, flashPopup, hidePopup,
     reservePopup, showPopup, resetAutohide,
     renderPopup,
-    showNudge, showSimulateToast,
+    showNudge, showSimulateToast, showStatusToast,
   };
 }
 

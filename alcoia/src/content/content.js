@@ -212,8 +212,12 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   const {
     openPopups, highlightElement, closePopup, flashPopup, hidePopup,
     renderPopup, reservePopup, showPopup,
-    showNudge, showSimulateToast,
+    showNudge, showSimulateToast, showStatusToast,
   } = ui;
+
+  // ── Snooze (item 18) ─────────────────────────────────────────────────────
+  const snoozeModule = await loadModule('src/content/snooze.js');
+  const snoozeControl = snoozeModule.createSnoozeControl();
 
   // ── Question layer ─────────────────────────────────────────────────────
   const responseModule = await loadModule('src/content/telemetry/response-signals.js');
@@ -375,7 +379,19 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       // intervention-policy.js's dismissalBackoff.
       try { orchestrator.interventionPolicy.recordDismissal(); } catch (e) {}
     },
+    onSnooze: (durationMs, label) => { startSnooze(durationMs, label); },
   });
+
+  /* Shared by the card's own snooze control and the popup's. Recording the
+   * dismissal for a popup-triggered snooze happens at the message handler,
+   * not here — from the card, dismiss() (called right after this) already
+   * records it, and doing it twice would double-count one snooze as two
+   * consecutive dismissals toward item 10's backoff. */
+  async function startSnooze(durationMs, label) {
+    const until = await snoozeControl.snooze(durationMs);
+    showStatusToast(`Snoozed${label ? ' for ' + label : ''} — reminders paused`);
+    return until;
+  }
 
   // ── Detection pipeline ─────────────────────────────────────────────────
   // orchestrator.js owns the detectors, the state engine and the interruption
@@ -408,6 +424,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         // Off means off: nothing reaches the screen, and the budget is not
         // spent on an offer that was never made.
         if (!assistantEnabled) return false;
+        // Item 18: only the final render is suppressed. Detection, coverage
+        // tracking and the quiz gate all keep running above this — pausing
+        // those too would mean a reader who snoozes never reaches the quiz
+        // gate, which is a worse outcome than a paused reminder.
+        if (await snoozeControl.isActive()) return false;
         if (decision.action === 'nudge') {
           showNudge(target);
           if (target) highlightElement(target, 3000);
@@ -1323,6 +1344,47 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         } catch (e) {
           sendResponse({ status: 'ok', started: false });
         }
+      })();
+      return true;
+    }
+    if (msg.action === 'getSnoozeStatus') {
+      (async () => {
+        try {
+          const until = await snoozeControl.until();
+          sendResponse({ status: 'ok', active: until > Date.now(), until });
+        } catch (e) {
+          sendResponse({ status: 'ok', active: false, until: 0 });
+        }
+      })();
+      return true;
+    }
+    if (msg.action === 'snoozeReminders') {
+      // From the popup — the card's own snooze control calls startSnooze()
+      // directly in the same page. popup.js sends only an option id, not a
+      // computed duration: the duration math (SNOOZE_OPTIONS, "rest of
+      // today") stays canonical in snooze.js and is resolved here, the same
+      // place question-card.js resolves it, rather than a second copy
+      // running in the popup's own timezone/clock context. No "current
+      // card" to dismiss here, so the dismissal for item 10's backoff is
+      // recorded explicitly instead of riding along on question-card.js's
+      // dismiss() path.
+      (async () => {
+        try {
+          const opt = snoozeModule.SNOOZE_OPTIONS.find((o) => o.id === msg.optionId);
+          if (!opt) { sendResponse({ status: 'error' }); return; }
+          const until = await startSnooze(opt.durationMs(Date.now()), opt.label);
+          try { orchestrator.interventionPolicy.recordDismissal(); } catch (e) {}
+          sendResponse({ status: 'ok', until });
+        } catch (e) {
+          sendResponse({ status: 'error' });
+        }
+      })();
+      return true;
+    }
+    if (msg.action === 'cancelSnooze') {
+      (async () => {
+        await snoozeControl.cancel();
+        sendResponse({ status: 'ok' });
       })();
       return true;
     }
