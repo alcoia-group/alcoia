@@ -1,12 +1,15 @@
 /* Engine + policy together, driven the way content.js drives them.
  *
- * The defect P1 exists to fix: comprehension-monitor and the gaze classifier
- * each fired their own popups, with separate cooldowns and no shared state, so
- * one reader could be interrupted twice for the same moment of difficulty.
- * These tests pin the fix.
+ * The defect P1 exists to fix: comprehension-monitor and a webcam gaze
+ * classifier used to each fire their own popups, with separate cooldowns and
+ * no shared state, so one reader could be interrupted twice for the same
+ * moment of difficulty. These tests pinned the fix by driving both pipelines
+ * at once; the gaze classifier is gone now (see the project notes' migration note),
+ * so what is left to pin is that the single remaining pipeline still
+ * produces exactly one interruption per moment of difficulty.
  */
 import { describe, it, expect } from 'vitest';
-import { createReadingStateEngine, STATES } from '../alcoia/src/content/state-engine.js';
+import { createReadingStateEngine } from '../alcoia/src/content/state-engine.js';
 import { createInterventionPolicy } from '../alcoia/src/content/intervention-policy.js';
 
 function fixedClock(start = 1_000_000) {
@@ -17,7 +20,10 @@ function fixedClock(start = 1_000_000) {
 /* Mirrors the subscriber wired into content.js. */
 function buildReader(clock) {
   const engine = createReadingStateEngine({ now: clock.now });
-  const policy = createInterventionPolicy({ now: clock.now });
+  // random: () => 1 disables exploration sampling — these tests are about
+  // the base ask/don't-ask decision, which exploration sampling is covered
+  // separately in tests/intervention-policy.test.js.
+  const policy = createInterventionPolicy({ now: clock.now, random: () => 1 });
   const interruptions = [];
 
   engine.subscribe((state) => {
@@ -30,57 +36,28 @@ function buildReader(clock) {
   return { engine, policy, interruptions };
 }
 
-describe('the two pipelines can no longer both interrupt', () => {
-  it('telemetry and gaze agreeing produces exactly one interruption', () => {
+describe('one moment of difficulty produces exactly one interruption', () => {
+  it('a burst of related signals still yields one interruption', () => {
     const clock = fixedClock();
     const { engine, interruptions } = buildReader(clock);
 
-    const gaze = { enabled: true, label: 'confused', quality: 0.9, lastSampleAt: clock.now() };
-
-    // The gaze loop ticks first and sees "confused"...
-    engine.update({ gaze });
-    expect(interruptions).toHaveLength(0);   // it cannot act alone
-
-    // ...then the paragraph is left and telemetry reports a slow read.
-    engine.update({
-      gaze,
-      telemetry: {
-        type: 'speed_mismatch', subtype: 'too_slow',
-        text: 'the paragraph', actualWpm: 90, baselineWpm: 225,
-        readability: { grade: 'standard' },
-      },
-    });
-
-    expect(interruptions).toHaveLength(1);
-    expect(interruptions[0].label).toBe(STATES.STRUGGLING);
-    expect(interruptions[0].evidence).toContain('Eye tracking agrees');
-  });
-
-  it('a burst of signals across both pipelines still yields one interruption', () => {
-    const clock = fixedClock();
-    const { engine, interruptions } = buildReader(clock);
-    const gaze = { enabled: true, label: 'confused', quality: 0.9, lastSampleAt: clock.now() };
-
-    engine.update({ telemetry: { type: 'backtrack', backtrackPx: 200 }, gaze });
-    clock.advance(1000);
-    engine.update({ gaze });
+    engine.update({ telemetry: { type: 'backtrack', backtrackPx: 200 } });
     clock.advance(1000);
     engine.update({
       telemetry: { type: 'speed_mismatch', subtype: 'too_slow', text: 'another paragraph', actualWpm: 80, baselineWpm: 220 },
-      gaze,
     });
 
     expect(interruptions).toHaveLength(1);
   });
 
-  it('holds the three-minute gap across pipelines, not per-pipeline', () => {
+  it('holds the three-minute gap across separate telemetry signals', () => {
     const clock = fixedClock();
     const { engine, interruptions } = buildReader(clock);
 
     engine.update({ telemetry: { type: 'backtrack', backtrackPx: 200 } });
     expect(interruptions).toHaveLength(1);
 
-    // A different pipeline, a different paragraph, 60s later — still too soon.
+    // A different signal, a different paragraph, 60s later — still too soon.
     clock.advance(60_000);
     engine.update({});
     engine.update({
@@ -97,31 +74,17 @@ describe('the two pipelines can no longer both interrupt', () => {
   });
 });
 
-describe('camera-off behaviour', () => {
+describe('detection is telemetry-only', () => {
   it('detects and interrupts on telemetry alone', () => {
     const clock = fixedClock();
     const { engine, interruptions } = buildReader(clock);
 
     engine.update({
-      gaze: { enabled: false },
       telemetry: { type: 'speed_mismatch', subtype: 'too_slow', text: 'p', actualWpm: 90, baselineWpm: 240 },
     });
 
     expect(interruptions).toHaveLength(1);
     expect(interruptions[0].evidence[0]).toMatch(/slower than your usual pace/);
-    expect(interruptions[0].evidence).not.toContain('Eye tracking agrees');
-  });
-
-  it('never interrupts from gaze alone, however confident it looks', () => {
-    const clock = fixedClock();
-    const { engine, interruptions } = buildReader(clock);
-
-    for (const label of ['confused', 'overloaded', 'zoning_out', 'skimming', 'focused']) {
-      clock.advance(300_000);
-      engine.update({ gaze: { enabled: true, label, quality: 1.0, lastSampleAt: clock.now() } });
-    }
-
-    expect(interruptions).toHaveLength(0);
   });
 });
 

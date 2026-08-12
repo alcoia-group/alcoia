@@ -2,14 +2,14 @@
  *
  * Owns everything between "a reader did something" and "the policy says this
  * earns an interruption". It creates the telemetry detectors, the state engine
- * and the interruption budget, subscribes the one handler that can reach the
- * reader, and runs the gaze classification loop.
+ * and the interruption budget, and subscribes the one handler that can reach
+ * the reader.
  *
  * It does not render. When an interruption is allowed it calls
  * `host.onIntervention()` and takes a boolean back saying whether anything
  * actually reached the screen — the budget is spent only on a yes. That
  * split is deliberate: an offer that bails out downstream must not burn one
- * of the five interruptions a reader gets per session.
+ * of the interruptions a reader gets per session.
  *
  * `content.js` keeps the shared mutable state (settings flags, the current
  * paragraph), so this reads them through the `settings` and `host` accessors
@@ -17,21 +17,13 @@
  * listener fires.
  */
 
-const CLASSIFY_INTERVAL = 3000;
-const IDLE_TICK_MS      = 5000;
-const GAZE_QUALITY_GATE = 0.25;   // the extractor's own floor; the engine holds a higher one
+const IDLE_TICK_MS = 5000;
 
 export async function createOrchestrator(deps) {
   const {
     loadModule,
     comprehensionMonitor,
-    featureExtractor,
-    classifyGazeState,
-    getSmoothedState,
-    gazeUtils,
-    dyslexiaUtils,
-    langDetect,
-    settings,        // () => { comprehensionCheckEnabled, eyeTrackingEnabled, ... }
+    settings,        // () => { comprehensionCheckEnabled, ... }
     host,            // see the destructure below
   } = deps;
 
@@ -39,12 +31,20 @@ export async function createOrchestrator(deps) {
 
   const engineModule = await loadModule('src/content/state-engine.js');
   const policyModule = await loadModule('src/content/intervention-policy.js');
+  const coverageModule = await loadModule('src/content/coverage-gate.js');
+  const offerModule = await loadModule('src/content/quiz-offer.js');
   const stateEngine  = engineModule.createReadingStateEngine();
   const interventionPolicy = policyModule.createInterventionPolicy();
+  const coverageGate = coverageModule.createCoverageGate();
+  // Reader-initiated — never touches interventionPolicy, spends no budget.
+  const quizOffer = offerModule.createQuizOfferChecker({
+    coverageGate, documentKey: coverageModule.documentKey,
+    onEligible: (result) => { try { host.onQuizOfferEligible?.(result); } catch (e) {} },
+  });
 
-  // Telemetry detectors. These need no permission and work with the camera
-  // off, which is the default. Paragraph tracking in particular used to hang
-  // off the gaze point, so none of this fired unless the webcam was running.
+  // Telemetry detectors. These need no permission and work on any device —
+  // paragraph tracking in particular used to hang off a webcam gaze point,
+  // so none of this fired unless a camera was running. It no longer does.
   const [paraTrackModule, regressionModule, interactionModule,
          dynamicsModule, cursorModule, entropyModule] = await Promise.all([
     loadModule('src/content/telemetry/paragraph-tracker.js'),
@@ -62,47 +62,8 @@ export async function createOrchestrator(deps) {
   const cursorTracker      = cursorModule.createCursorTracker();
   const progressionEntropy = entropyModule.createProgressionEntropy();
 
-  // Latest reading from the gaze pipeline. Written by the classify loop, read
-  // whenever a telemetry signal arrives, so the engine considers both at once
-  // instead of them racing each other to the reader.
-  let lastGazeLabel   = null;
-  let lastGazeQuality = 0;
-
-  // Last deliberate input. Used only to spot someone who has stopped making
-  // progress — never stored, never sent anywhere.
-  let lastInputAt = Date.now();
-
-  let classifyTimer = null;
-  let idleTimer     = null;
-  let lowQualityStreak = 0;
-  let lastQualityWarnAt = 0;
+  let idleTimer = null;
   let interventionInFlight = false;
-
-  // ── Views handed to the engine ───────────────────────────────────────────
-  function currentGazeView() {
-    if (!s().eyeTrackingEnabled) return { enabled: false };
-    let presence = null;
-    try { presence = featureExtractor.presence(); } catch (e) {}
-    return {
-      enabled: true,
-      label: lastGazeLabel,
-      quality: lastGazeQuality,
-      lastSampleAt: host.getLastGazeReceivedAt() || null,
-      facePresent: presence ? presence.face_present : null,
-      onPageFraction: presence ? presence.on_page_fraction : null,
-    };
-  }
-
-  function buildIdleView() {
-    let expectation = null;
-    try { expectation = comprehensionMonitor.getCurrentExpectation(); } catch (e) {}
-    if (!expectation) return null;
-    return {
-      pageFocused:  document.hasFocus(),
-      msSinceInput: Date.now() - lastInputAt,
-      expectedMs:   expectation.expectedMs,
-    };
-  }
 
   /* Drains every detector and hands the batch over in one go, so the engine
    * sees a whole moment rather than a sequence of unrelated nudges. */
@@ -117,13 +78,16 @@ export async function createOrchestrator(deps) {
     if (interactions) batch.push(...interactions);
     if (extra) batch.push(extra);
     if (!batch.length) return;
-    stateEngine.update({ telemetry: batch, gaze: currentGazeView(), idle: buildIdleView() });
+    stateEngine.update({ telemetry: batch });
   }
 
   /* Viewport-driven paragraph tracking. Feeds the comprehension monitor's
    * reading-rate maths and the regression detector's paragraph indices. */
   function syncParagraph() {
     if (!s().comprehensionCheckEnabled) return;
+    // Every call, not just on a transition — a reader stopped at the end
+    // produces no further transition, and the idle tick catches that case.
+    quizOffer.check();
     let transition = null;
     try {
       // A reader tracking text with the mouse gives a measured reading
@@ -134,15 +98,34 @@ export async function createOrchestrator(deps) {
 
     let speedSignal = null;
     if (transition.left) {
+      // Feeds intervention-policy's session cap — content read earns budget.
+      try {
+        interventionPolicy.recordCoverage({
+          words: transition.left.words, dwellMs: transition.left.dwellMs, media: transition.left.media,
+        });
+      } catch (e) {}
       try { speedSignal = comprehensionMonitor.leaveParagraph(); } catch (e) {}
+      const leftText = transition.left.el
+        ? (transition.left.el.innerText || transition.left.el.textContent || '').trim()
+        : '';
       if (transition.left.el) {
-        const text = (transition.left.el.innerText || transition.left.el.textContent || '');
-        host.setPrevParagraphText(text.trim().slice(0, 800));
+        host.setPrevParagraphText(leftText.slice(0, 800));
         // Session recall needs to know what was read and for how long.
         if (host.onParagraphRead) {
-          try { host.onParagraphRead(text.trim(), transition.left.dwellMs); } catch (e) {}
+          try { host.onParagraphRead(leftText, transition.left.dwellMs); } catch (e) {}
         }
       }
+      // Feeds coverage-gate.js — "read enough to offer the quiz on".
+      try {
+        const key = coverageModule.documentKey();
+        if (key) {
+          coverageGate.recordProgress(key, {
+            text: leftText, words: transition.left.words, dwellMs: transition.left.dwellMs,
+            media: transition.left.media,
+            totalParagraphs: paragraphTracker.count({ excludeMedia: true }),
+          });
+        }
+      } catch (e) {}
     }
     if (transition.entered?.el) {
       // Figures, tables and code blocks are tracked so the reading line can
@@ -180,23 +163,14 @@ export async function createOrchestrator(deps) {
     const decision  = interventionPolicy.evaluate(state, { currentEl });
 
     if (s().debugEnabled) {
-      host.log(`State: ${state.label} (conf ${state.confidence.toFixed(2)}, camera ${state.cameraContribution.toFixed(2)}) — ${decision.allow ? 'ACT: ' + decision.action : 'hold: ' + decision.reason}`);
+      host.log(`State: ${state.label} (conf ${state.confidence.toFixed(2)}) — ${decision.allow ? 'ACT: ' + decision.action : 'hold: ' + decision.reason}`);
     }
     if (!decision.allow) return;
-    // Someone reading an open card is not showing fresh confusion. Checked
-    // after the policy so the debug line still explains what was decided.
-    if (host.isReadingAPopup && host.isReadingAPopup()) {
-      if (s().debugEnabled) host.log('Interruption held — gaze is on an open card');
-      return;
-    }
     // The handler awaits, so guard against a second state arriving mid-render.
     if (interventionInFlight) return;
     interventionInFlight = true;
 
     try {
-      // With the camera off there is no gaze point, so nothing has told us
-      // which paragraph the reader is on. Fall back to the middle of the
-      // viewport rather than dropping the interruption.
       let target = currentEl;
       if (!target) {
         try {
@@ -221,83 +195,10 @@ export async function createOrchestrator(deps) {
     }
   });
 
-  // ── Gaze classification loop ─────────────────────────────────────────────
-  function classifyTick() {
-    const cfg = s();
-    if (!cfg.eyeTrackingEnabled || !host.getLastGazePoint()) return;
-    const rawFeatures = featureExtractor.computeFeatures();
-    if (!rawFeatures) return;
-
-    // Skip classification when webcam tracking is too noisy — poor lighting,
-    // glasses glare, face partially occluded.
-    if (rawFeatures.gaze_quality < GAZE_QUALITY_GATE) {
-      if (cfg.debugEnabled) {
-        host.log(`Skipping classify — low gaze quality (${(rawFeatures.gaze_quality * 100).toFixed(0)}%)`);
-      }
-      lowQualityStreak++;
-      if (lowQualityStreak >= 8 && Date.now() - lastQualityWarnAt > 60000) {
-        host.onQualityWarning();
-        lastQualityWarnAt = Date.now();
-      }
-      return;
-    }
-    lowQualityStreak = 0;
-
-    // Normalise against the reader's own baseline so individual reading styles
-    // don't bias the classifier's fixed thresholds.
-    const features = cfg.personalBaseline
-      ? gazeUtils.normalizeWithBaseline(rawFeatures, cfg.personalBaseline)
-      : rawFeatures;
-
-    const dyslexiaPatched = cfg.dyslexiaEnabled
-      ? dyslexiaUtils.patchFeaturesForDyslexia(features)
-      : features;
-
-    // Script-aware patch: flip regression_rate for RTL, scale fixation_ms for CJK.
-    const classFeatures = langDetect.patchFeaturesForScript(dyslexiaPatched, cfg.scriptInfo);
-
-    const { label } = classifyGazeState(classFeatures);
-
-    // Smooth over 3 windows to prevent single-sample false triggers.
-    lastGazeLabel   = getSmoothedState(label);
-    lastGazeQuality = rawFeatures.gaze_quality;
-
-    host.onGazeFeatures(rawFeatures);
-
-    // Gaze fires nothing by itself. It hands its reading to the engine, which
-    // will not turn it into an actionable state without telemetry behind it.
-    stateEngine.update({ gaze: currentGazeView(), idle: buildIdleView() });
-  }
-
-  function startClassificationLoop() {
-    if (classifyTimer) clearInterval(classifyTimer);
-    host.log('Classification loop started');
-    classifyTimer = setInterval(classifyTick, CLASSIFY_INTERVAL);
-  }
-
-  function stopClassificationLoop() {
-    if (classifyTimer) clearInterval(classifyTimer);
-    classifyTimer = null;
-  }
-
-  /* Tear everything down. Not called in the extension today — the content
-   * script lives as long as the page — but the timers are owned here, so the
-   * ability to stop them belongs here too rather than being unreachable. */
-  function stop() {
-    stopClassificationLoop();
-    if (idleTimer) clearInterval(idleTimer);
-    idleTimer = null;
-  }
-
   // ── Event wiring ─────────────────────────────────────────────────────────
   const activeParagraphIndex = () => paragraphTracker.getActive()?.index ?? null;
 
   function installListeners() {
-    const markInput = () => { lastInputAt = Date.now(); };
-    for (const ev of ['scroll', 'mousemove', 'keydown', 'wheel', 'touchstart']) {
-      window.addEventListener(ev, markInput, { passive: true });
-    }
-
     // Cursor as a reading pointer. Most mouse movement is not reading, so the
     // tracker decides for itself whether the behaviour qualifies.
     window.addEventListener('mousemove', (e) => {
@@ -366,13 +267,19 @@ export async function createOrchestrator(deps) {
     try { paragraphTracker.rescan(); syncParagraph(); } catch (e) {}
   }
 
+  /* Tear everything down. Not called in the extension today — the content
+   * script lives as long as the page — but the timer is owned here, so the
+   * ability to stop it belongs here too rather than being unreachable. */
+  function stop() {
+    if (idleTimer) clearInterval(idleTimer);
+    idleTimer = null;
+  }
+
   return {
     installListeners,
     primeParagraph,
     syncParagraph,
     pumpTelemetry,
-    startClassificationLoop,
-    stopClassificationLoop,
     stop,
     getState: () => stateEngine.getState(),
     // Aggregates for the receipt. Aggregates only — there is deliberately no
@@ -385,5 +292,8 @@ export async function createOrchestrator(deps) {
     stateEngine,
     interventionPolicy,
     paragraphTracker,
+    // "Read enough to test" — the popup's quiz button reads this directly.
+    coverageGate,
+    documentKey: coverageModule.documentKey,
   };
 }

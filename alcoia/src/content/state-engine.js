@@ -1,21 +1,11 @@
 /* state-engine.js — single reading-state estimate for alcoia
  *
- * Replaces the two independent pipelines that each fired their own popups:
- * comprehension-monitor (telemetry) and the gaze classifier. Both now feed
- * this engine, which produces one state, and only that state drives
- * interventions. See intervention-policy.js for what happens next.
- *
- * The signal hierarchy from the project notes is enforced structurally, not by
- * convention:
- *
- *   telemetry  → may assert any actionable state
- *   gaze       → may assert ONLY presence/absence, and may corroborate a
- *                telemetry state to raise confidence. It can never, on its
- *                own, claim a reader is struggling.
- *
- * That asymmetry is the whole point. Webcam gaze carries ~180px of error;
- * it knows roughly where someone is looking and whether anyone is there.
- * It does not know whether they understood the paragraph.
+ * Replaces the two independent pipelines that used to each fire their own
+ * popups: comprehension-monitor (telemetry) and a webcam gaze classifier.
+ * The gaze classifier is gone — see the project notes' migration note — so
+ * telemetry is now the only input, and this module's job is narrower than
+ * its name once implied: turn a batch of telemetry signals into one state
+ * estimate, applying corroboration between signals of that one kind.
  *
  * `unknown` is the default and a correct, common answer. The engine never
  * substitutes a plausible-looking state for missing data.
@@ -29,28 +19,6 @@ export const STATES = Object.freeze({
   ABSENT:     'absent',
   UNKNOWN:    'unknown',
 });
-
-/* The gaze classifier still emits its original five labels. It is a generated
- * artifact and replacing it needs human approval, so translate at the boundary
- * rather than retraining. `confused` and `overloaded` both collapse to
- * `struggling` — they were never separable observations. */
-export const GAZE_LABEL_TO_STATE = Object.freeze({
-  focused:    STATES.ON_PACE,
-  skimming:   STATES.SKIMMING,
-  confused:   STATES.STRUGGLING,
-  overloaded: STATES.STRUGGLING,
-  zoning_out: STATES.DRIFTING,
-});
-
-/* Gaze is trusted for these and nothing else. */
-const GAZE_ASSERTABLE = Object.freeze([STATES.ABSENT]);
-
-const DEFAULT_OPTS = {
-  gazeQualityFloor:   0.5,    // raised from the old 0.25 — below this, abstain
-  gazeStaleMs:        6000,   // no sample for this long, with camera on, = absent
-  corroborationBonus: 0.15,   // gaze agreeing with telemetry is worth this much
-  idleGraceMs:        4000,
-};
 
 function clamp01(n) { return n < 0 ? 0 : n > 1 ? 1 : n; }
 
@@ -228,80 +196,14 @@ function strongestAssertion(signals) {
   return best;
 }
 
-/* Idle-with-focus is the one genuinely ambiguous case: someone thinking hard
- * and someone who walked away look identical to telemetry. This is where the
- * camera earns its place, and the only place it changes an actionable label. */
-function fromIdle(idle, gazeView, opts) {
-  if (!idle || !idle.pageFocused) return null;
-  const overdue = idle.msSinceInput > (idle.expectedMs || 0) + opts.idleGraceMs;
-  if (!overdue) return null;
-
-  if (gazeView.present === false) {
-    return {
-      label: STATES.ABSENT,
-      confidence: 0.65,
-      evidence: ['No one appears to be at the screen'],
-      cameraUsed: true,
-    };
-  }
-  if (gazeView.present === true) {
-    // on_page_fraction is the one spatial question a ~180px tracker can answer:
-    // roughly, is the reader looking at the text at all. Someone overdue whose
-    // gaze has left the column is elsewhere; someone overdue still on the text
-    // may well be thinking, so claim less.
-    const onPage = gazeView.onPageFraction;
-    const lookedAway = onPage != null && onPage < 0.4;
-    return {
-      label: STATES.DRIFTING,
-      confidence: lookedAway ? 0.62 : TELEMETRY_CONFIDENCE.idle,
-      evidence: [lookedAway
-        ? 'You have been away from the text for a while'
-        : 'You have been on this paragraph a while without moving on'],
-      cameraUsed: true,
-    };
-  }
-  // Camera off or unusable — refuse to guess which it is.
-  return {
-    label: STATES.UNKNOWN,
-    confidence: 0,
-    evidence: [],
-    cameraUsed: false,
-  };
-}
-
-/* Reduce a raw gaze reading to what gaze is actually allowed to say. */
-function readGaze(gaze, nowMs, opts) {
-  const view = { present: null, state: null, quality: 0, usable: false, onPageFraction: null };
-  if (!gaze || !gaze.enabled) return view;
-
-  view.onPageFraction = typeof gaze.onPageFraction === 'number' ? gaze.onPageFraction : null;
-
-  // An explicit "no face" beats any staleness heuristic.
-  if (gaze.facePresent === false) { view.present = false; return view; }
-
-  const stale = gaze.lastSampleAt != null &&
-                (nowMs - gaze.lastSampleAt) > opts.gazeStaleMs;
-  if (stale) { view.present = false; return view; }
-
-  view.quality = typeof gaze.quality === 'number' ? gaze.quality : 0;
-  if (view.quality < opts.gazeQualityFloor) return view;   // abstain, do not pass noise on
-
-  view.present = true;
-  view.usable  = true;
-  view.state   = GAZE_LABEL_TO_STATE[gaze.label] || null;
-  return view;
-}
-
 export function createReadingStateEngine(config = {}) {
-  const opts = { ...DEFAULT_OPTS, ...(config.options || {}) };
-  const now  = config.now || (() => Date.now());
+  const now = config.now || (() => Date.now());
 
   const subscribers = new Set();
   let current = {
     label: STATES.UNKNOWN,
     confidence: 0,
     evidence: [],
-    cameraContribution: 0,
     at: now(),
     signal: null,
   };
@@ -317,21 +219,17 @@ export function createReadingStateEngine(config = {}) {
     return current;
   }
 
-  /* input: { telemetry, gaze, idle } — any may be absent.
-   * `telemetry` may be a single signal or an array of them. */
+  /* input: { telemetry } — may be a single signal or an array of them. */
   function update(input = {}) {
-    const at       = now();
-    const gazeView = readGaze(input.gaze, at, opts);
+    const at = now();
 
     const all = input.telemetry
       ? (Array.isArray(input.telemetry) ? input.telemetry.filter(Boolean) : [input.telemetry])
       : [];
-    const asserting   = all.filter((s) => s && !CORROBORATING_TYPES.includes(s.type));
+    const asserting     = all.filter((s) => s && !CORROBORATING_TYPES.includes(s.type));
     const corroborating = all.filter((s) => s && CORROBORATING_TYPES.includes(s.type));
 
-    // 1. Telemetry gets first refusal on the label.
-    let proposal = strongestAssertion(asserting);
-    let cameraContribution = 0;
+    const proposal = strongestAssertion(asserting);
 
     if (proposal) {
       // Other telemetry that agrees raises confidence and adds its own
@@ -344,33 +242,6 @@ export function createReadingStateEngine(config = {}) {
         proposal.confidence = clamp01(proposal.confidence + rule.bonus);
         proposal.evidence   = [...proposal.evidence, rule.evidence];
       }
-
-      // Gaze may only corroborate here — never override, never veto.
-      if (gazeView.usable && gazeView.state === proposal.label) {
-        proposal.confidence = clamp01(proposal.confidence + opts.corroborationBonus);
-        proposal.evidence   = [...proposal.evidence, 'Eye tracking agrees'];
-        cameraContribution  = opts.corroborationBonus;
-      }
-    } else {
-      // 2. No telemetry signal. Idle disambiguation is the only path where
-      //    gaze changes an actionable label, and it needs telemetry to have
-      //    established that the reader is overdue in the first place.
-      const idleProposal = fromIdle(input.idle, gazeView, opts);
-      if (idleProposal) {
-        proposal = idleProposal;
-        cameraContribution = idleProposal.cameraUsed ? 0.5 : 0;
-      } else if (gazeView.present === false && GAZE_ASSERTABLE.includes(STATES.ABSENT)) {
-        // 3. Gaze may assert absence on its own. That is its entire remit —
-        //    the GAZE_ASSERTABLE check is what keeps it that way. A gaze
-        //    label of `confused` with no telemetry behind it falls through
-        //    to `unknown` below, deliberately.
-        proposal = {
-          label: STATES.ABSENT,
-          confidence: 0.6,
-          evidence: ['No one appears to be at the screen'],
-        };
-        cameraContribution = 1;
-      }
     }
 
     const next = proposal
@@ -378,7 +249,6 @@ export function createReadingStateEngine(config = {}) {
           label: proposal.label,
           confidence: clamp01(proposal.confidence),
           evidence: proposal.evidence || [],
-          cameraContribution: clamp01(cameraContribution),
           at,
           signal: proposal.signal || null,
         }
@@ -386,7 +256,6 @@ export function createReadingStateEngine(config = {}) {
           label: STATES.UNKNOWN,
           confidence: 0,
           evidence: [],
-          cameraContribution: 0,
           at,
           signal: null,
         };

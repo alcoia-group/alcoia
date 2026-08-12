@@ -4,10 +4,7 @@
 */
 
 // ── Double-injection guard ─────────────────────────────────────────────────
-if (window.__sra_content_loaded) {
-  // Already running — just restart the tracker if needed
-  if (window.__sra_restart_tracker) window.__sra_restart_tracker();
-} else {
+if (!window.__sra_content_loaded) {
   window.__sra_content_loaded = true;
   __sra_main();
 }
@@ -20,10 +17,14 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
 (async function () {
 
   // ── Constants ──────────────────────────────────────────────────────────
-  const BACKEND_DEFAULT     = 'http://localhost:3000/api/summarize';
+  // Defined in src/shared/config.js, loaded as a preceding content script —
+  // see manifests/base.json. One place for the shipped origin; a developer
+  // overrides it at runtime via the popup's Backend URL setting instead of
+  // editing source.
+  const BACKEND_DEFAULT     = self.ALCOIA_CONFIG.SUMMARIZE_URL;
   const MIN_SELECTION_CHARS = 15;
-  // Interruption cooldowns and budget now live in intervention-policy.js —
-  // one place, applied to telemetry and gaze alike.
+  // Interruption cooldowns and budget live in intervention-policy.js — one
+  // place, applied to every telemetry-driven decision.
   // Popup geometry, the open-popup registry and the eviction cap now live in
   // ui-controller.js — it owns everything the reader sees.
   // Fingerprints of paragraphs currently awaiting an AI response (race-condition guard)
@@ -38,9 +39,6 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
    * way to actually stop it was chrome://extensions. It is wired now. */
   let assistantEnabled   = true;
   let backendUrl         = BACKEND_DEFAULT;
-  // Off until the reader turns it on. This is the boot value used before
-  // storage answers, so `true` here would start a webcam on a fresh profile.
-  let eyeTrackingEnabled = false;
   let selectionEnabled   = true;
   let highlightEnabled   = true;
   let autohideEnabled    = false;
@@ -53,10 +51,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   let currentParagraph   = null;
   let pdfHandler         = null;
   let pptxHandler        = null;
-  let cameraIsReady      = false;
-  let idleBlinkEnabled          = true;
   let comprehensionCheckEnabled = true;
-  let lastGazeReceivedAt = Date.now();  // tracks when we last got a real gaze point
 
   // ── New feature flags ──────────────────────────────────────────────────
   let ttsEnabled          = false;
@@ -65,10 +60,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   let dyslexiaEnabled     = false;
   let dyslexiaColor       = 'rgba(255,243,180,0.12)';
   let bionicEnabled       = false;
-  let personalBaseline    = null;  // from calibration or chrome.storage
   let prevParagraphText   = '';    // for AI context window
-
-  // ── Gaze quality tracking ──────────────────────────────────────────────
 
   // ── Highlight persistence ──────────────────────────────────────────────
   function saveHighlight(text, summary, state) {
@@ -113,21 +105,6 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     { key: 'orange', bg: '#FFCC80', label: 'Orange' },
   ];
 
-  // ── State smoothing ring buffer ────────────────────────────────────────
-  const STATE_HISTORY     = [];
-  const STATE_HISTORY_MAX = 3;
-
-  function getSmoothedState(newLabel) {
-    STATE_HISTORY.push(newLabel);
-    if (STATE_HISTORY.length > STATE_HISTORY_MAX) STATE_HISTORY.shift();
-    const counts = {};
-    for (const s of STATE_HISTORY) counts[s] = (counts[s] || 0) + 1;
-    return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-  }
-
-  // Expose restart hook for the double-injection guard above
-  window.__sra_restart_tracker = () => { window.__sra_tracker_started = false; startTracker(); };
-
   // ── Module loader ──────────────────────────────────────────────────────
   const loadModule = (p) => import(chrome.runtime.getURL(p));
 
@@ -151,29 +128,65 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   }
 
   // ── Load modules ───────────────────────────────────────────────────────
-  const gazeUtils    = await loadModule('src/content/gaze-utils.js');
+  // Loaded here, not from background.js: install-token.js is a real ES
+  // module, and Chrome disallows dynamic import() from inside a service
+  // worker outright. Content scripts have no such restriction. background.js
+  // stays a dumb relay that requires a token to already be attached — see
+  // its 'summarize'/'apiPost' handler and install-token.js's own header.
+  const installTokenModule = await loadModule('src/shared/install-token.js');
+  const installToken = installTokenModule.createInstallTokenManager({
+    tokenUrl: self.ALCOIA_CONFIG.TOKEN_URL,
+  });
+  // Every failure here already degrades to silence for the reader
+  // (invariant 9) — this only makes that silence inspectable afterward, on
+  // the diagnostics page. Never fed passage text, a URL or a page title;
+  // see diag-log.js's own header for why.
+  const diagLogModule = await loadModule('src/shared/diag-log.js');
+  const diagLog = diagLogModule.createDiagLog();
+  // Same origin as wherever the AI call is actually going — a developer who
+  // pointed the popup's Backend URL setting at a local server gets their
+  // token from that same server, not the shipped default.
+  const tokenUrl = () => {
+    try { return new URL('/api/token', backendUrl || BACKEND_DEFAULT).href; }
+    catch (e) { return self.ALCOIA_CONFIG.TOKEN_URL; }
+  };
+  // Every AI request goes through here: resolve the token, attach it, relay
+  // the background worker's response. `ok:false` covers every failure this
+  // item's brief lists — unreachable, non-ok, malformed, or simply no token
+  // yet — and every caller below already treats an ok:false/falsy result as
+  // "nothing to show", so no separate error UI is needed on top of this.
+  async function callBackend(action, url, body) {
+    const token = await installToken.getToken(tokenUrl());
+    if (!token) { diagLog.log(action, 'no_install_token'); return { ok: false, error: 'no_install_token' }; }
+    return await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ action, url, body, token }, (resp) => {
+          if (chrome.runtime.lastError || !resp) { diagLog.log(action, 'no_response'); resolve({ ok: false, error: 'no_response' }); return; }
+          if (resp.tokenRejected) {
+            installToken.invalidate();
+            diagLog.log(action, `token_rejected_${resp.status}`);
+          } else if (!resp.ok) {
+            diagLog.log(action, resp.error || `status_${resp.status}`);
+          }
+          resolve(resp);
+        });
+      } catch (e) { diagLog.log(action, String(e && e.message || e)); resolve({ ok: false, error: String(e && e.message || e) }); }
+    });
+  }
+
   const overlayUtils = await loadModule('src/content/overlay-utils.js');
-  const featModule   = await loadModule('src/content/gaze-features.js');
-  const idleModule   = await loadModule('src/content/idle-overlay.js');
-  const { updateIdleState, forceStopIdle } = idleModule;
   const compModule  = await loadModule('src/content/comprehension-monitor.js');
   const readCalModule = await loadModule('src/content/reading-calibration.js');
-  const { runReadingCalibration } = readCalModule;
+  const { runSelfPacedCalibration } = readCalModule;
   const ttsModule      = await loadModule('src/content/tts-handler.js');
   const rulerModule    = await loadModule('src/content/focus-ruler.js');
   const dyslexiaModule  = await loadModule('src/content/dyslexia-utils.js');
   const segmentation     = await loadModule('src/content/telemetry/segmentation.js');
-  const langDetectModule = await loadModule('src/content/lang-detect.js');
   const mapModule       = await loadModule('src/content/reading-map.js');
 
   const ttsHandler    = ttsModule.createTTSHandler();
   const focusRuler    = rulerModule.createFocusRuler();
   const dyslexiaUtils = dyslexiaModule;
-  let scriptInfo = langDetectModule.detectScript();
-  langDetectModule.watchScriptChanges(newInfo => {
-    scriptInfo = newInfo;
-    _log(`Script re-detected: RTL=${newInfo.isRTL} CJK=${newInfo.isCJK} lang="${newInfo.lang}"`);
-  });
   const readingMap    = mapModule.createReadingMap();
   const sessionModule  = await loadModule('src/content/session-tracker.js');
   const sessionTracker = sessionModule.createSessionTracker();
@@ -184,22 +197,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   backtrackWindow:4000,
   cooldown:       30000,
 });
-  const classModule  = await loadModule('src/content/classifier.js');
-
-  const featureExtractor = featModule.createFeatureExtractor({
-    windowMs: 2500, minPoints: 15,
-    // The paragraph being read defines the text column for on_page_fraction.
-    // Returns null before anything is being tracked, and the extractor then
-    // abstains rather than reporting a fraction it cannot compute.
-    getContentRect: () => {
-      try {
-        const el = orchestrator?.getActiveParagraphEl()
-          || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
-        return el ? el.getBoundingClientRect() : null;
-      } catch (e) { return null; }
-    },
-  });
-  const { classifyGazeState, COGNITIVE_STATE_ACTIONS } = classModule;
 
   // ── UI ─────────────────────────────────────────────────────────────────
   const uiModule = await loadModule('src/content/ui-controller.js');
@@ -214,9 +211,13 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   });
   const {
     openPopups, highlightElement, closePopup, flashPopup, hidePopup,
-    reservePopup, showPopup, renderPopup,
-    showNudge, showSimulateToast, showQualityToast,
+    renderPopup, reservePopup, showPopup,
+    showNudge, showSimulateToast, showStatusToast,
   } = ui;
+
+  // ── Snooze (item 18) ─────────────────────────────────────────────────────
+  const snoozeModule = await loadModule('src/content/snooze.js');
+  const snoozeControl = snoozeModule.createSnoozeControl();
 
   // ── Question layer ─────────────────────────────────────────────────────
   const responseModule = await loadModule('src/content/telemetry/response-signals.js');
@@ -233,14 +234,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     esc,
     signReceipt: async (receipt) => {
       const url = (backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/receipt/sign');
-      const j = await new Promise((resolve) => {
-        try {
-          chrome.runtime.sendMessage({ action: 'apiPost', url, body: { receipt } }, (resp) => {
-            if (chrome.runtime.lastError || !resp || !resp.ok) { resolve(null); return; }
-            resolve(resp.data);
-          });
-        } catch (e) { resolve(null); }
-      });
+      const resp = await callBackend('apiPost', url, { receipt });
+      const j = resp.ok ? resp.data : null;
       return j && j.receipt ? j.receipt : null;
     },
   });
@@ -263,6 +258,104 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   }
 
   function showReceipt() { receiptPanel.show(buildCurrentReceipt()); }
+
+  // Opens the quiz page in a new tab. Content scripts cannot call
+  // chrome.tabs.create directly — relayed through background.js's existing
+  // 'openTab' handler, the same one popup.js's notes/highlights/etc. use via
+  // chrome.tabs.create itself (an extension page can call it directly; a
+  // content script cannot, hence the relay only here).
+  function openQuizPage(key) {
+    const url = chrome.runtime.getURL('src/popup/quiz.html') + (key ? '?key=' + encodeURIComponent(key) : '');
+    try { chrome.runtime.sendMessage({ action: 'openTab', url }); } catch (e) {}
+  }
+
+  /* the project notes: "5-8 questions... one server call per quiz... one passage
+   * batch in, N questions out." session-recall.js's weighted select() picks
+   * the paragraphs; they are joined into ONE passage and sent in ONE
+   * fetchQuestions() call with count set to the top of the range — the
+   * existing /api/questions contract already accepts a count, so this reuses
+   * it rather than inventing a batch endpoint the server does not have.
+   * `clampCount` in the server's own question-validation contract caps count
+   * at 5 today (see tests/contract/questions.js), so a real deployment may
+   * return fewer than 8 even when asked for more; nothing here assumes a
+   * specific number back, only a minimum worth showing as a quiz. */
+  const QUIZ_TARGET_COUNT = 8;
+  const QUIZ_MIN_QUESTIONS = 5;
+  let quizGenerating = false;
+
+  /* Selects, generates and stashes a quiz for the current document, then
+   * opens the quiz page to pick it up. Returns true only if a quiz was
+   * actually produced — the caller (the offer card, or the popup via
+   * startQuiz) uses that to show or not show a busy/failure state. Nothing
+   * here writes passage text to disk: the joined text lives only in this
+   * function's memory and in the one outgoing request body. */
+  async function runQuiz() {
+    if (quizGenerating) return false;
+    const key = orchestrator.documentKey();
+    if (!key) return false;
+
+    quizGenerating = true;
+    try {
+      const picked = sessionRecall.select(QUIZ_TARGET_COUNT);
+      if (!picked.length) return false;
+
+      const combinedText = picked.map((p) => p.text).join('\n\n');
+      const questions = await fetchQuestions(combinedText, { count: QUIZ_TARGET_COUNT, kind: 'recall' });
+      // Fewer than the floor is a generation failure, not a shorter quiz —
+      // invariant 9's "a wrong intervention is worse than a missed one"
+      // extends here as "no quiz is better than a thin, unrepresentative one".
+      if (questions.length < QUIZ_MIN_QUESTIONS) return false;
+
+      await new Promise((resolve) => chrome.storage.local.set({
+        sra_quiz_pending: { key, questions: questions.slice(0, QUIZ_TARGET_COUNT), createdAt: Date.now() },
+      }, resolve));
+
+      openQuizPage(key);
+      return true;
+    } catch (e) {
+      return false;
+    } finally {
+      quizGenerating = false;
+    }
+  }
+
+  /* The unprompted end-of-reading offer. Reader-initiated once shown — no
+   * interruption budget was spent to put it on screen (quiz-offer.js never
+   * touches intervention-policy.js) and none is spent by dismissing it. */
+  function showQuizOffer(result) {
+    if (!assistantEnabled) return;
+    const fingerprint = 'quiz-offer-' + (result.key || 'doc');
+    const root = reservePopup(fingerprint);
+    if (!root) return;
+
+    root.innerHTML = `
+      <div class="sra-controls">
+        <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
+      </div>
+      <div class="sra-popup-body">
+        <div class="sra-state-badge sra-q-badge">quiz</div>
+        <div class="sra-q-text">Ready to test what you remember?</div>
+      </div>
+      <div class="sra-popup-divider"></div>
+      <div class="sra-actions">
+        <button class="sra-btn sra-btn-primary sra-quiz-start-btn">Take the quiz</button>
+        <button class="sra-btn sra-btn-secondary sra-q-skip">Not now</button>
+      </div>`;
+
+    const dismiss = () => closePopup(root, fingerprint);
+    root.querySelector('.sra-close-btn').onclick = dismiss;
+    root.querySelector('.sra-q-skip').onclick = dismiss;
+    root.querySelector('.sra-quiz-start-btn').onclick = async () => {
+      const btn = root.querySelector('.sra-quiz-start-btn');
+      btn.disabled = true;
+      btn.textContent = 'Preparing…';
+      const ok = await runQuiz();
+      if (!ok) { btn.disabled = false; btn.textContent = 'Take the quiz'; return; }
+      dismiss();
+    };
+
+    showPopup(root, null);
+  }
   const questionCard = cardModule.createQuestionCard({
     ui,
     esc,
@@ -275,9 +368,30 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
       // A paragraph already answered correctly is a poor use of a recall slot.
       if (record.paragraphKey) sessionRecall.recordAnswered(record.paragraphKey, record.correct);
+      // Any answer — right or wrong — is engagement, which is what clears
+      // the dismissal backoff below.
+      try { orchestrator.interventionPolicy.recordAnswered(); } catch (e) {}
     },
-    onDismissed: () => { /* declining to be tested says nothing; record nothing */ },
+    onDismissed: () => {
+      // Declining to be tested says nothing about comprehension, and is
+      // never scored — but it is still the reader saying "not now", and
+      // three in a row raises the bar on further questions. See
+      // intervention-policy.js's dismissalBackoff.
+      try { orchestrator.interventionPolicy.recordDismissal(); } catch (e) {}
+    },
+    onSnooze: (durationMs, label) => { startSnooze(durationMs, label); },
   });
+
+  /* Shared by the card's own snooze control and the popup's. Recording the
+   * dismissal for a popup-triggered snooze happens at the message handler,
+   * not here — from the card, dismiss() (called right after this) already
+   * records it, and doing it twice would double-count one snooze as two
+   * consecutive dismissals toward item 10's backoff. */
+  async function startSnooze(durationMs, label) {
+    const until = await snoozeControl.snooze(durationMs);
+    showStatusToast(`Snoozed${label ? ' for ' + label : ''} — reminders paused`);
+    return until;
+  }
 
   // ── Detection pipeline ─────────────────────────────────────────────────
   // orchestrator.js owns the detectors, the state engine and the interruption
@@ -288,17 +402,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   orchestrator = await orchModule.createOrchestrator({
     loadModule,
     comprehensionMonitor,
-    featureExtractor,
-    classifyGazeState,
-    getSmoothedState,
-    gazeUtils,
-    dyslexiaUtils,
-    langDetect: langDetectModule,
     // Read live: the storage listener reassigns these at runtime.
     settings: () => ({
       assistantEnabled,
-      comprehensionCheckEnabled, eyeTrackingEnabled, focusRulerEnabled,
-      debugEnabled, dyslexiaEnabled, personalBaseline, scriptInfo,
+      comprehensionCheckEnabled, focusRulerEnabled,
+      debugEnabled,
     }),
     host: {
       sessionTracker,
@@ -309,22 +417,18 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       setCurrentParagraph: (p) => { currentParagraph = p; },
       setPrevParagraphText: (t) => { prevParagraphText = t; },
       setCogState: (label) => { lastCogState = label; },
-      getLastGazePoint: () => lastGazePt,
-      // Reading an open card is not fresh confusion. Without this, letting your
-      // gaze settle on a popup pops another one on top of it.
-      isReadingAPopup: () => { try { return ui.isGazeOverAnyPopup(lastGazePt); } catch (e) { return false; } },
-      getLastGazeReceivedAt: () => lastGazeReceivedAt,
-      onQualityWarning: () => showQualityToast(),
       onParagraphRead: (text, dwellMs) => sessionRecall.recordRead(text, dwellMs),
       onStruggle: (text) => sessionRecall.recordStruggle(text),
-      onGazeFeatures: (rawFeatures) => {
-        if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
-        else forceStopIdle();
-      },
+      onQuizOfferEligible: (result) => showQuizOffer(result),
       onIntervention: async (decision, state, target) => {
         // Off means off: nothing reaches the screen, and the budget is not
         // spent on an offer that was never made.
         if (!assistantEnabled) return false;
+        // Item 18: only the final render is suppressed. Detection, coverage
+        // tracking and the quiz gate all keep running above this — pausing
+        // those too would mean a reader who snoozes never reaches the quiz
+        // gate, which is a worse outcome than a paused reminder.
+        if (await snoozeControl.isActive()) return false;
         if (decision.action === 'nudge') {
           showNudge(target);
           if (target) highlightElement(target, 3000);
@@ -333,38 +437,31 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         if (decision.action === 'ask') {
           return await handleAsk(decision, state, target);
         }
-        // A telemetry signal knows which paragraph it came from.
-        if (state.signal) {
-          return await handleComprehensionSignal(state.signal, decision.evidence, target);
-        }
-        if (currentParagraph) {
-          await triggerAIForParagraph(currentParagraph, state.label);
-          return true;
-        }
+        // intervention-policy.js's STATE_ACTIONS only ever produces 'ask' or
+        // 'nudge' for an allowed decision — 'none' is denied before this is
+        // ever called — so there is no third branch to fall through to here.
         return false;
       },
     },
   });
 
   // ── Load settings ──────────────────────────────────────────────────────
-  // Boot waits on this. Settings load asynchronously, and starting the tracker
-  // before they arrive means booting the camera on the `sra_eye: true` default
-  // regardless of what the reader actually chose.
+  // Boot waits on this so nothing acts on defaults before the reader's real
+  // choices arrive.
   let settingsLoaded;
   const settingsReady = new Promise((resolve) => { settingsLoaded = resolve; });
 
   chrome.storage.local.get({
     sra_enabled: true,
-    sra_backend_url: BACKEND_DEFAULT, sra_eye: false, sra_selection: true,
+    sra_backend_url: BACKEND_DEFAULT, sra_selection: true,
     sra_highlight_para: true, sra_autohide: false, sra_autohide_timeout: 12,
-    sra_pin_default: false, sra_debug: false, sra_idle_blink: true, sra_comprehension: true,
+    sra_pin_default: false, sra_debug: false, sra_comprehension: true,
     sra_tts: false, sra_focus_ruler: false, sra_dyslexia: false,
     sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
-    sra_personal_baseline: null, sra_baseline_wpm: null, sra_dark_mode: false,
+    sra_baseline_wpm: null, sra_dark_mode: false,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     assistantEnabled   = res.sra_enabled !== false;
-    eyeTrackingEnabled = res.sra_eye === true;
     selectionEnabled   = res.sra_selection !== false;
     highlightEnabled   = res.sra_highlight_para !== false;
     autohideEnabled    = !!res.sra_autohide;
@@ -377,7 +474,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     dyslexiaEnabled   = !!res.sra_dyslexia;
     dyslexiaColor     = res.sra_dyslexia_color || 'rgba(255,243,180,0.12)';
     bionicEnabled     = !!res.sra_bionic;
-    personalBaseline  = res.sra_personal_baseline || null;
     if (res.sra_baseline_wpm) comprehensionMonitor.seedWpmFromCalibration(res.sra_baseline_wpm);
     if (dyslexiaEnabled) dyslexiaUtils.applyDyslexiaCSS(dyslexiaColor);
     if (focusRulerEnabled) focusRuler.enable();
@@ -411,16 +507,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       // host PAGE's origin (e.g. https://en.wikipedia.org), which the server's
       // CORS policy correctly rejects. The background worker's fetch carries no
       // page origin, so it passes CORS while keeping the server locked down to
-      // the extension only. Falls back to a direct fetch if messaging fails.
-      const j = await new Promise((resolve) => {
-        try {
-          chrome.runtime.sendMessage({ action: 'summarize', url, body }, (resp) => {
-            if (chrome.runtime.lastError || !resp) { resolve(null); return; }
-            if (!resp.ok) { _warn(`Server ${resp.status || ''} ${resp.error || ''}`); resolve(null); return; }
-            resolve(resp.data);
-          });
-        } catch (e) { resolve(null); }
-      });
+      // the extension only. callBackend() attaches the install token and
+      // relays whatever background.js returns.
+      const resp = await callBackend('summarize', url, body);
+      if (!resp.ok) { _warn(`Server ${resp.status || ''} ${resp.error || ''}`); return null; }
+      const j = resp.data;
       if (!j) return null;
 
       const result = j.summary || j.result || null;
@@ -440,10 +531,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   // ── Simulated states (testing only) ────────────────────────────────────
   // The panel and these shortcuts speak the engine's vocabulary — on_pace,
-  // skimming, struggling, drifting. The classifier's action table still uses
-  // the older labels it was trained against, so the translation lives here
-  // rather than leaking old names back into the UI. `simplify` is kept
-  // reachable on Alt+2 because nothing else exercises that renderer.
+  // skimming, struggling, drifting. `simplify` is kept reachable on Alt+2
+  // because nothing else exercises that renderer.
   const SIM_ACTIONS = Object.freeze({
     struggling: 'explain',
     drifting:   'nudge',
@@ -459,7 +548,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   async function runSimulatedState(spec) {
     const [state, forced] = String(spec).split(':');
-    const action = forced || SIM_ACTIONS[state] || COGNITIVE_STATE_ACTIONS[state] || 'none';
+    const action = forced || SIM_ACTIONS[state] || 'none';
 
     showSimulateToast(state);
     lastActionAt = 0;
@@ -495,7 +584,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         return;
       }
 
-      // Alt+S: summarise paragraph at current gaze / viewport centre
+      // Alt+S: summarise paragraph at viewport centre — the one manual path
+      // that reaches pdfHandler/pptxHandler via findParagraphAt() below
       if (e.key === 's' || e.key === 'S') {
         e.preventDefault();
         const para = await findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
@@ -578,22 +668,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     // a content script's fetch carries the host page's origin and the server
     // rejects it. A direct fetch here works only when the page happens to be
     // same-origin with the server, which is true in tests and false in life.
-    const j = await new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage({ action: 'apiPost', url: questionsUrl(), body }, (resp) => {
-          if (chrome.runtime.lastError || !resp) { resolve(null); return; }
-          if (!resp.ok) {
-            // 422 means nothing passed the server's citation check; 503 means
-            // no key. Both are ordinary outcomes and both fall back to
-            // explaining rather than showing the reader an error.
-            _log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
-            resolve(null);
-            return;
-          }
-          resolve(resp.data);
-        });
-      } catch (e) { resolve(null); }
-    });
+    const resp = await callBackend('apiPost', questionsUrl(), body);
+    if (!resp.ok) {
+      // 422 means nothing passed the server's citation check; 503 means no
+      // key; no_install_token means the token couldn't be resolved. All are
+      // ordinary failure outcomes and all degrade to silence — see
+      // handleAsk(), which treats an empty result as nothing to show rather
+      // than falling back to an explanation.
+      _log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
+      return [];
+    }
+    const j = resp.data;
     if (!j) return [];
     return Array.isArray(j.questions) ? j.questions : [];
   }
@@ -604,14 +689,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
     if (!text) return false;
 
+    // Every way this can come back empty — network failure, a non-ok status
+    // (422 nothing passed the server's citation check, 503 no key), a
+    // malformed response, or a genuine empty result — collapses to the same
+    // outcome here: silence. This used to fall back to a comprehension-offer
+    // popup or a summary, which meant a failed *question* call quietly
+    // became a shown *explanation*, on a product whose whole premise is that
+    // asking beats summarising. A wrong intervention is worse than a missed
+    // one (invariant 9) — nothing reaches the screen and the caller does not
+    // spend the interruption budget on an offer that was never made.
     const questions = await fetchQuestions(text);
-    if (!questions.length) {
-      // No question could be generated or none cited its evidence. Fall back
-      // to the explanation card rather than dropping the interruption.
-      if (state.signal) return await handleComprehensionSignal(state.signal, decision.evidence, el);
-      if (el) { await triggerAIForParagraph({ type: 'dom', data: el }, state.label); return true; }
-      return false;
-    }
+    if (!questions.length) return false;
 
     let anchorRect = null;
     try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
@@ -621,6 +709,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       evidence: decision.evidence,
       anchorRect,
       paragraphKey: text.slice(0, 80).trim(),
+      wasExplorationSample: decision.wasExplorationSample === true,
     });
   }
 
@@ -855,8 +944,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   let _wordBubble     = null;
   let _wordTimer      = null;
   let _lastHoveredWord = null;
-  let _imageDwellEl   = null;
-  let _imageDwellStart = 0;
 
   document.addEventListener('keydown', e => { if (e.key === 'Control' || e.key === 'Meta') _ctrlHeld = true; });
   document.addEventListener('keyup',   e => {
@@ -1064,14 +1151,21 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     return { type: 'dom', data: overlayUtils.getBlockAncestor(el) || el };
   }
 
-  // ── Gaze-triggered AI ──────────────────────────────────────────────────
+  // ── Summarise/explain a paragraph (simulate path, manual Alt+S) ────────
   async function triggerAIForParagraph(paraInfo, reason) {
     if (!paraInfo) return;
 
     let text = '', el = null;
-    if (paraInfo.type === 'dom') { el = paraInfo.data; text = (el?.innerText || el?.textContent || '').trim(); }
-    else if (paraInfo.type === 'pdf')  text = await pdfHandler.getParagraphText(paraInfo.data);
-    else if (paraInfo.type === 'pptx') text = await pptxHandler.getParagraphText(paraInfo.data);
+    try {
+      if (paraInfo.type === 'dom') { el = paraInfo.data; text = (el?.innerText || el?.textContent || '').trim(); }
+      else if (paraInfo.type === 'pdf')  text = await pdfHandler.getParagraphText(paraInfo.data);
+      else if (paraInfo.type === 'pptx') text = await pptxHandler.getParagraphText(paraInfo.data);
+    } catch (e) {
+      // Extraction failure — PDF.js choking on a hostile file, a PPTX slide
+      // with no text layer, whatever it is. Falls through to the empty-text
+      // check below exactly like a page with nothing extractable at all.
+      text = '';
+    }
     if (!text || text.length < 25) return;
 
     // Don't spawn a duplicate popup for the same paragraph
@@ -1109,275 +1203,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
   }
 
-  // ── Gaze processing ────────────────────────────────────────────────────
-  const gazeState = gazeUtils.createGazeState({ smoothingAlpha:0.35, dropoutFrames:3, velocityThreshold:1800 });
-  let consecutiveNull = 0, lastGazePt = null;
-
-  async function onGaze(data) {
-    if (!eyeTrackingEnabled) return;
-    if (!data) { consecutiveNull++; if (consecutiveNull >= gazeState.dropoutFrames) lastGazePt = null; return; }
-    consecutiveNull = 0;
-    const pt = gazeUtils.normalizeAndSmooth(data, gazeState);
-    if (!pt) return;
-    pt.x = clamp(pt.x, 0, window.innerWidth  - 1);
-    pt.y = clamp(pt.y, 0, window.innerHeight - 1);
-    if (!gazeUtils.checkVelocity(gazeState, pt)) return;
-    lastGazePt = pt;
-    lastGazeReceivedAt = Date.now();
-    featureExtractor.addPoint(pt);
-
-    // Image dwell: if gaze stays on the same image while confused/overloaded for >2s, explain it
-    const _gazeTopEl = document.elementFromPoint(pt.x, pt.y);
-    const _gazeImg   = _gazeTopEl?.tagName === 'IMG' ? _gazeTopEl
-      : (_gazeTopEl?.closest?.('figure')?.querySelector?.('img') || null);
-    if (_gazeImg) {
-      if (_gazeImg !== _imageDwellEl) { _imageDwellEl = _gazeImg; _imageDwellStart = Date.now(); }
-      else if (lastCogState === 'struggling' && Date.now() - _imageDwellStart > 2000) {
-        const _ifp = 'img:' + (_gazeImg.src || '').slice(-60) + ':' + (_gazeImg.alt || '').slice(0, 20);
-        if (!inFlightFingerprints.has(_ifp)) {
-          _imageDwellStart = Date.now() + 30000; // suppress for 30s after trigger
-          triggerImageExplanation(_gazeImg, pt.x, pt.y, lastCogState);
-        }
-      }
-    } else {
-      _imageDwellEl = null;
-    }
-
-    // Pause autohide on any card the gaze is resting on (from main).
-    try { ui.updateGazeOverPopups(pt); } catch (e) {}
-
-    // Focus ruler follows gaze Y in real time
-    if (focusRulerEnabled) focusRuler.update(pt.y);
-
-    try {
-      const f = await findParagraphAt(pt.x, pt.y);
-      if (f) {
-        const isPopup = f.type === 'dom' && f.data &&
-          (f.data.classList?.contains('sra-popup') || !!f.data.closest?.('.sra-popup'));
-        if (!isPopup) {
-          if (comprehensionCheckEnabled && f.type === 'dom' && f.data !== (currentParagraph && currentParagraph.data)) {
-            // Paragraph timing is owned by paragraph-tracker via syncParagraph()
-            // now — it works with the camera off, which this path never did.
-            // Gaze still refines which paragraph is under the reader.
-            if (currentParagraph?.type === 'dom' && currentParagraph.data) {
-              prevParagraphText = (currentParagraph.data.innerText || currentParagraph.data.textContent || '')
-                .trim().slice(0, 800);
-            }
-          }
-          currentParagraph = f;
-        }
-      }
-    } catch (e) {}
-  }
-
-  // ── Comprehension signal handler ──────────────────────────────────────────
-  // Renderer only. It no longer decides whether to interrupt — the state engine
-  // produces the state and intervention-policy decides. Call it from the engine
-  // subscriber, never directly from a detector.
-  // Returns true only if an offer actually reached the screen. The caller uses
-  // that to decide whether to spend the interruption budget — an offer that
-  // bailed out here must not count against the reader's five.
-  async function handleComprehensionSignal(signal, evidence = [], targetEl = null) {
-    if (!comprehensionCheckEnabled) return false;
-
-    // Keeps the monitor's own 30s cooldown honest. The session record is
-    // written by the engine subscriber, which sees every interruption.
-    comprehensionMonitor.markOfferShown();
-
-    const el = (signal.type === 'speed_mismatch' && signal.el) ? signal.el
-              : (currentParagraph?.type === 'dom' ? currentParagraph.data : targetEl);
-
-    if (el) highlightElement(el, 4000);
-
-    let text = signal.text || '';
-    if (!text && el) text = (el.innerText || el.textContent || '').trim();
-    if (!text) return false;
-
-    let anchorRect = null;
-    try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
-
-    const fingerprint = 'comp-' + text.slice(0, 80).trim();
-    // reservePopup handles both dedup (flashes the existing card) and the
-    // MAX_POPUPS cap. This renderer used to do the first and not the second,
-    // so a page full of pinned cards could still stack another one on top.
-    // Null means nothing was shown, and the caller must not spend the budget.
-    const root = reservePopup(fingerprint);
-    if (!root) return false;
-
-    const offerHtml = buildComprehensionOfferHtml(signal, evidence);
-
-    root.innerHTML = `
-      <div class="sra-controls">
-        <button class="sra-ctrl-btn sra-close-btn" title="Close">&#x2715;</button>
-      </div>
-      <div class="sra-popup-body">${offerHtml}</div>
-      <div class="sra-popup-divider"></div>
-      <div class="sra-actions">
-        <button class="sra-btn sra-btn-primary  sra-comp-summarise">Summarise it</button>
-        <button class="sra-btn sra-btn-secondary sra-comp-dismiss">I understood it</button>
-      </div>`;
-
-    root.querySelector('.sra-close-btn').onclick = () => closePopup(root, fingerprint);
-    root.querySelector('.sra-comp-dismiss').onclick = () => closePopup(root, fingerprint);
-    root.querySelector('.sra-comp-summarise').onclick = async () => {
-      const btn = root.querySelector('.sra-comp-summarise');
-      btn.disabled = true; btn.textContent = 'Thinking…';
-      const summary = await fetchSummary(text, 'explain_more');
-      if (summary) {
-        const body = root.querySelector('.sra-popup-body');
-        if (body) body.innerHTML = `<div class="sra-state-badge">comprehension assist</div><div>${esc(summary)}</div>`;
-        btn.textContent = 'Summarise it'; btn.disabled = false;
-        const dismiss = root.querySelector('.sra-comp-dismiss');
-        if (dismiss) {
-          dismiss.textContent = 'Save Note';
-          dismiss.onclick = () => {
-            chrome.runtime.sendMessage({ action: 'saveNote', note: { text, meta: { source: 'comprehension', mode: 'explain_more' } } });
-            dismiss.textContent = 'Saved ✓'; dismiss.disabled = true;
-          };
-        }
-      }
-    };
-
-    showPopup(root, anchorRect);
-  }
-
-  // Every interruption has to show the reader what was actually observed —
-  // that turns an inference into an observation they can disagree with.
-  // The evidence strings come from the state engine.
-  function buildComprehensionOfferHtml(signal, evidence = []) {
-    const observed = evidence.length
-      ? `<div style="line-height:1.7"><strong>${esc(evidence[0])}.</strong></div>`
-      : '';
-
-    if (signal.type === 'speed_mismatch' && signal.subtype === 'too_slow') {
-      const detail = (signal.actualWpm && signal.baselineWpm)
-        ? `You read this stretch at about ${signal.actualWpm} words per minute; your usual pace is
-           around ${signal.baselineWpm}.`
-        : 'You spent noticeably longer here than you usually do.';
-      return `<div class="sra-state-badge" style="color:#9A6B2F;border-color:rgba(154,107,47,0.3);background:rgba(154,107,47,0.06)">
-        reading pace check</div>
-        ${observed}
-        <div style="line-height:1.7">${detail}
-        <br><em style="color:var(--muted)">Want a hand with it?</em></div>`;
-    }
-
-    if (signal.type === 'speed_mismatch') {
-      const r = signal.readability;
-      // elapsed/expected are only present on the too_fast signal — guard rather
-      // than rendering NaN, which is what the previous version did for too_slow.
-      const haveTiming = Number.isFinite(signal.elapsed) && Number.isFinite(signal.expected);
-      const timing = haveTiming
-        ? `you moved through it in ${Math.round(signal.elapsed / 1000)}s — expected at least
-           ${Math.round(signal.expected / 1000)}s for text this dense.`
-        : 'you moved through it faster than text this dense usually takes.';
-      const score = r && Number.isFinite(r.score) ? ` (readability score ${r.score.toFixed(0)}/100)` : '';
-      return `<div class="sra-state-badge" style="color:#9A6B2F;border-color:rgba(154,107,47,0.3);background:rgba(154,107,47,0.06)">
-        reading pace check</div>
-        ${observed}
-        <div style="line-height:1.7">That was a <strong>complex paragraph</strong>${score} but ${timing}
-        <br><em style="color:var(--muted)">Want a quick summary?</em></div>`;
-    }
-
-    if (signal.type === 'backtrack') {
-      return `<div class="sra-state-badge" style="color:#7E6E5A;border-color:rgba(126,110,90,0.3);background:rgba(126,110,90,0.06)">
-        scroll backtrack</div>
-        ${observed}
-        <div style="line-height:1.7">Looks like something might not have landed clearly.
-        <br><em style="color:var(--muted)">Want a summary of what you just passed?</em></div>`;
-    }
-
-    return `${observed}<div>Want a summary?</div>`;
-  }
-
-  // ── WebGazer bootstrap ─────────────────────────────────────────────────
-  // CSP-safe: URL passed via data attribute, no inline scripts
-  async function startTracker() {
-    if (window.__sra_tracker_started) return;
-    window.__sra_tracker_started = true;
-
-    try {
-      const script = document.createElement('script');
-      script.dataset.webgazerUrl = chrome.runtime.getURL('src/libs/webgazer.min.js');
-      script.src = chrome.runtime.getURL('src/content/webgazer-bootstrap.js');
-      (document.head || document.documentElement).appendChild(script);
-
-      // Fallback injection if bootstrap doesn't fire cameraReady or cameraError within 8s
-      let gotSignal = false;
-      const fallback = setTimeout(() => {
-        if (gotSignal) return;
-        _warn('No signal from WebGazer after 8s — trying background injection…');
-        chrome.runtime.sendMessage({ action: 'injectWebgazerBootstrap' }, r => {
-          if (chrome.runtime.lastError) _warn(chrome.runtime.lastError.message);
-        });
-      }, 8000);
-
-      window.addEventListener('message', async (ev) => {
-        if (ev.source !== window || !ev.data) return;
-        const d = ev.data;
-
-        if (d.source === 'sra-webgazer') {
-          try { if (d.gaze) onGaze(d.gaze); } catch (e) {}
-          return;
-        }
-
-        if (d.source === 'sra-control' && d.type === 'cameraReady') {
-          gotSignal = true;
-          clearTimeout(fallback);
-          cameraIsReady = true;
-          chrome.storage.local.set({ sra_camera_ready: true });
-          _log('WebGazer camera ready ✓');
-
-          setTimeout(async () => {
-            try {
-              // One-time calibration: if user has calibrated before, restore
-              // the saved model silently. No overlay, no interruption.
-              // Recalibrate anytime via the popup buttons.
-              const stored = await new Promise(resolve =>
-                chrome.storage.local.get({ sra_ever_calibrated: false }, r => resolve(r))
-              );
-              if (stored.sra_ever_calibrated) {
-                // Restore the saved regression model for a warm start, then let
-                // continuous click recording refine it for the current session.
-                _log('Calibration persisted — restoring model from previous session');
-                await gazeUtils.restoreWebgazerModel();
-              } else {
-                _log('First-time calibration starting...');
-                const cal = await gazeUtils.runCalibrationSequence();
-                if (cal) {
-                  await gazeUtils.setCalibration(cal);
-                  chrome.storage.local.set({ sra_ever_calibrated: true });
-                  await gazeUtils.saveWebgazerModel();
-                  _log('First-time calibration complete and saved');
-                }
-              }
-            } catch (e) {
-              _warn('Calibration step failed (non-fatal):', e.message);
-            }
-            orchestrator.startClassificationLoop();
-          }, 800);
-        }
-
-        if (d.source === 'sra-control' && d.type === 'cameraError') {
-          gotSignal = true;
-          clearTimeout(fallback);
-          chrome.storage.local.set({ sra_camera_ready: false, sra_camera_error: d.error || 'unknown' });
-          _warn('WebGazer error:', d.error);
-          // Still start classification loop — it'll run without gaze data (no action will fire since lastGazePt stays null)
-        }
-      }, false);
-    } catch (e) { _warn('startTracker failed:', e); }
-  }
-
-  // Continuous click recording: every click is a WebGazer training example.
-  // This is the correct way — postMessage to the bootstrap in page context,
-  // which calls webgazer.recordScreenPosition(). Content scripts can't access
-  // window.webgazer directly (isolated world), but postMessage crosses worlds.
-  document.addEventListener('click', (e) => {
-    try {
-      window.postMessage({ source: 'sra-cal-record', x: e.clientX, y: e.clientY }, '*');
-    } catch (err) {}
-  }, { passive: true, capture: false });
-
   // ── PDF/PPTX handlers ─────────────────────────────────────────────────
   async function detectAndInitHandlers() {
     const url = window.location.href;
@@ -1391,33 +1216,46 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   // ── Public API ─────────────────────────────────────────────────────────
   window.sra = window.sra || {};
-  window.sra.runCalibration = async () => {
-    const cal = await gazeUtils.runCalibrationSequence();
-    if (cal) {
-      await gazeUtils.setCalibration(cal);
-      await gazeUtils.saveWebgazerModel();
-    }
-    return cal;
-  };
   window.sra.getState = () => lastCogState;
-  window.sra.isCameraReady = () => cameraIsReady;
 
   // ── Message listener ───────────────────────────────────────────────────
-  chrome.runtime.onMessage.addListener(async (msg, _, sendResponse) => {
-    if (!msg?.type) return;
+  // Deliberately NOT `async (msg, _, sendResponse) => {...}`. Chrome decides
+  // whether to keep the message channel open for an async sendResponse by
+  // checking whether the listener's *synchronous* return value is the
+  // literal boolean `true` — an async function always returns a Promise
+  // instead, even when its body does `return true` with nothing awaited
+  // first, so Chrome never sees `true` and can close the channel before an
+  // inner `(async () => { ...; sendResponse(...); })()` IIFE gets to call
+  // sendResponse. Found via real chrome.tabs.sendMessage testing (item 16's
+  // browser smoke check): "The message port closed before a response was
+  // received." on checkQuizCoverage, which is the first handler here ever
+  // exercised through an actual cross-context sendMessage rather than a
+  // same-page keyboard shortcut. Every branch below already returns `true`
+  // correctly; the outer function just has to stop hiding it inside a Promise.
+  chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
+    // Every branch below keys on either `msg.type` (settings, calibration,
+    // simulateState) or `msg.action` (sessionRecall, showReceipt,
+    // recallStats, checkQuizCoverage) — two conventions that grew up side
+    // by side in this file. Requiring `.type` here silently discarded every
+    // `.action`-only message before it ever reached its branch: popup.js's
+    // recallBtn and receiptBtn (both send `{ action: ... }` via sendToTab)
+    // would flash their busy label and revert with nothing happening,
+    // because Chrome closes the message channel — "port closed before a
+    // response was received" — the instant this function returns
+    // `undefined` instead of `true`. Found via item 16's browser smoke
+    // check, the first real chrome.tabs.sendMessage call any `.action`
+    // branch here had ever been exercised by; keyboard shortcuts (Alt+R,
+    // Alt+I) reach the same features through a same-page function call
+    // instead and never touched this listener at all.
+    if (!msg?.type && !msg?.action) return;
 
     if (msg.type === 'settings') {
-      if (msg.eye           !== undefined) {
-        eyeTrackingEnabled = !!msg.eye;
-        if (!eyeTrackingEnabled) forceStopIdle();
-      }
       if (msg.selection     !== undefined) selectionEnabled   = !!msg.selection;
       if (msg.highlightPara !== undefined) highlightEnabled   = !!msg.highlightPara;
       if (msg.autohide      !== undefined) autohideEnabled    = !!msg.autohide;
       if (msg.autohideTimeout !== undefined) autohideTimeoutSec = Number(msg.autohideTimeout) || 12;
       if (msg.pinDefault    !== undefined) pinDefault         = !!msg.pinDefault;
       if (msg.debug         !== undefined) debugEnabled       = !!msg.debug;
-      if (msg.idleBlink     !== undefined) { idleBlinkEnabled = !!msg.idleBlink; if (!idleBlinkEnabled) forceStopIdle(); }
       if (msg.comprehension !== undefined) comprehensionCheckEnabled = !!msg.comprehension;
       if (msg.backendUrl)                  backendUrl         = msg.backendUrl;
       // New feature flags
@@ -1435,73 +1273,33 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       }
       if (msg.bionic        !== undefined) bionicEnabled = !!msg.bionic;
       if (msg.darkMode      !== undefined) { darkModeEnabled = !!msg.darkMode; applyDarkMode(darkModeEnabled); }
-      try { window.postMessage({ source:'sra-control', type:'setPredictionPoints', enabled:!!debugEnabled },'*'); } catch(e){}
       sendResponse({ status: 'ok' }); return;
-    }
-    if (msg.type === 'runCalibration') {
-      (async () => {
-        try {
-          const cal = await gazeUtils.runCalibrationSequence();
-          if (cal) {
-            await gazeUtils.setCalibration(cal);
-            await gazeUtils.saveWebgazerModel();
-            // Mark calibrated so the auto-modal doesn't reappear on future pages
-            chrome.storage.local.set({ sra_ever_calibrated: true });
-          }
-          sendResponse({ status: 'ok', calibration: cal });
-        }
-        catch (e) { sendResponse({ status: 'error', error: String(e) }); }
-      })(); return true;
     }
     if (msg.type === 'debugToggle') {
       debugEnabled = !!msg.enabled;
-      try { window.postMessage({source:'sra-control',type:'setPredictionPoints',enabled:debugEnabled},'*'); } catch(e){}
       sendResponse({ status:'ok' }); return true;
     }
     if (msg.type === 'startReadingCalibration') {
       (async () => {
         try {
-          // Reset feature extractor so calibration gaze data builds a clean baseline
-          featureExtractor.reset();
-          const result = await runReadingCalibration({
-            msPerWord:  220,
+          const result = await runSelfPacedCalibration({
             onComplete: (success, wpm) => {
               _log('Reading calibration complete, success:', success, 'wpm:', wpm);
+              // Seed comprehension monitor's WPM baseline and persist it —
+              // it used to be written only inside a gaze-feature-baseline
+              // branch, so a reader who had just sat there measuring lost
+              // the number the moment the page unloaded.
               if (success && wpm) {
-                // Seed comprehension monitor WPM baseline from calibration
                 comprehensionMonitor.seedWpmFromCalibration(wpm);
-                // The WPM is persisted on its own. It used to be written only
-                // inside the gaze-baseline branch below, so with the camera
-                // off — where computeFeatures() returns null — the number the
-                // reader had just sat there measuring survived only until the
-                // page unloaded.
                 chrome.storage.local.set({ sra_baseline_wpm: wpm });
-
-                // Gaze feature baseline, when there was a camera producing one.
-                const baselineFeatures = featureExtractor.computeFeatures();
-                if (baselineFeatures) {
-                  personalBaseline = baselineFeatures;
-                  chrome.storage.local.set({ sra_personal_baseline: baselineFeatures });
-                  _log('Personal baseline saved:', baselineFeatures);
-                }
               }
             }
           });
-          try { await gazeUtils.saveWebgazerModel(); } catch(e) {}
-          // Mark calibrated so the auto dot-calibration modal doesn't reappear
-          chrome.storage.local.set({ sra_ever_calibrated: true });
           sendResponse({ status: 'ok', result });
         } catch (e) {
           sendResponse({ status: 'error', error: String(e) });
         }
       })();
-      return true;
-    }
-
-    if (msg.type === 'startCamera') {
-      window.__sra_tracker_started = false;
-      try { await startTracker(); sendResponse({status:'ok'}); }
-      catch (e) { sendResponse({status:'error',error:String(e)}); }
       return true;
     }
     if (msg.action === 'sessionRecall') {
@@ -1518,6 +1316,79 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       sendResponse({ status: 'ok', stats: sessionRecall.stats() });
       return true;
     }
+    if (msg.action === 'checkQuizCoverage') {
+      // The popup's quiz button and the end-of-reading offer must read the
+      // same threshold from the same function (the project notes, "The quiz —
+      // decided") — this is that function, reached from the popup context.
+      (async () => {
+        try {
+          const key = orchestrator.documentKey();
+          const result = key
+            ? await orchestrator.coverageGate.evaluate(key)
+            : { ready: false, reason: 'not enough reading tracked on this page yet', coveragePct: null, dwellMs: 0 };
+          sendResponse({ status: 'ok', key, ...result });
+        } catch (e) {
+          sendResponse({ status: 'ok', key: null, ready: false, reason: 'not enough reading tracked on this page yet', coveragePct: null, dwellMs: 0 });
+        }
+      })();
+      return true;
+    }
+    if (msg.action === 'startQuiz') {
+      // From the popup's "Take the quiz" button — same generation path
+      // (runQuiz) the end-of-reading offer's own button calls, so there is
+      // exactly one place that selects passages and makes the one server
+      // call, not a second copy per entry point.
+      (async () => {
+        try {
+          const ok = await runQuiz();
+          sendResponse({ status: 'ok', started: ok });
+        } catch (e) {
+          sendResponse({ status: 'ok', started: false });
+        }
+      })();
+      return true;
+    }
+    if (msg.action === 'getSnoozeStatus') {
+      (async () => {
+        try {
+          const until = await snoozeControl.until();
+          sendResponse({ status: 'ok', active: until > Date.now(), until });
+        } catch (e) {
+          sendResponse({ status: 'ok', active: false, until: 0 });
+        }
+      })();
+      return true;
+    }
+    if (msg.action === 'snoozeReminders') {
+      // From the popup — the card's own snooze control calls startSnooze()
+      // directly in the same page. popup.js sends only an option id, not a
+      // computed duration: the duration math (SNOOZE_OPTIONS, "rest of
+      // today") stays canonical in snooze.js and is resolved here, the same
+      // place question-card.js resolves it, rather than a second copy
+      // running in the popup's own timezone/clock context. No "current
+      // card" to dismiss here, so the dismissal for item 10's backoff is
+      // recorded explicitly instead of riding along on question-card.js's
+      // dismiss() path.
+      (async () => {
+        try {
+          const opt = snoozeModule.SNOOZE_OPTIONS.find((o) => o.id === msg.optionId);
+          if (!opt) { sendResponse({ status: 'error' }); return; }
+          const until = await startSnooze(opt.durationMs(Date.now()), opt.label);
+          try { orchestrator.interventionPolicy.recordDismissal(); } catch (e) {}
+          sendResponse({ status: 'ok', until });
+        } catch (e) {
+          sendResponse({ status: 'error' });
+        }
+      })();
+      return true;
+    }
+    if (msg.action === 'cancelSnooze') {
+      (async () => {
+        await snoozeControl.cancel();
+        sendResponse({ status: 'ok' });
+      })();
+      return true;
+    }
     if (msg.type === 'simulateState') {
       // Demo/test: force a state's intervention regardless of what the
       // detectors think. Same path as Alt+1–5.
@@ -1527,7 +1398,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
 
     if (msg.type === 'getState') {
-      sendResponse({ state: lastCogState, cameraReady: cameraIsReady });
+      sendResponse({ state: lastCogState });
       return;
     }
 
@@ -1694,18 +1565,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   // ── Boot ───────────────────────────────────────────────────────────────
   await detectAndInitHandlers();
-
-  // Never boot the camera unless the reader turned it on. webgazer.begin()
-  // calls getUserMedia, so starting the tracker speculatively would prompt for
-  // the webcam on a page the reader only wanted read. Telemetry detection below
-  // runs either way — it never needed the camera.
   await settingsReady;
-  if (eyeTrackingEnabled) await startTracker();
-  else _log('Eye tracking off — tracker not started, camera untouched');
 
   /* Turning the switch off has to leave the page as if the extension were
-   * not installed: no cards, no ruler, no sidebar, no speech, no camera, and
-   * no telemetry accruing in the background. Turning it back on resumes
+   * not installed: no cards, no ruler, no sidebar, no speech, and no
+   * telemetry accruing in the background. Turning it back on resumes
    * whatever the reader's settings already said. */
   function setAssistantEnabled(on) {
     const was = assistantEnabled;
@@ -1716,7 +1580,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       try { hidePopup(true); } catch (e) { /* nothing open */ }
       try { ui.clearHighlight(); } catch (e) { /* nothing highlighted */ }
       try { focusRuler.disable(); } catch (e) { /* never enabled */ }
-      try { forceStopIdle(); } catch (e) { /* no idle overlay */ }
       try { ttsHandler.stop(); } catch (e) { /* not speaking */ }
       try { document.getElementById('sra-reading-map')?.classList.remove('open'); } catch (e) {}
       try { document.querySelector('.sra-word-bubble')?.remove(); } catch (e) {}

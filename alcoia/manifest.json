@@ -6,24 +6,21 @@
   "version_name": "0.2.0 (pre-release)",
   "permissions": [
     "storage",
-    "scripting",
     "activeTab",
     "tabs",
     "webNavigation"
   ],
   "host_permissions": [
     "<all_urls>",
-    "file:///*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "file:///*"
   ],
   "action": {
     "default_popup": "src/popup/popup.html",
     "default_icon": {
-      "16": "assets/alcoia-mark-lilac.png",
-      "32": "assets/alcoia-mark-lilac.png",
-      "48": "assets/alcoia-mark-lilac.png",
-      "128": "assets/alcoia-mark-lilac.png"
+      "16": "assets/icon-16.png",
+      "32": "assets/icon-48.png",
+      "48": "assets/icon-48.png",
+      "128": "assets/icon-128.png"
     }
   },
   "content_scripts": [
@@ -32,6 +29,7 @@
         "<all_urls>"
       ],
       "js": [
+        "src/shared/config.js",
         "src/content/content.js"
       ],
       "run_at": "document_idle",
@@ -43,9 +41,9 @@
       "resources": [
         "src/content/*.js",
         "src/content/telemetry/*.js",
+        "src/shared/*.js",
         "src/styles/*.css",
         "src/libs/fonts/*.woff2",
-        "src/libs/webgazer.min.js",
         "src/libs/jszip.min.js",
         "src/libs/pdfjs/*.js",
         "src/pdf-viewer/viewer.html",
@@ -57,10 +55,10 @@
     }
   ],
   "icons": {
-    "16": "assets/alcoia-mark-lilac.png",
-    "32": "assets/alcoia-mark-lilac.png",
-    "48": "assets/alcoia-mark-lilac.png",
-    "128": "assets/alcoia-mark-lilac.png"
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-48.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
   },
   "background": {
     "service_worker": "background.js"
