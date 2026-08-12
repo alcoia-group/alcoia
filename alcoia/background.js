@@ -65,14 +65,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // is the same path for any other endpoint (questions, and whatever comes
   // next). Both exist for the same reason: a content script's fetch carries
   // the host page's origin, which the server's CORS policy rejects.
+  //
+  // The install token (src/shared/install-token.js) is acquired by content.js,
+  // not here, and arrives as `msg.token`. That split is a platform constraint,
+  // not a design preference: install-token.js is a real ES module loaded via
+  // dynamic import(), and Chrome disallows dynamic import() from inside a
+  // service worker entirely ("import() is disallowed on
+  // ServiceWorkerGlobalScope by the HTML specification") — confirmed the hard
+  // way, via the browser smoke test, not assumed. Content scripts have no
+  // such restriction, so the token lives there; this worker stays a dumb
+  // relay that requires one to already be present. No token, no request.
   if (msg.action === 'summarize' || msg.action === 'apiPost') {
     const url = msg.url || self.ALCOIA_CONFIG.SUMMARIZE_URL;
+    if (!msg.token) { sendResponse({ ok: false, error: 'no_install_token' }); return; }
     fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Alcoia-Install-Token': msg.token },
       body: JSON.stringify(msg.body || {}),
     })
       .then(async (resp) => {
+        // The server validated the token itself and said no — expired,
+        // revoked, or never valid. Flagged distinctly so content.js's
+        // install-token manager can clear its stored copy and fetch a
+        // fresh one on the next call, the same self-heal a reader
+        // deleting it by hand would get.
+        if (resp.status === 401 || resp.status === 403) {
+          sendResponse({ ok: false, status: resp.status, tokenRejected: true });
+          return;
+        }
         if (!resp.ok) { sendResponse({ ok: false, status: resp.status }); return; }
         const data = await resp.json();
         sendResponse({ ok: true, data });

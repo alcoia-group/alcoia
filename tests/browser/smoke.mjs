@@ -54,7 +54,13 @@ const CANNED_QUESTION = ZH ? {
   span: 'The relationship between where the eyes point and what the mind does is real but weak, and it becomes weaker as the measurement apparatus becomes cheaper and noisier than the laboratory equipment on which the original findings were established.',
 };
 
-const apiHits = { questions: 0, summarize: 0 };
+const apiHits = { questions: 0, summarize: 0, token: 0 };
+const TOKEN_HEADER = 'x-alcoia-install-token';
+const SMOKE_TOKEN = 'smoke-test-token';
+// Every /api/summarize or /api/questions request seen without the install
+// token header attached — item 9's "every AI request carries the token",
+// checked the only way it can be from outside content.js/background.js.
+const requestsMissingToken = [];
 
 /* FAIL=questions simulates the server rejecting every question — a 422 with
  * no citable span, the same shape a real "nothing passed the citation check"
@@ -63,14 +69,31 @@ const apiHits = { questions: 0, summarize: 0 };
  * this mode is what actually exercises that fix end to end, since none of
  * content.js's internals are exported for a unit test to reach directly. */
 const FAIL_QUESTIONS = process.env.FAIL === 'questions';
+// FAIL=token simulates the install-token endpoint itself being unreachable —
+// every AI call should then fail silently for lack of a token, before ever
+// reaching the summarize/questions handlers below. Expect this mode to still
+// report a handful of `console errors` — Chromium logs the service worker's
+// own failed 503 fetches to devtools regardless of how gracefully the code
+// then handles them, which is normal browser behaviour, not a page error.
+// `page errors` (thrown exceptions) staying at 0 is the assertion that
+// actually matters here, and is checked below.
+const FAIL_TOKEN = process.env.FAIL === 'token';
 
 const server = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url.startsWith('/api/token')) {
+    apiHits.token++;
+    if (FAIL_TOKEN) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ token: SMOKE_TOKEN }));
+    return;
+  }
   if (req.method === 'POST' && req.url.startsWith('/api/')) {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
       const isQuestions = req.url.includes('/api/questions');
       if (isQuestions) apiHits.questions++; else apiHits.summarize++;
+      if (req.headers[TOKEN_HEADER] !== SMOKE_TOKEN) requestsMissingToken.push(req.url);
       if (isQuestions && FAIL_QUESTIONS) {
         res.writeHead(422, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'no_citable_question' }));
@@ -280,6 +303,22 @@ const failureDegrade = FAIL_QUESTIONS ? {
   noPageErrors: findings.pageErrors.length === 0,
 } : null;
 
+const tokenFailureDegrade = FAIL_TOKEN ? {
+  tokenEndpointCalled: apiHits.token > 0,
+  noAiCallEverMade: apiHits.summarize === 0 && apiHits.questions === 0,
+  noQuestionCardShown: !questionCard.shown,
+  noPageErrors: findings.pageErrors.length === 0,
+} : null;
+
+// Every AI request the mock server actually received should have carried
+// the install token — checked regardless of FAIL mode, since the happy
+// path is where "every AI request carries the token" is really exercised.
+const tokenAttachment = {
+  tokenIssued: apiHits.token > 0,
+  everyAiRequestCarriedIt: requestsMissingToken.length === 0,
+  missing: requestsMissingToken,
+};
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -291,6 +330,8 @@ console.log('popups rendered         :', popups);
 console.log('overlay styling applied :', JSON.stringify(styling));
 console.log('third-party requests    :', findings.thirdParty.length, [...new Set(findings.thirdParty)].slice(0, 5));
 console.log('api hits                :', JSON.stringify(apiHits));
+console.log('install-token attachment:', JSON.stringify(tokenAttachment), '(expect tokenIssued & everyAiRequestCarriedIt true)');
+if (tokenFailureDegrade) console.log('token-endpoint fail     :', JSON.stringify(tokenFailureDegrade), '(expect all true)');
 console.log('question card           :', JSON.stringify(questionCard));
 console.log('after answering         :', JSON.stringify(graded));
 console.log('session recall (Alt+R)  :', JSON.stringify(recall));

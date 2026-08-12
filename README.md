@@ -139,7 +139,7 @@ extension's own setup, keyboard shortcuts and configuration reference.
 
 ```bash
 npm run lint                    # ESLint — a defect linter, not a style linter
-npm test                        # 272 tests
+npm test                        # 283 tests
 npm run test:browser            # loads the extension in Chromium, English article
 PAGE=zh npm run test:browser    # same checklist against a Chinese article
 ```
@@ -157,6 +157,7 @@ alcoia/                  the extension (AGPL-3.0)
     telemetry/           the detectors; each exports { update(), signal() }
   src/popup/             the toolbar panel and its pages
   src/shared/config.js   the one place the backend origin is defined
+  src/shared/install-token.js  the opaque per-install token that gates every AI call
   src/styles/            fonts.css, overlay.css, panel.css
   src/libs/              pdf.js, jszip, fonts (SIL OFL 1.1)
 tests/                   Vitest suites and the Chromium browser check
