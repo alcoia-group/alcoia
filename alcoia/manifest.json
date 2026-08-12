@@ -13,9 +13,7 @@
   ],
   "host_permissions": [
     "<all_urls>",
-    "file:///*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "file:///*"
   ],
   "action": {
     "default_popup": "src/popup/popup.html",
@@ -32,6 +30,7 @@
         "<all_urls>"
       ],
       "js": [
+        "src/shared/config.js",
         "src/content/content.js"
       ],
       "run_at": "document_idle",
