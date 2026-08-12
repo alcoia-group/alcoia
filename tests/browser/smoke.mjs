@@ -222,21 +222,31 @@ const styling = await page.evaluate(() => {
   };
 });
 
-// Answer the question if one was asked, and confirm the card grades it.
+// Answer the question if one was asked. Picking an option only selects it
+// (item 13: commit-time confidence) — grading happens once the confidence
+// step is resolved, exercised here with a real rating rather than skipping
+// it, so the full commit path runs in an actual browser at least once.
 const questionCard = await page.evaluate(() => {
   const opts = document.querySelectorAll('.sra-q-option');
   if (!opts.length) return { shown: false };
   const qText = document.querySelector('.sra-q-text')?.textContent || '';
   opts[0].click();
-  return { shown: true, question: qText, optionCount: opts.length };
+  const confidenceShown = !!document.querySelector('.sra-q-confidence');
+  const gradedBeforeConfidence = !!document.querySelector('.sra-q-result');
+  return { shown: true, question: qText, optionCount: opts.length, confidenceShown, gradedBeforeConfidence };
 });
-if (questionCard.shown) await page.waitForTimeout(1200);
+if (questionCard.shown) {
+  await page.waitForTimeout(300);
+  await page.evaluate(() => document.querySelector('.sra-q-conf-btn[data-conf="high"]')?.click());
+  await page.waitForTimeout(1200);
+}
 const graded = questionCard.shown
   ? await page.evaluate(() => ({
       marked: !!document.querySelector('.sra-q-correct'),
       result: document.querySelector('.sra-q-result')?.textContent?.trim().slice(0, 60) || null,
       resultIsCorrectStyled: !!document.querySelector('.sra-q-result-correct'),
       disabled: [...document.querySelectorAll('.sra-q-option')].every((b) => b.disabled),
+      confidenceStepGone: !document.querySelector('.sra-q-confidence'),
     }))
   : null;
 
