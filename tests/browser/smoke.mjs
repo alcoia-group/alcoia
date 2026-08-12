@@ -1,16 +1,14 @@
 /* Loads the alcoia extension unpacked in Chromium and runs the the project notes
  * verification checklist against a plain article page.
  *
- *   CAM=off node tests/browser/smoke.mjs   (default — camera must stay untouched)
- *   CAM=on  node tests/browser/smoke.mjs   (tracker should start)
+ *   node tests/browser/smoke.mjs
  *
- * Checks: content script injects, no page errors, no getUserMedia unless the
- * reader enabled the camera, no image/video data in any request, and that
- * telemetry-only detection still reaches the reader.
+ * Checks: content script injects, no page errors, no getUserMedia call ever
+ * (there is no camera path left to make one — see the project notes' migration
+ * note on removing webcam gaze), no image/video data in any request, and
+ * that telemetry-only detection reaches the reader.
  *
- * Not part of `npm test` — it needs a real browser and takes ~20s.
- * Note: WebGazer's face detector is fetched from tfhub.dev, so the gaze path
- * cannot be exercised on a network that blocks it. */
+ * Not part of `npm test` — it needs a real browser and takes ~20s. */
 import { chromium } from 'playwright';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -95,16 +93,13 @@ let sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker', { ti
 const extId = new URL(sw.url()).host;
 console.log('extension id:', extId);
 
-// Settings: camera OFF, comprehension ON, debug ON so the engine narrates.
+// Settings: comprehension ON, debug ON so the engine narrates.
 const cfg = await ctx.newPage();
 await cfg.goto(`chrome-extension://${extId}/src/popup/popup.html`);
-const CAM_ON = process.env.CAM === 'on';
-await cfg.evaluate((camOn) => new Promise((r) => chrome.storage.local.set({
-  sra_eye: camOn, sra_comprehension: true, sra_debug: true, sra_idle_blink: false,
+await cfg.evaluate(() => new Promise((r) => chrome.storage.local.set({
+  sra_comprehension: true, sra_debug: true,
   sra_backend_url: 'http://localhost:8731/api/summarize',
-}, r)), CAM_ON);
-const stored = await cfg.evaluate(() => new Promise((r) => chrome.storage.local.get(null, r)));
-console.log('camera setting (sra_eye):', stored.sra_eye);
+}, r)));
 await cfg.close();
 
 const page = await ctx.newPage();

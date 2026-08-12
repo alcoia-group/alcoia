@@ -25,25 +25,22 @@ passage you just read, with the sentence containing the answer quoted underneath
 the only thing in the system that produces ground truth: getting it right ends the interruption,
 getting it wrong is when an explanation appears.
 
-There is an optional webcam mode. It is **off by default**, it contributes only whether you are
-at the screen and roughly which region you are looking at, and video never leaves your machine.
+There is no webcam mode. Detection is telemetry only — no camera, no permission prompt, no video
+of any kind, ever.
 
 ---
 
 ## The signal hierarchy
 
-Three sources, in order of authority. This ordering is the product, not an implementation detail.
+Two sources, in order of authority. This ordering is the product, not an implementation detail.
 
 1. **Reader responses** — answers to retrieval questions. The only ground truth here. An answer
-   outranks anything the sensors say. A correct answer resolves to `on_pace` and stops the system
+   outranks anything telemetry says. A correct answer resolves to `on_pace` and stops the system
    pressing; a dismissal asserts nothing at all, because declining to be tested says nothing
    about comprehension.
 2. **Browser telemetry** — reading rate against text difficulty and your own baseline, scroll
    regressions, selection, copy, blur, idle. Precise, always available, no permission needed.
-   **This is the primary path and the default.**
-3. **Webcam gaze** — coarse presence and region only. Around 180 px of error, which is several
-   lines of text. It may assert only that you are `absent`, or corroborate a state telemetry
-   already suspects. It can never assert a reading state on its own.
+   **This is the only detection path.**
 
 ## Reading states
 
@@ -94,11 +91,10 @@ Reading-rate baselines are kept per language.
 
 ## Privacy
 
-- The camera is **off by default**, and the service worker independently refuses to start it
-  unless the reader turned it on — so nothing can start a webcam by posting a message.
+- **There is no camera path.** No webcam is ever started, by a message or otherwise — the code
+  that could have started one is not in the extension.
 - **No video, image or webcam frame is ever transmitted.** Verified by an automated browser test
   that inspects every outbound request body.
-- **No raw gaze coordinates** are stored or transmitted. Aggregates only.
 - **No analytics, no telemetry-to-vendor, no crash reporting, no third-party fonts or scripts.**
   Verified: zero third-party requests in the browser test.
 - **There is no covert mode**, and there will not be one. Not behind a flag, not for an
@@ -115,17 +111,15 @@ from it: [`LEGAL-DISCLOSURE-MAP.md`](LEGAL-DISCLOSURE-MAP.md).
 **No real-participant evaluation has been performed, and no accuracy figure for this project
 should be treated as meaningful.**
 
-The classifier that ships in `alcoia/src/content/classifier.js` was trained on synthetic data:
-rows generated from hand-written rules, then duplicated with Gaussian noise and split randomly —
-so a row's noisy twin can sit in the test set while the original sits in training. The figure in
-that file's header is kept for provenance, with that context attached. It is not a claim about
-how well this extension detects anything.
+There used to be a gaze classifier shipping in `alcoia/src/content/classifier.js`, trained on
+synthetic data — rows generated from hand-written rules, then duplicated with Gaussian noise and
+split randomly, so a row's noisy twin could sit in the test set while the original sat in
+training. It has been deleted along with the rest of the webcam gaze path, so there is no longer
+an accuracy figure of any kind in the shipped extension. A historical version of that training
+pipeline still exists under `tldr classifier/` for provenance; it produces no code that ships.
 
-Earlier drafts of this README carried an 88% figure and a "75–82% real-world" estimate. Both are
-gone. The second was never measured against anything at all.
-
-That classifier is also no longer on the critical path: it runs only when the camera is on, which
-is not the default.
+Earlier drafts of this README carried an 88% figure and a "75–82% real-world" estimate for that
+classifier. Both were removed before the classifier itself was.
 
 ## Install
 
@@ -145,15 +139,15 @@ extension's own setup, keyboard shortcuts and configuration reference.
 
 ```bash
 npm run lint                    # ESLint — a defect linter, not a style linter
-npm test                        # 280 tests
+npm test                        # 245 tests
 npm run test:browser            # loads the extension in Chromium, English article
 PAGE=zh npm run test:browser    # same checklist against a Chinese article
 ```
 
 The browser check asserts the things that matter and that unit tests cannot see: that the content
-script injects with no page errors, that **zero** `getUserMedia` calls happen with the camera off,
-that no image or video data appears in any request, that no third-party request is made, that the
-overlay stylesheet actually reaches its elements, and that every keyboard shortcut still fires.
+script injects with no page errors, that **zero** `getUserMedia` calls ever happen, that no image
+or video data appears in any request, that no third-party request is made, that the overlay
+stylesheet actually reaches its elements, and that every keyboard shortcut still fires.
 
 ## Layout
 
@@ -162,8 +156,9 @@ alcoia/                  the extension (AGPL-3.0)
   src/content/           content scripts — detection, fusion, UI
     telemetry/           the detectors; each exports { update(), signal() }
   src/popup/             the toolbar panel and its pages
+  src/shared/config.js   the one place the backend origin is defined
   src/styles/            fonts.css, overlay.css, panel.css
-  src/libs/              WebGazer (GPLv3), pdf.js, jszip, fonts (SIL OFL 1.1)
+  src/libs/              pdf.js, jszip, fonts (SIL OFL 1.1)
 tests/                   Vitest suites and the Chromium browser check
   contract/              vendored, dependency-free snapshots of the (separate-repo) server's
                          pure question/receipt logic, kept under test here only
@@ -175,9 +170,10 @@ NOTICE.md                licence scope and third-party components
 
 ## Licence
 
-The extension client is **AGPL-3.0**. It bundles WebGazer, which is **GPLv3**, so the shipped
-package is a combined copyleft work: the complete corresponding source must be offered to anyone
-who receives it, and the client can never be closed-source while WebGazer ships inside it.
+The extension client is **AGPL-3.0**, by choice — not because of a bundled dependency. It used to
+also bundle WebGazer (GPLv3), which made the shipped package a combined copyleft work; WebGazer
+has been removed along with the rest of the webcam gaze path (see `NOTICE.md`), and everything
+still bundled under `src/libs/` is permissive or OFL.
 
 Fonts (Literata, Plus Jakarta Sans) are **SIL OFL 1.1**, with their licences alongside the
 binaries. The API server is a separate program in a separate private repository and was never
