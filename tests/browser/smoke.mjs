@@ -1,16 +1,14 @@
 /* Loads the alcoia extension unpacked in Chromium and runs the the project notes
  * verification checklist against a plain article page.
  *
- *   CAM=off node tests/browser/smoke.mjs   (default — camera must stay untouched)
- *   CAM=on  node tests/browser/smoke.mjs   (tracker should start)
+ *   node tests/browser/smoke.mjs
  *
- * Checks: content script injects, no page errors, no getUserMedia unless the
- * reader enabled the camera, no image/video data in any request, and that
- * telemetry-only detection still reaches the reader.
+ * Checks: content script injects, no page errors, no getUserMedia call ever
+ * (there is no camera path left to make one — see the project notes' migration
+ * note on removing webcam gaze), no image/video data in any request, and
+ * that telemetry-only detection reaches the reader.
  *
- * Not part of `npm test` — it needs a real browser and takes ~20s.
- * Note: WebGazer's face detector is fetched from tfhub.dev, so the gaze path
- * cannot be exercised on a network that blocks it. */
+ * Not part of `npm test` — it needs a real browser and takes ~20s. */
 import { chromium } from 'playwright';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -56,18 +54,63 @@ const CANNED_QUESTION = ZH ? {
   span: 'The relationship between where the eyes point and what the mind does is real but weak, and it becomes weaker as the measurement apparatus becomes cheaper and noisier than the laboratory equipment on which the original findings were established.',
 };
 
-const apiHits = { questions: 0, summarize: 0 };
+const apiHits = { questions: 0, summarize: 0, token: 0 };
+const TOKEN_HEADER = 'x-alcoia-install-token';
+const SMOKE_TOKEN = 'smoke-test-token';
+// Every /api/summarize or /api/questions request seen without the install
+// token header attached — item 9's "every AI request carries the token",
+// checked the only way it can be from outside content.js/background.js.
+const requestsMissingToken = [];
+
+/* FAIL=questions simulates the server rejecting every question — a 422 with
+ * no citable span, the same shape a real "nothing passed the citation check"
+ * response takes. Item 8 in the build brief made this degrade to silence
+ * (no card at all) instead of falling back to a comprehension-offer popup;
+ * this mode is what actually exercises that fix end to end, since none of
+ * content.js's internals are exported for a unit test to reach directly. */
+const FAIL_QUESTIONS = process.env.FAIL === 'questions';
+// FAIL=token simulates the install-token endpoint itself being unreachable —
+// every AI call should then fail silently for lack of a token, before ever
+// reaching the summarize/questions handlers below. Expect this mode to still
+// report a handful of `console errors` — Chromium logs the service worker's
+// own failed 503 fetches to devtools regardless of how gracefully the code
+// then handles them, which is normal browser behaviour, not a page error.
+// `page errors` (thrown exceptions) staying at 0 is the assertion that
+// actually matters here, and is checked below.
+const FAIL_TOKEN = process.env.FAIL === 'token';
 
 const server = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url.startsWith('/api/token')) {
+    apiHits.token++;
+    if (FAIL_TOKEN) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ token: SMOKE_TOKEN }));
+    return;
+  }
   if (req.method === 'POST' && req.url.startsWith('/api/')) {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
       const isQuestions = req.url.includes('/api/questions');
       if (isQuestions) apiHits.questions++; else apiHits.summarize++;
+      if (req.headers[TOKEN_HEADER] !== SMOKE_TOKEN) requestsMissingToken.push(req.url);
+      if (isQuestions && FAIL_QUESTIONS) {
+        res.writeHead(422, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'no_citable_question' }));
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
+      // A quiz (item 17) asks for count >= 5 in one call — the mock returns
+      // that many so the happy path can be exercised for real, rather than
+      // always answering with the single CANNED_QUESTION every other
+      // (count: 1) caller in this file expects.
+      let requestedCount = 1;
+      try { requestedCount = Number(JSON.parse(body || '{}').count) || 1; } catch (e) {}
+      const questions = requestedCount >= 5
+        ? Array.from({ length: requestedCount }, (_, i) => ({ ...CANNED_QUESTION, q: `${CANNED_QUESTION.q} (${i + 1})` }))
+        : [CANNED_QUESTION];
       res.end(JSON.stringify(isQuestions
-        ? { questions: [CANNED_QUESTION], cached: false }
+        ? { questions, cached: false }
         : { summary: 'A canned explanation for the smoke test.' }));
     });
     return;
@@ -95,16 +138,13 @@ let sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker', { ti
 const extId = new URL(sw.url()).host;
 console.log('extension id:', extId);
 
-// Settings: camera OFF, comprehension ON, debug ON so the engine narrates.
+// Settings: comprehension ON, debug ON so the engine narrates.
 const cfg = await ctx.newPage();
 await cfg.goto(`chrome-extension://${extId}/src/popup/popup.html`);
-const CAM_ON = process.env.CAM === 'on';
-await cfg.evaluate((camOn) => new Promise((r) => chrome.storage.local.set({
-  sra_eye: camOn, sra_comprehension: true, sra_debug: true, sra_idle_blink: false,
+await cfg.evaluate(() => new Promise((r) => chrome.storage.local.set({
+  sra_comprehension: true, sra_debug: true,
   sra_backend_url: 'http://localhost:8731/api/summarize',
-}, r)), CAM_ON);
-const stored = await cfg.evaluate(() => new Promise((r) => chrome.storage.local.get(null, r)));
-console.log('camera setting (sra_eye):', stored.sra_eye);
+}, r)));
 await cfg.close();
 
 const page = await ctx.newPage();
@@ -191,22 +231,52 @@ const styling = await page.evaluate(() => {
   };
 });
 
-// Answer the question if one was asked, and confirm the card grades it.
+// Answer the question if one was asked. Picking an option only selects it
+// (item 13: commit-time confidence) — grading happens once the confidence
+// step is resolved, exercised here with a real rating rather than skipping
+// it, so the full commit path runs in an actual browser at least once.
 const questionCard = await page.evaluate(() => {
   const opts = document.querySelectorAll('.sra-q-option');
   if (!opts.length) return { shown: false };
   const qText = document.querySelector('.sra-q-text')?.textContent || '';
   opts[0].click();
-  return { shown: true, question: qText, optionCount: opts.length };
+  const confidenceShown = !!document.querySelector('.sra-q-confidence');
+  const gradedBeforeConfidence = !!document.querySelector('.sra-q-result');
+  return { shown: true, question: qText, optionCount: opts.length, confidenceShown, gradedBeforeConfidence };
 });
-if (questionCard.shown) await page.waitForTimeout(1200);
+if (questionCard.shown) {
+  await page.waitForTimeout(300);
+  await page.evaluate(() => document.querySelector('.sra-q-conf-btn[data-conf="high"]')?.click());
+  await page.waitForTimeout(1200);
+}
 const graded = questionCard.shown
   ? await page.evaluate(() => ({
       marked: !!document.querySelector('.sra-q-correct'),
       result: document.querySelector('.sra-q-result')?.textContent?.trim().slice(0, 60) || null,
+      resultIsCorrectStyled: !!document.querySelector('.sra-q-result-correct'),
       disabled: [...document.querySelectorAll('.sra-q-option')].every((b) => b.disabled),
+      confidenceStepGone: !document.querySelector('.sra-q-confidence'),
+      // Item 19: only meaningful under WRONG=1 — the harness always clicks
+      // options[0], which is only wrong when that env var shifts the
+      // answer, so a normal run legitimately has hasHighlight: false here
+      // (no explanation shown at all on a correct answer).
+      hasHighlight: !!document.querySelector('.sra-q-result .sra-term'),
+      noHighlightInQuestionOrOptions: !document.querySelector('.sra-q-text .sra-term')
+        && ![...document.querySelectorAll('.sra-q-option')].some((o) => o.querySelector('.sra-term')),
+      noHighlightInQuotedSpan: !document.querySelector('.sra-q-span .sra-term'),
     }))
   : null;
+
+/* Item 12: a correct answer is confirmation only — never
+ * question.explanation, never the quoted span. Gate on resultIsCorrectStyled
+ * (the .sra-q-result-correct class, applied only on the branch the reader's
+ * own click actually took), not on `marked` — `.sra-q-correct` marks
+ * whichever option IS the right one regardless of which the reader clicked,
+ * so it is true after every answer and would gate this on the wrong thing. */
+const correctAnswerSilence = graded && graded.resultIsCorrectStyled ? {
+  noExplanationLeaked: !graded.result || !graded.result.includes(CANNED_QUESTION.explanation.slice(0, 15)),
+  noSpanRendered: !(await page.evaluate(() => !!document.querySelector('.sra-q-span'))),
+} : null;
 
 // Session recall: reader-initiated review of what was actually read.
 const beforeRecall = apiHits.questions;
@@ -266,6 +336,340 @@ const receipt = await page.evaluate(() => {
   };
 });
 
+// Item 15: the coverage gate accumulates from the same reading simulated
+// above, persisted (not in-memory) and keyed by hostname+pathname — not
+// window.location.href — so it survives a query string. Verified here by
+// reloading the exact same page with an added ?utm_source= and confirming
+// the accumulated coverage carried over rather than resetting.
+//
+// chrome.storage.local is only reachable from a content script or an
+// extension page, not from the article page's own JS context (`page`,
+// above) — so this reads it through a throwaway extension page, the same
+// way the settings are seeded via `cfg` near the top of this file.
+async function readCoverage(pageKey) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const result = await helper.evaluate((key) => new Promise((r) => {
+    chrome.storage.local.get({ sra_doc_coverage: {} }, (data) => {
+      const doc = (data.sra_doc_coverage || {})[key];
+      r(doc
+        ? { tracked: true, paragraphsCovered: doc.fingerprints.length, totalParagraphs: doc.totalParagraphs, dwellMs: doc.dwellMs }
+        : { tracked: false, paragraphsCovered: 0, totalParagraphs: 0, dwellMs: 0 });
+    });
+  }), pageKey);
+  await helper.close();
+  return result;
+}
+
+const pageKey = new URL(page.url()).hostname + new URL(page.url()).pathname;
+const coverage = { key: pageKey, ...(await readCoverage(pageKey)) };
+
+await page.goto('http://localhost:8731/?utm_source=smoke-test', { waitUntil: 'load' });
+await page.waitForTimeout(1500);
+const coverageAfterQueryString = await readCoverage(pageKey); // pathname-only key — the query string above is not part of it
+
+// item 16: content.js's checkQuizCoverage message handler is what both the
+// popup button and (indirectly, via coverage-gate.js) the end-of-reading
+// offer rely on — checked directly here via chrome.tabs.sendMessage from a
+// helper extension page, the same call popup.js's sendToTab() makes, since
+// Playwright cannot easily drive the real toolbar-popup UI to exercise
+// popup.js itself.
+// urlPattern defaults to matching every localhost:8731 tab, which is fine
+// when only one exists (the quiz check above). The snooze check below opens
+// a second article tab at the same origin with a different query string, so
+// it passes an exact pattern to disambiguate — a Chrome match pattern with
+// no trailing `*` matches only that literal URL, not one with a query
+// string appended.
+async function sendToArticleTab(msg, urlPattern = 'http://localhost:8731/*') {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const result = await helper.evaluate(({ m, pattern }) => new Promise((resolve) => {
+    chrome.tabs.query({ url: pattern }, (tabs) => {
+      if (!tabs?.[0]) { resolve({ __debug: 'no tabs', all: 'n/a' }); return; }
+      chrome.tabs.sendMessage(tabs[0].id, m, (resp) => {
+        if (chrome.runtime.lastError) { resolve({ __debug: chrome.runtime.lastError.message }); return; }
+        resolve(resp);
+      });
+    });
+  }), { m: msg, pattern: urlPattern });
+  await helper.close();
+  return result;
+}
+
+// Pins the message-listener fix above: popup.js's recallBtn/receiptBtn send
+// exactly these `{ action: ... }` shapes via sendToTab, and previously got
+// no response at all (the listener discarded any message without `.type`).
+const recallStatsCheck = await sendToArticleTab({ action: 'recallStats' });
+const quizCoverageCheck = await sendToArticleTab({ action: 'checkQuizCoverage' });
+// The reading simulated above is ~9s of dwell — realistic, and well under
+// the 60s minimum by design (see coverage-gate.js's DEFAULT_THRESHOLDS), so
+// this should consistently read not-ready with the exact required reason.
+const quizGateBelowThreshold = quizCoverageCheck ? {
+  ready: quizCoverageCheck.ready,
+  reason: quizCoverageCheck.reason,
+  correctReason: quizCoverageCheck.reason === 'not enough reading tracked on this page yet',
+} : null;
+
+// Now push the same document's *measured* dwell time over the threshold —
+// same paragraphs, same coverage percentage, modelling a reader who spent
+// longer on them — and confirm the unprompted offer actually renders, is
+// dismissible, and never reappears for this document once dismissed. This
+// is the one place the full offer -> render -> dismiss -> stays-dismissed
+// path is exercised in a real page rather than only against fake storage.
+const helperWrite = await ctx.newPage();
+await helperWrite.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+await helperWrite.evaluate((key) => new Promise((r) => {
+  chrome.storage.local.get({ sra_doc_coverage: {} }, (data) => {
+    const docs = data.sra_doc_coverage || {};
+    if (docs[key]) docs[key].dwellMs = 70000;
+    chrome.storage.local.set({ sra_doc_coverage: docs }, r);
+  });
+}), pageKey);
+await helperWrite.close();
+
+// The page reload above (for the ?query-string check) reset scrollY to 0,
+// so this needs to actually reach the bottom again, not just nudge — a
+// short article's bottom can be well past what the earlier reading
+// simulation scrolled to.
+await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+await page.waitForTimeout(800);
+const offerShown = await page.evaluate(() => {
+  const card = [...document.querySelectorAll('.sra-popup')]
+    .find((el) => el.querySelector('.sra-quiz-start-btn'));
+  return card ? { shown: true, text: card.querySelector('.sra-q-text')?.textContent || null } : { shown: false };
+});
+if (offerShown.shown) {
+  await page.evaluate(() => document.querySelector('.sra-q-skip')?.click());
+  await page.waitForTimeout(400); // closePopup() fades out over 250ms before removing the element
+}
+const offerGoneAfterDismiss = await page.evaluate(() =>
+  !document.querySelector('.sra-quiz-start-btn'));
+await page.mouse.wheel(0, -30); // scroll again — must not reappear (once per document)
+await page.waitForTimeout(500);
+const offerStaysDismissed = await page.evaluate(() =>
+  !document.querySelector('.sra-quiz-start-btn'));
+
+// Item 17: the quiz page. session-recall.js needs at least one paragraph to
+// individually clear its own MIN_DWELL_MS (4s) before select() returns
+// anything — the reading simulated earlier spreads ~1.2s per paragraph, so a
+// dedicated dwell is needed here rather than assuming the earlier scroll
+// already produced a candidate.
+let quizResult = { attempted: false };
+if (!FAIL_QUESTIONS && !FAIL_TOKEN) {
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(300);
+  await page.mouse.wheel(0, 260); // settle on one paragraph
+  await page.waitForTimeout(4500); // clears session-recall's MIN_DWELL_MS
+  await page.mouse.wheel(0, 260); // leave it — this is what records the dwell
+
+  // sendToArticleTab() below opens its own short-lived helper page to send
+  // the message, which ALSO fires the context's 'page' event — collecting
+  // every new page and filtering by URL avoids grabbing that helper instead
+  // of the real quiz tab background.js opens once runQuiz() finishes.
+  const newPages = [];
+  const onNewPage = (p) => newPages.push(p);
+  ctx.on('page', onNewPage);
+  const startQuiz = await sendToArticleTab({ action: 'startQuiz' });
+  let quizPage = null;
+  if (startQuiz?.started) {
+    for (let i = 0; i < 20 && !quizPage; i++) {
+      await page.waitForTimeout(200);
+      quizPage = newPages.find((p) => p.url().includes('quiz.html')) || null;
+    }
+  }
+  ctx.off('page', onNewPage);
+
+  if (quizPage) {
+    const quizPageErrors = [];
+    quizPage.on('pageerror', (e) => quizPageErrors.push(String(e)));
+    await quizPage.waitForLoadState('load');
+    await quizPage.waitForTimeout(500);
+    const answers = [];
+    for (let i = 0; i < 10; i++) { // bounded loop — a real quiz is 5-8 questions
+      const state = await quizPage.evaluate(() => ({
+        hasQuestion: !!document.querySelector('.sra-q-option'),
+        hasResults: !!document.getElementById('deleteThisBtn'),
+      }));
+      if (state.hasResults) break;
+      if (!state.hasQuestion) break;
+      await quizPage.evaluate(() => document.querySelector('.sra-q-option[data-index="0"]').click());
+      await quizPage.evaluate(() => document.querySelector('.sra-q-conf-skip')?.click());
+      await quizPage.waitForTimeout(150);
+      const graded = await quizPage.evaluate(() => !!document.querySelector('.sra-q-result'));
+      answers.push(graded);
+      await quizPage.evaluate(() => {
+        const next = [...document.querySelectorAll('button')].find((b) => /Next question|See results/.test(b.textContent));
+        next?.click();
+      });
+      await quizPage.waitForTimeout(200);
+    }
+    const resultsShown = await quizPage.evaluate(() => ({
+      tally: document.querySelector('.results-tally')?.textContent || null,
+      rowCount: document.querySelectorAll('.result-row').length,
+    }));
+
+    // Deletion must actually delete (the project notes) — confirmed by reopening the
+    // same document's quiz URL and checking nothing resumes.
+    await quizPage.evaluate(() => document.getElementById('deleteThisBtn')?.click());
+    await quizPage.waitForTimeout(200);
+    const emptyAfterDelete = await quizPage.evaluate(() => document.querySelector('.empty-state')?.textContent || null);
+    await quizPage.reload();
+    await quizPage.waitForTimeout(500);
+    const emptyAfterReload = await quizPage.evaluate(() => document.querySelector('.empty-state')?.textContent || null);
+
+    quizResult = {
+      attempted: true,
+      started: true,
+      questionsAnswered: answers.length,
+      allGraded: answers.length > 0 && answers.every(Boolean),
+      resultsShown,
+      emptyAfterDelete,
+      deletionPersisted: !!emptyAfterReload,
+      newErrorsDuringQuiz: quizPageErrors.length,
+    };
+    await quizPage.close();
+  } else {
+    quizResult = { attempted: true, started: false, note: 'runQuiz() declined — see reason below' };
+  }
+}
+
+// Item 18: snooze. A fresh page/session so the 3-minute interruption gap
+// from the main flow above doesn't interfere with getting a real card to
+// snooze from. Tests the card's own control end to end: a real interruption
+// appears, its snooze control dismisses it and starts a real snooze, no
+// further interruption appears despite continued reading, and detection
+// (coverage accumulation) keeps running the whole time regardless.
+let snoozeResult = { attempted: false };
+if (!FAIL_QUESTIONS && !FAIL_TOKEN) {
+  const snoozePage = await ctx.newPage();
+  const snoozePageErrors = [];
+  snoozePage.on('pageerror', (e) => snoozePageErrors.push(String(e)));
+  await snoozePage.goto('http://localhost:8731/', { waitUntil: 'load' });
+  await snoozePage.waitForTimeout(1000);
+
+  async function readSnoozeCoverage() {
+    const helper = await ctx.newPage();
+    await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+    const result = await helper.evaluate(() => new Promise((r) => {
+      chrome.storage.local.get({ sra_doc_coverage: {} }, (data) => {
+        const doc = (data.sra_doc_coverage || {})['localhost/'];
+        r(doc ? { fingerprints: doc.fingerprints.length, dwellMs: doc.dwellMs } : { fingerprints: 0, dwellMs: 0 });
+      });
+    }));
+    await helper.close();
+    return result;
+  }
+
+  let cardSeen = false;
+  for (const y of [400, 900, 1400, 1900, 2400]) {
+    await snoozePage.mouse.wheel(0, y - (await snoozePage.evaluate(() => window.scrollY)));
+    await snoozePage.waitForTimeout(1200);
+    cardSeen = await snoozePage.evaluate(() => !!document.querySelector('.sra-q-snooze-toggle'));
+    if (cardSeen) break;
+  }
+
+  if (cardSeen) {
+    await snoozePage.evaluate(() => document.querySelector('.sra-q-snooze-toggle').click());
+    await snoozePage.waitForTimeout(200);
+    const durationsOffered = await snoozePage.evaluate(() =>
+      document.querySelectorAll('.sra-q-snooze-options button').length);
+    await snoozePage.evaluate(() => document.querySelector('.sra-q-snooze-options button[data-snooze="15m"]').click());
+    await snoozePage.waitForTimeout(500); // closePopup()'s fade-out
+
+    const cardGoneAfterSnooze = await snoozePage.evaluate(() => !document.querySelector('.sra-q-option'));
+    const toastShown = await snoozePage.evaluate(() =>
+      !!document.getElementById('sra-status-toast') && document.getElementById('sra-status-toast').textContent);
+
+    const coverageBefore = await readSnoozeCoverage();
+    // Keep reading while snoozed — several more struggle-shaped scrolls,
+    // enough that without the snooze this would very likely have produced
+    // at least one more interruption once the 3-minute gap allowed it.
+    for (const y of [3000, 2000, 3400, 2200]) {
+      await snoozePage.mouse.wheel(0, y - (await snoozePage.evaluate(() => window.scrollY)));
+      await snoozePage.waitForTimeout(900);
+    }
+    const noNewInterruptionWhileSnoozed = await snoozePage.evaluate(() => !document.querySelector('.sra-q-option'));
+    const coverageAfter = await readSnoozeCoverage();
+
+    // sendToArticleTab() (defined earlier) targets whichever tab matches
+    // localhost:8731 — with only one such tab open at this point (the main
+    // `page` was navigated to ?utm_source=... earlier, no longer matching
+    // the bare pattern reliably), this reaches snoozePage.
+    const status = await sendToArticleTab({ action: 'getSnoozeStatus' }, 'http://localhost:8731/');
+    await sendToArticleTab({ action: 'cancelSnooze' }, 'http://localhost:8731/');
+    const statusAfterCancel = await sendToArticleTab({ action: 'getSnoozeStatus' }, 'http://localhost:8731/');
+
+    snoozeResult = {
+      attempted: true,
+      cardHadSnoozeControl: true,
+      durationsOffered,
+      cardGoneAfterSnooze,
+      toastShown,
+      statusWhileActive: status,
+      noNewInterruptionWhileSnoozed,
+      detectionContinuedWhileSnoozed: coverageAfter.dwellMs >= coverageBefore.dwellMs && coverageAfter.fingerprints >= coverageBefore.fingerprints,
+      statusAfterCancel,
+      newPageErrors: snoozePageErrors.length,
+    };
+  } else {
+    snoozeResult = { attempted: true, cardHadSnoozeControl: false, note: 'no interruption appeared to snooze from in this run' };
+  }
+  await snoozePage.close();
+}
+
+const failureDegrade = FAIL_QUESTIONS ? {
+  questionsEndpointCalled: apiHits.questions > 0,
+  noQuestionCardShown: !questionCard.shown,
+  noPageErrors: findings.pageErrors.length === 0,
+} : null;
+
+const tokenFailureDegrade = FAIL_TOKEN ? {
+  tokenEndpointCalled: apiHits.token > 0,
+  noAiCallEverMade: apiHits.summarize === 0 && apiHits.questions === 0,
+  noQuestionCardShown: !questionCard.shown,
+  noPageErrors: findings.pageErrors.length === 0,
+} : null;
+
+// Every AI request the mock server actually received should have carried
+// the install token — checked regardless of FAIL mode, since the happy
+// path is where "every AI request carries the token" is really exercised.
+const tokenAttachment = {
+  tokenIssued: apiHits.token > 0,
+  everyAiRequestCarriedIt: requestsMissingToken.length === 0,
+  missing: requestsMissingToken,
+};
+
+// Diagnostics page (item 14): opened as its own top-level extension page,
+// same as notes.html/session-report.html — not part of the article page at
+// all, so this is the one place to check it independently of anything
+// above. FAIL modes never reach here (each run picks one server behaviour),
+// so the error-log assertions are conditional on what actually happened.
+const diagPage = await ctx.newPage();
+await diagPage.goto(`chrome-extension://${extId}/src/popup/diagnostics.html`);
+await diagPage.waitForTimeout(400);
+const diagnostics = await diagPage.evaluate(() => ({
+  version: document.getElementById('val-version')?.textContent || null,
+  tokenStatus: document.getElementById('val-tokenStatus')?.textContent || null,
+  tokenMasked: document.getElementById('val-tokenMasked')?.textContent || null,
+  settingsRowCount: document.querySelectorAll('#settingsGrid .kv-row').length,
+  errorLogText: document.getElementById('errorLog')?.textContent || '',
+}));
+// "Safe to screenshot": the raw install token must never appear (only its
+// masked form should), and nothing from the article page — its title or
+// URL — has any way to reach this page in the first place, since
+// diagnostics.js never touches the current tab. Checked directly here
+// rather than assumed.
+const diagSafety = {
+  noRawToken: !diagnostics.tokenMasked?.includes(SMOKE_TOKEN) &&
+    !(await diagPage.evaluate((t) => document.body.innerHTML.includes(t), SMOKE_TOKEN)),
+  noArticleTitle: !(await diagPage.evaluate(
+    (title) => document.body.innerHTML.includes(title), CANNED_QUESTION.q)),
+};
+await diagPage.evaluate(() => document.getElementById('deleteTokenBtn')?.click());
+await diagPage.waitForTimeout(100);
+const afterDelete = await diagPage.evaluate(() => document.getElementById('val-tokenStatus')?.textContent || null);
+await diagPage.close();
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -277,12 +681,28 @@ console.log('popups rendered         :', popups);
 console.log('overlay styling applied :', JSON.stringify(styling));
 console.log('third-party requests    :', findings.thirdParty.length, [...new Set(findings.thirdParty)].slice(0, 5));
 console.log('api hits                :', JSON.stringify(apiHits));
+console.log('install-token attachment:', JSON.stringify(tokenAttachment), '(expect tokenIssued & everyAiRequestCarriedIt true)');
+if (tokenFailureDegrade) console.log('token-endpoint fail     :', JSON.stringify(tokenFailureDegrade), '(expect all true)');
 console.log('question card           :', JSON.stringify(questionCard));
 console.log('after answering         :', JSON.stringify(graded));
+if (correctAnswerSilence) console.log('correct-answer silence  :', JSON.stringify(correctAnswerSilence), '(expect all true)');
 console.log('session recall (Alt+R)  :', JSON.stringify(recall));
 console.log('receipt (Alt+I)         :', JSON.stringify(receipt));
+console.log('coverage gate           :', JSON.stringify(coverage));
+console.log('  survives ?query reload:', JSON.stringify(coverageAfterQueryString),
+  coverageAfterQueryString.paragraphsCovered >= coverage.paragraphsCovered ? '(did not reset — good)' : '(RESET — bug)');
+console.log('quiz gate (popup path)  :', JSON.stringify(quizGateBelowThreshold), '(expect ready:false, correctReason:true)');
+console.log('recallBtn/receiptBtn msg:', JSON.stringify(recallStatsCheck), '(expect status:"ok" — was silently broken pre-fix)');
+console.log('quiz offer card         :', JSON.stringify(offerShown));
+console.log('  gone after dismiss    :', offerGoneAfterDismiss, ' stays dismissed on rescroll:', offerStaysDismissed);
+console.log('quiz page (item 17)     :', JSON.stringify(quizResult));
+console.log('snooze (item 18)        :', JSON.stringify(snoozeResult));
+if (failureDegrade) console.log('questions-endpoint fail :', JSON.stringify(failureDegrade), '(expect all true)');
 console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
 console.log('  new page errors       :', shortcuts.newPageErrors);
+console.log('diagnostics page        :', JSON.stringify(diagnostics));
+console.log('diagnostics safety      :', JSON.stringify(diagSafety), '(expect all true)');
+console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")');
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));
