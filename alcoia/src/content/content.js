@@ -211,7 +211,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   });
   const {
     openPopups, highlightElement, closePopup, flashPopup, hidePopup,
-    renderPopup,
+    renderPopup, reservePopup, showPopup,
     showNudge, showSimulateToast,
   } = ui;
 
@@ -254,6 +254,50 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   }
 
   function showReceipt() { receiptPanel.show(buildCurrentReceipt()); }
+
+  // Opens the quiz page (item 17) in a new tab. Content scripts cannot call
+  // chrome.tabs.create directly — relayed through background.js's existing
+  // 'openTab' handler, the same one popup.js's notes/highlights/etc. use via
+  // chrome.tabs.create itself (an extension page can call it directly; a
+  // content script cannot, hence the relay only here).
+  function openQuizPage(key) {
+    const url = chrome.runtime.getURL('src/popup/quiz.html') + (key ? '?key=' + encodeURIComponent(key) : '');
+    try { chrome.runtime.sendMessage({ action: 'openTab', url }); } catch (e) {}
+  }
+
+  /* The unprompted end-of-reading offer. Reader-initiated once shown — no
+   * interruption budget was spent to put it on screen (quiz-offer.js never
+   * touches intervention-policy.js) and none is spent by dismissing it. */
+  function showQuizOffer(result) {
+    if (!assistantEnabled) return;
+    const fingerprint = 'quiz-offer-' + (result.key || 'doc');
+    const root = reservePopup(fingerprint);
+    if (!root) return;
+
+    root.innerHTML = `
+      <div class="sra-controls">
+        <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
+      </div>
+      <div class="sra-popup-body">
+        <div class="sra-state-badge sra-q-badge">quiz</div>
+        <div class="sra-q-text">Ready to test what you remember?</div>
+      </div>
+      <div class="sra-popup-divider"></div>
+      <div class="sra-actions">
+        <button class="sra-btn sra-btn-primary sra-quiz-start-btn">Take the quiz</button>
+        <button class="sra-btn sra-btn-secondary sra-q-skip">Not now</button>
+      </div>`;
+
+    const dismiss = () => closePopup(root, fingerprint);
+    root.querySelector('.sra-close-btn').onclick = dismiss;
+    root.querySelector('.sra-q-skip').onclick = dismiss;
+    root.querySelector('.sra-quiz-start-btn').onclick = () => {
+      openQuizPage(result.key);
+      dismiss();
+    };
+
+    showPopup(root, null);
+  }
   const questionCard = cardModule.createQuestionCard({
     ui,
     esc,
@@ -305,6 +349,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       setCogState: (label) => { lastCogState = label; },
       onParagraphRead: (text, dwellMs) => sessionRecall.recordRead(text, dwellMs),
       onStruggle: (text) => sessionRecall.recordStruggle(text),
+      onQuizOfferEligible: (result) => showQuizOffer(result),
       onIntervention: async (decision, state, target) => {
         // Off means off: nothing reaches the screen, and the budget is not
         // spent on an offer that was never made.
@@ -1098,8 +1143,35 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   window.sra.getState = () => lastCogState;
 
   // ── Message listener ───────────────────────────────────────────────────
-  chrome.runtime.onMessage.addListener(async (msg, _, sendResponse) => {
-    if (!msg?.type) return;
+  // Deliberately NOT `async (msg, _, sendResponse) => {...}`. Chrome decides
+  // whether to keep the message channel open for an async sendResponse by
+  // checking whether the listener's *synchronous* return value is the
+  // literal boolean `true` — an async function always returns a Promise
+  // instead, even when its body does `return true` with nothing awaited
+  // first, so Chrome never sees `true` and can close the channel before an
+  // inner `(async () => { ...; sendResponse(...); })()` IIFE gets to call
+  // sendResponse. Found via real chrome.tabs.sendMessage testing (item 16's
+  // browser smoke check): "The message port closed before a response was
+  // received." on checkQuizCoverage, which is the first handler here ever
+  // exercised through an actual cross-context sendMessage rather than a
+  // same-page keyboard shortcut. Every branch below already returns `true`
+  // correctly; the outer function just has to stop hiding it inside a Promise.
+  chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
+    // Every branch below keys on either `msg.type` (settings, calibration,
+    // simulateState) or `msg.action` (sessionRecall, showReceipt,
+    // recallStats, checkQuizCoverage) — two conventions that grew up side
+    // by side in this file. Requiring `.type` here silently discarded every
+    // `.action`-only message before it ever reached its branch: popup.js's
+    // recallBtn and receiptBtn (both send `{ action: ... }` via sendToTab)
+    // would flash their busy label and revert with nothing happening,
+    // because Chrome closes the message channel — "port closed before a
+    // response was received" — the instant this function returns
+    // `undefined` instead of `true`. Found via item 16's browser smoke
+    // check, the first real chrome.tabs.sendMessage call any `.action`
+    // branch here had ever been exercised by; keyboard shortcuts (Alt+R,
+    // Alt+I) reach the same features through a same-page function call
+    // instead and never touched this listener at all.
+    if (!msg?.type && !msg?.action) return;
 
     if (msg.type === 'settings') {
       if (msg.selection     !== undefined) selectionEnabled   = !!msg.selection;
@@ -1166,6 +1238,23 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
     if (msg.action === 'recallStats') {
       sendResponse({ status: 'ok', stats: sessionRecall.stats() });
+      return true;
+    }
+    if (msg.action === 'checkQuizCoverage') {
+      // The popup's quiz button and the end-of-reading offer must read the
+      // same threshold from the same function (the project notes, "The quiz —
+      // decided") — this is that function, reached from the popup context.
+      (async () => {
+        try {
+          const key = orchestrator.documentKey();
+          const result = key
+            ? await orchestrator.coverageGate.evaluate(key)
+            : { ready: false, reason: 'not enough reading tracked on this page yet', coveragePct: null, dwellMs: 0 };
+          sendResponse({ status: 'ok', key, ...result });
+        } catch (e) {
+          sendResponse({ status: 'ok', key: null, ready: false, reason: 'not enough reading tracked on this page yet', coveragePct: null, dwellMs: 0 });
+        }
+      })();
       return true;
     }
     if (msg.type === 'simulateState') {
