@@ -1,15 +1,23 @@
 /*
   PDF Handler (ES module)
-  - Exports initPDFHandler(opts) which scans for PDF textLayers or uses PDF.js
+  - Exports initPDFHandler() which scans for PDF textLayers or uses PDF.js
   - Provides: findParagraphAt(x,y), getParagraphText(paragraph), extractSelectedText()
 
   Notes:
   - Attempts to use existing textLayer (from PDF.js viewer) if present for speed.
   - Falls back to loading pdf.js from CDN and parsing pages lazily.
+
+  This module only locates and extracts text — it never calls a backend or
+  renders anything. Fetching a summary and showing a popup for the extracted
+  text is content.js's job (triggerAIForParagraph), the same as it is for an
+  ordinary DOM paragraph. It used to accept backendUrl/fetchSummary/renderPopup
+  and never call any of them — the project notes flagged the unused-var warnings this
+  left behind. Removed rather than wired up: inventing what this module would
+  do with its own fetch/render path, duplicate of content.js's, is a design
+  decision nobody made, not a bug fix.
 */
 
-export async function initPDFHandler(opts = {}) {
-  const { backendUrl, fetchSummary, renderPopup } = opts;
+export async function initPDFHandler() {
   const paragraphs = []; // { id, text, rect, page }
   let parsed = false;
 
