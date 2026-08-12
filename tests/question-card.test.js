@@ -204,6 +204,112 @@ describe('a wrong answer', () => {
   });
 });
 
+/* Item 19: 2-4 load-bearing terms highlighted in the explanation, never in
+ * the question/options/quoted span, never on the correct-answer path. */
+describe('keyword highlighting', () => {
+  it('highlights terms in the inline explanation on a wrong answer', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(QUESTION);
+    pick(ui.root, 1);
+    rate(ui.root, null);
+
+    const result = ui.root.querySelector('.sra-q-result');
+    expect(result.innerHTML).toContain('class="sra-term"');
+  });
+
+  it('never highlights anything on a correct answer', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(QUESTION);
+    pick(ui.root, 0);
+    rate(ui.root, null);
+
+    expect(ui.root.querySelector('.sra-term')).toBeNull();
+  });
+
+  it('never highlights anything in the question text or the options', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(QUESTION);
+    expect(ui.root.querySelector('.sra-q-text .sra-term')).toBeNull();
+    for (const opt of ui.root.querySelectorAll('.sra-q-option')) {
+      expect(opt.querySelector('.sra-term')).toBeNull();
+      expect(opt.classList.contains('sra-term')).toBe(false);
+    }
+  });
+
+  it('never highlights inside the quoted span — that is the passage, not the system\'s own words', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(QUESTION);
+    pick(ui.root, 1);
+    rate(ui.root, null);
+
+    const span = ui.root.querySelector('.sra-q-span');
+    expect(span).toBeTruthy();
+    expect(span.querySelector('.sra-term')).toBeNull();
+  });
+
+  it('highlights the fuller fetched explanation too, on the failure path', async () => {
+    const ui = fakeUI();
+    const fetchExplanation = vi.fn(async () =>
+      'The measurement apparatus in the laboratory was noisy and imprecise throughout the experiment.');
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchExplanation,
+      onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(QUESTION);
+    pick(ui.root, 1);
+    rate(ui.root, null);
+    await vi.waitFor(() => expect(ui.root.querySelector('.sra-q-explain')?.innerHTML).toContain('sra-term'));
+  });
+
+  it('never wraps more than 4 terms', () => {
+    const ui = fakeUI();
+    const longExplanation = {
+      ...QUESTION,
+      explanation: 'Aardvark biology chemistry dinosaur elephant flamingo giraffe hedgehog '
+        + 'important journey kangaroo lighthouse mountain notebook orchestra painting.',
+    };
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(longExplanation);
+    pick(ui.root, 1);
+    rate(ui.root, null);
+
+    const count = ui.root.querySelectorAll('.sra-term').length;
+    expect(count).toBeGreaterThanOrEqual(2);
+    expect(count).toBeLessThanOrEqual(4);
+  });
+
+  it('never introduces unescaped HTML even if the explanation contained markup-like text', () => {
+    const ui = fakeUI();
+    const hostile = {
+      ...QUESTION,
+      explanation: '<img src=x onerror=alert(1)> the measurement apparatus was noisy in the laboratory',
+    };
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(hostile);
+    pick(ui.root, 1);
+    rate(ui.root, null);
+
+    expect(ui.root.querySelector('img')).toBeNull();
+    expect(ui.root.querySelector('.sra-q-result').innerHTML).toContain('&lt;img');
+  });
+});
+
 /* the project notes' confidence-calibration table, at the card level: the four
  * combinations render distinct copy, and wrong+high is never harsher in
  * tone than wrong+low. */

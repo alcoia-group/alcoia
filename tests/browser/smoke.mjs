@@ -256,6 +256,14 @@ const graded = questionCard.shown
       resultIsCorrectStyled: !!document.querySelector('.sra-q-result-correct'),
       disabled: [...document.querySelectorAll('.sra-q-option')].every((b) => b.disabled),
       confidenceStepGone: !document.querySelector('.sra-q-confidence'),
+      // Item 19: only meaningful under WRONG=1 — the harness always clicks
+      // options[0], which is only wrong when that env var shifts the
+      // answer, so a normal run legitimately has hasHighlight: false here
+      // (no explanation shown at all on a correct answer).
+      hasHighlight: !!document.querySelector('.sra-q-result .sra-term'),
+      noHighlightInQuestionOrOptions: !document.querySelector('.sra-q-text .sra-term')
+        && ![...document.querySelectorAll('.sra-q-option')].some((o) => o.querySelector('.sra-term')),
+      noHighlightInQuotedSpan: !document.querySelector('.sra-q-span .sra-term'),
     }))
   : null;
 
