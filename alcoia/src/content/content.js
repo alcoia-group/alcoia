@@ -165,7 +165,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   });
   const {
     openPopups, highlightElement, closePopup, flashPopup, hidePopup,
-    reservePopup, showPopup, renderPopup,
+    renderPopup,
     showNudge, showSimulateToast,
   } = ui;
 
@@ -268,14 +268,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         if (decision.action === 'ask') {
           return await handleAsk(decision, state, target);
         }
-        // A telemetry signal knows which paragraph it came from.
-        if (state.signal) {
-          return await handleComprehensionSignal(state.signal, decision.evidence, target);
-        }
-        if (currentParagraph) {
-          await triggerAIForParagraph(currentParagraph, state.label);
-          return true;
-        }
+        // intervention-policy.js's STATE_ACTIONS only ever produces 'ask' or
+        // 'nudge' for an allowed decision — 'none' is denied before this is
+        // ever called — so there is no third branch to fall through to here.
         return false;
       },
     },
@@ -534,14 +529,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
     if (!text) return false;
 
+    // Every way this can come back empty — network failure, a non-ok status
+    // (422 nothing passed the server's citation check, 503 no key), a
+    // malformed response, or a genuine empty result — collapses to the same
+    // outcome here: silence. This used to fall back to a comprehension-offer
+    // popup or a summary, which meant a failed *question* call quietly
+    // became a shown *explanation*, on a product whose whole premise is that
+    // asking beats summarising. A wrong intervention is worse than a missed
+    // one (invariant 9) — nothing reaches the screen and the caller does not
+    // spend the interruption budget on an offer that was never made.
     const questions = await fetchQuestions(text);
-    if (!questions.length) {
-      // No question could be generated or none cited its evidence. Fall back
-      // to the explanation card rather than dropping the interruption.
-      if (state.signal) return await handleComprehensionSignal(state.signal, decision.evidence, el);
-      if (el) { await triggerAIForParagraph({ type: 'dom', data: el }, state.label); return true; }
-      return false;
-    }
+    if (!questions.length) return false;
 
     let anchorRect = null;
     try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
@@ -998,9 +996,16 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (!paraInfo) return;
 
     let text = '', el = null;
-    if (paraInfo.type === 'dom') { el = paraInfo.data; text = (el?.innerText || el?.textContent || '').trim(); }
-    else if (paraInfo.type === 'pdf')  text = await pdfHandler.getParagraphText(paraInfo.data);
-    else if (paraInfo.type === 'pptx') text = await pptxHandler.getParagraphText(paraInfo.data);
+    try {
+      if (paraInfo.type === 'dom') { el = paraInfo.data; text = (el?.innerText || el?.textContent || '').trim(); }
+      else if (paraInfo.type === 'pdf')  text = await pdfHandler.getParagraphText(paraInfo.data);
+      else if (paraInfo.type === 'pptx') text = await pptxHandler.getParagraphText(paraInfo.data);
+    } catch (e) {
+      // Extraction failure — PDF.js choking on a hostile file, a PPTX slide
+      // with no text layer, whatever it is. Falls through to the empty-text
+      // check below exactly like a page with nothing extractable at all.
+      text = '';
+    }
     if (!text || text.length < 25) return;
 
     // Don't spawn a duplicate popup for the same paragraph
@@ -1036,125 +1041,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     } finally {
       if (_fp) inFlightFingerprints.delete(_fp);
     }
-  }
-
-  // ── Comprehension signal handler ──────────────────────────────────────────
-  // Renderer only. It no longer decides whether to interrupt — the state engine
-  // produces the state and intervention-policy decides. Call it from the engine
-  // subscriber, never directly from a detector.
-  // Returns true only if an offer actually reached the screen. The caller uses
-  // that to decide whether to spend the interruption budget — an offer that
-  // bailed out here must not count against the reader's five.
-  async function handleComprehensionSignal(signal, evidence = [], targetEl = null) {
-    if (!comprehensionCheckEnabled) return false;
-
-    // Keeps the monitor's own 30s cooldown honest. The session record is
-    // written by the engine subscriber, which sees every interruption.
-    comprehensionMonitor.markOfferShown();
-
-    const el = (signal.type === 'speed_mismatch' && signal.el) ? signal.el
-              : (currentParagraph?.type === 'dom' ? currentParagraph.data : targetEl);
-
-    if (el) highlightElement(el, 4000);
-
-    let text = signal.text || '';
-    if (!text && el) text = (el.innerText || el.textContent || '').trim();
-    if (!text) return false;
-
-    let anchorRect = null;
-    try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
-
-    const fingerprint = 'comp-' + text.slice(0, 80).trim();
-    // reservePopup handles both dedup (flashes the existing card) and the
-    // MAX_POPUPS cap. This renderer used to do the first and not the second,
-    // so a page full of pinned cards could still stack another one on top.
-    // Null means nothing was shown, and the caller must not spend the budget.
-    const root = reservePopup(fingerprint);
-    if (!root) return false;
-
-    const offerHtml = buildComprehensionOfferHtml(signal, evidence);
-
-    root.innerHTML = `
-      <div class="sra-controls">
-        <button class="sra-ctrl-btn sra-close-btn" title="Close">&#x2715;</button>
-      </div>
-      <div class="sra-popup-body">${offerHtml}</div>
-      <div class="sra-popup-divider"></div>
-      <div class="sra-actions">
-        <button class="sra-btn sra-btn-primary  sra-comp-summarise">Summarise it</button>
-        <button class="sra-btn sra-btn-secondary sra-comp-dismiss">I understood it</button>
-      </div>`;
-
-    root.querySelector('.sra-close-btn').onclick = () => closePopup(root, fingerprint);
-    root.querySelector('.sra-comp-dismiss').onclick = () => closePopup(root, fingerprint);
-    root.querySelector('.sra-comp-summarise').onclick = async () => {
-      const btn = root.querySelector('.sra-comp-summarise');
-      btn.disabled = true; btn.textContent = 'Thinking…';
-      const summary = await fetchSummary(text, 'explain_more');
-      if (summary) {
-        const body = root.querySelector('.sra-popup-body');
-        if (body) body.innerHTML = `<div class="sra-state-badge">comprehension assist</div><div>${esc(summary)}</div>`;
-        btn.textContent = 'Summarise it'; btn.disabled = false;
-        const dismiss = root.querySelector('.sra-comp-dismiss');
-        if (dismiss) {
-          dismiss.textContent = 'Save Note';
-          dismiss.onclick = () => {
-            chrome.runtime.sendMessage({ action: 'saveNote', note: { text, meta: { source: 'comprehension', mode: 'explain_more' } } });
-            dismiss.textContent = 'Saved ✓'; dismiss.disabled = true;
-          };
-        }
-      }
-    };
-
-    showPopup(root, anchorRect);
-  }
-
-  // Every interruption has to show the reader what was actually observed —
-  // that turns an inference into an observation they can disagree with.
-  // The evidence strings come from the state engine.
-  function buildComprehensionOfferHtml(signal, evidence = []) {
-    const observed = evidence.length
-      ? `<div style="line-height:1.7"><strong>${esc(evidence[0])}.</strong></div>`
-      : '';
-
-    if (signal.type === 'speed_mismatch' && signal.subtype === 'too_slow') {
-      const detail = (signal.actualWpm && signal.baselineWpm)
-        ? `You read this stretch at about ${signal.actualWpm} words per minute; your usual pace is
-           around ${signal.baselineWpm}.`
-        : 'You spent noticeably longer here than you usually do.';
-      return `<div class="sra-state-badge" style="color:#9A6B2F;border-color:rgba(154,107,47,0.3);background:rgba(154,107,47,0.06)">
-        reading pace check</div>
-        ${observed}
-        <div style="line-height:1.7">${detail}
-        <br><em style="color:var(--muted)">Want a hand with it?</em></div>`;
-    }
-
-    if (signal.type === 'speed_mismatch') {
-      const r = signal.readability;
-      // elapsed/expected are only present on the too_fast signal — guard rather
-      // than rendering NaN, which is what the previous version did for too_slow.
-      const haveTiming = Number.isFinite(signal.elapsed) && Number.isFinite(signal.expected);
-      const timing = haveTiming
-        ? `you moved through it in ${Math.round(signal.elapsed / 1000)}s — expected at least
-           ${Math.round(signal.expected / 1000)}s for text this dense.`
-        : 'you moved through it faster than text this dense usually takes.';
-      const score = r && Number.isFinite(r.score) ? ` (readability score ${r.score.toFixed(0)}/100)` : '';
-      return `<div class="sra-state-badge" style="color:#9A6B2F;border-color:rgba(154,107,47,0.3);background:rgba(154,107,47,0.06)">
-        reading pace check</div>
-        ${observed}
-        <div style="line-height:1.7">That was a <strong>complex paragraph</strong>${score} but ${timing}
-        <br><em style="color:var(--muted)">Want a quick summary?</em></div>`;
-    }
-
-    if (signal.type === 'backtrack') {
-      return `<div class="sra-state-badge" style="color:#7E6E5A;border-color:rgba(126,110,90,0.3);background:rgba(126,110,90,0.06)">
-        scroll backtrack</div>
-        ${observed}
-        <div style="line-height:1.7">Looks like something might not have landed clearly.
-        <br><em style="color:var(--muted)">Want a summary of what you just passed?</em></div>`;
-    }
-
-    return `${observed}<div>Want a summary?</div>`;
   }
 
   // ── PDF/PPTX handlers ─────────────────────────────────────────────────
