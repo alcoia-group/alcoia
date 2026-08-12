@@ -143,7 +143,7 @@ extension's own setup, keyboard shortcuts and configuration reference.
 
 ```bash
 npm run lint                    # ESLint — a defect linter, not a style linter
-npm test                        # 343 tests
+npm test                        # 362 tests
 npm run test:browser            # loads the extension in Chromium, English article
 PAGE=zh npm run test:browser    # same checklist against a Chinese article
 ```

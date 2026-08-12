@@ -93,6 +93,9 @@ describe('paragraph-tracker', () => {
     const t = createParagraphTracker({ document: doc, viewportHeight: () => 800 });
     t.rescan();
     expect(t.count()).toBe(2);
+    // Coverage maths (coverage-gate.js) wants only the paragraphs that were
+    // ever prose — a figure can never itself be "read".
+    expect(t.count({ excludeMedia: true })).toBe(1);
   });
 
   it("ends a paragraph's dwell at a figure instead of letting the figure's viewing time inflate it", () => {

@@ -31,8 +31,10 @@ export async function createOrchestrator(deps) {
 
   const engineModule = await loadModule('src/content/state-engine.js');
   const policyModule = await loadModule('src/content/intervention-policy.js');
+  const coverageModule = await loadModule('src/content/coverage-gate.js');
   const stateEngine  = engineModule.createReadingStateEngine();
   const interventionPolicy = policyModule.createInterventionPolicy();
+  const coverageGate = coverageModule.createCoverageGate();
 
   // Telemetry detectors. These need no permission and work on any device —
   // paragraph tracking in particular used to hang off a webcam gaze point,
@@ -96,14 +98,28 @@ export async function createOrchestrator(deps) {
         });
       } catch (e) {}
       try { speedSignal = comprehensionMonitor.leaveParagraph(); } catch (e) {}
+      const leftText = transition.left.el
+        ? (transition.left.el.innerText || transition.left.el.textContent || '').trim()
+        : '';
       if (transition.left.el) {
-        const text = (transition.left.el.innerText || transition.left.el.textContent || '');
-        host.setPrevParagraphText(text.trim().slice(0, 800));
+        host.setPrevParagraphText(leftText.slice(0, 800));
         // Session recall needs to know what was read and for how long.
         if (host.onParagraphRead) {
-          try { host.onParagraphRead(text.trim(), transition.left.dwellMs); } catch (e) {}
+          try { host.onParagraphRead(leftText, transition.left.dwellMs); } catch (e) {}
         }
       }
+      // Feeds the coverage gate (item 15/16): the one function that decides
+      // whether this document has been read enough to offer the quiz on.
+      try {
+        const key = coverageModule.documentKey();
+        if (key) {
+          coverageGate.recordProgress(key, {
+            text: leftText, words: transition.left.words, dwellMs: transition.left.dwellMs,
+            media: transition.left.media,
+            totalParagraphs: paragraphTracker.count({ excludeMedia: true }),
+          });
+        }
+      } catch (e) {}
     }
     if (transition.entered?.el) {
       // Figures, tables and code blocks are tracked so the reading line can
@@ -270,5 +286,11 @@ export async function createOrchestrator(deps) {
     stateEngine,
     interventionPolicy,
     paragraphTracker,
+    // The one function deciding "read enough to test" — item 16 wires this
+    // to the end-of-reading offer and the popup's quiz button, both reading
+    // the same threshold so they cannot disagree. documentKey() is exposed
+    // alongside it since both callers need to compute the same key.
+    coverageGate,
+    documentKey: coverageModule.documentKey,
   };
 }
