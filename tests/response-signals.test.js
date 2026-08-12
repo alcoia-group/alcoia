@@ -39,6 +39,39 @@ describe('response-signals', () => {
     expect(rec.subtype).toBe('incorrect');
   });
 
+  /* Confidence is captured at commit time, alongside the answer — see
+   * the project notes' confidence-calibration shape. Skippable: an omitted rating
+   * must resolve to null, never to a guessed 'low' or 'high'. */
+  describe('commit-time confidence', () => {
+    it.each(['low', 'high'])('records a valid %s rating', (level) => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present(QUESTION);
+      expect(r.answer(0, QUESTION, level).confidence).toBe(level);
+    });
+
+    it('defaults to null when the reader skips rating it', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present(QUESTION);
+      expect(r.answer(0, QUESTION).confidence).toBeNull();
+    });
+
+    it('normalizes anything that is not exactly low/high to null, never a guess', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      for (const bogus of [undefined, null, '', 'medium', 'HIGH', 3]) {
+        r.present(QUESTION);
+        expect(r.answer(0, QUESTION, bogus).confidence).toBeNull();
+      }
+    });
+
+    it('is independent of correctness — recorded the same way whether right or wrong', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present(QUESTION);
+      expect(r.answer(0, QUESTION, 'high').confidence).toBe('high'); // correct
+      r.present(QUESTION);
+      expect(r.answer(2, QUESTION, 'high').confidence).toBe('high'); // wrong
+    });
+  });
+
   it('flags an answer that took a long time without treating it as wrong', () => {
     const clock = fixedClock();
     const r = createResponseSignals({ now: clock.now, slowAnswerMs: 10000 });

@@ -253,6 +253,46 @@
   border-color: rgba(180,121,95,0.45);
   opacity: 1;
 }
+/* A tentative pick, before the confidence step commits it — distinct from
+   sra-q-correct/sra-q-wrong, which only exist after grading. */
+.sra-q-option.sra-q-selected {
+  border-color: var(--alc-accent);
+  background: var(--alc-accent-sf);
+}
+/* Commit-time confidence: appears once an option is picked, replaced by the
+   result on commit. Two rating buttons plus a skip — rating is optional and
+   must read as no more effortful than skipping it. */
+.sra-q-confidence { margin-top: 12px; }
+.sra-q-confidence-label {
+  font-family: var(--alc-serif);
+  font-size: 13px;
+  color: var(--alc-muted);
+  margin: 0 0 7px;
+}
+.sra-q-confidence-options { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.sra-q-conf-btn {
+  font-family: var(--alc-ui);
+  font-size: 12.5px;
+  padding: 6px 11px;
+  border-radius: var(--alc-radius-sm);
+  border: 1px solid var(--alc-border);
+  background: rgba(255,255,255,0.55);
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.13s, border-color 0.13s;
+}
+.sra-q-conf-btn:hover { background: var(--alc-accent-sf); border-color: var(--alc-border-2); }
+.sra-q-conf-skip {
+  font-family: var(--alc-ui);
+  font-size: 12px;
+  color: var(--alc-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 6px 4px;
+}
+.sra-q-conf-skip:hover { color: inherit; }
 .sra-q-result { margin-top: 12px; font-size: 13.5px; line-height: 1.65; }
 /* A correct answer is a moment the system itself produced — sage, the same
    as the evidence badge and the quoted span, and nothing else in this card
