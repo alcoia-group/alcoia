@@ -24,6 +24,20 @@ describe('default behaviour', () => {
     expect(s.label).toBe(STATES.UNKNOWN);
     expect(s.evidence).toEqual([]);
   });
+
+  /* An unregistered telemetry type is silently ignored — see Conventions in
+   * the project notes, and how cursor_reading died: listed in CORROBORATING_TYPES
+   * with no matching CORROBORATION entry, so it was excluded from asserting
+   * but never actually applied either. Registering a type is a deliberate
+   * two-place decision (fromTelemetry() for assertable types, or both
+   * CORROBORATING_TYPES and CORROBORATION for corroboration-only ones), not
+   * something that happens by adding it to one list. */
+  it('ignores a telemetry type nothing has registered', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ telemetry: { type: 'cursor_reading', tracking: true } });
+    expect(s.label).toBe(STATES.UNKNOWN);
+    expect(s.evidence).toEqual([]);
+  });
 });
 
 describe('telemetry drives the state', () => {
