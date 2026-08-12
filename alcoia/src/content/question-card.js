@@ -123,7 +123,14 @@ export function createQuestionCard(deps = {}) {
 
 /* Mark the options and show the sentence the answer came from. The span is
  * the reason the server insists on a verbatim citation — without it this
- * would just be an assertion. */
+ * would just be an assertion.
+ *
+ * A correct answer ends the interaction: confirmation only, never
+ * `question.explanation`, never the quoted span. Explaining something the
+ * reader just demonstrated they know adds load at the exact moment of
+ * consolidation and trains them to expect the system to do the closing
+ * work (the project notes, product intent). The explanation path is the failure
+ * path — reached only below, on a wrong answer — and is never the default. */
 function revealAnswer(root, question, chosen, esc) {
   for (const btn of root.querySelectorAll('.sra-q-option')) {
     const i = Number(btn.dataset.index);
@@ -137,9 +144,9 @@ function revealAnswer(root, question, chosen, esc) {
 
   const correct = chosen === question.answerIndex;
   const note = document.createElement('div');
-  note.className = 'sra-q-result';
+  note.className = correct ? 'sra-q-result sra-q-result-correct' : 'sra-q-result sra-q-result-wrong';
   note.innerHTML = correct
-    ? `<strong>That's right.</strong>${question.explanation ? ` ${esc(question.explanation)}` : ''}`
+    ? `<span class="sra-q-check" aria-hidden="true">✓</span><strong>That's right.</strong>`
     : `<strong>Not quite.</strong>${question.explanation ? ` ${esc(question.explanation)}` : ''}
        ${question.span ? `<div class="sra-q-span">“${esc(question.span)}”</div>` : ''}`;
   body.appendChild(note);

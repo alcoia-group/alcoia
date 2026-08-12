@@ -235,9 +235,21 @@ const graded = questionCard.shown
   ? await page.evaluate(() => ({
       marked: !!document.querySelector('.sra-q-correct'),
       result: document.querySelector('.sra-q-result')?.textContent?.trim().slice(0, 60) || null,
+      resultIsCorrectStyled: !!document.querySelector('.sra-q-result-correct'),
       disabled: [...document.querySelectorAll('.sra-q-option')].every((b) => b.disabled),
     }))
   : null;
+
+/* Item 12: a correct answer is confirmation only — never
+ * question.explanation, never the quoted span. Gate on resultIsCorrectStyled
+ * (the .sra-q-result-correct class, applied only on the branch the reader's
+ * own click actually took), not on `marked` — `.sra-q-correct` marks
+ * whichever option IS the right one regardless of which the reader clicked,
+ * so it is true after every answer and would gate this on the wrong thing. */
+const correctAnswerSilence = graded && graded.resultIsCorrectStyled ? {
+  noExplanationLeaked: !graded.result || !graded.result.includes(CANNED_QUESTION.explanation.slice(0, 15)),
+  noSpanRendered: !(await page.evaluate(() => !!document.querySelector('.sra-q-span'))),
+} : null;
 
 // Session recall: reader-initiated review of what was actually read.
 const beforeRecall = apiHits.questions;
@@ -334,6 +346,7 @@ console.log('install-token attachment:', JSON.stringify(tokenAttachment), '(expe
 if (tokenFailureDegrade) console.log('token-endpoint fail     :', JSON.stringify(tokenFailureDegrade), '(expect all true)');
 console.log('question card           :', JSON.stringify(questionCard));
 console.log('after answering         :', JSON.stringify(graded));
+if (correctAnswerSilence) console.log('correct-answer silence  :', JSON.stringify(correctAnswerSilence), '(expect all true)');
 console.log('session recall (Alt+R)  :', JSON.stringify(recall));
 console.log('receipt (Alt+I)         :', JSON.stringify(receipt));
 if (failureDegrade) console.log('questions-endpoint fail :', JSON.stringify(failureDegrade), '(expect all true)');
