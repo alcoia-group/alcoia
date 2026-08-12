@@ -341,6 +341,37 @@ const tokenAttachment = {
   missing: requestsMissingToken,
 };
 
+// Diagnostics page (item 14): opened as its own top-level extension page,
+// same as notes.html/session-report.html — not part of the article page at
+// all, so this is the one place to check it independently of anything
+// above. FAIL modes never reach here (each run picks one server behaviour),
+// so the error-log assertions are conditional on what actually happened.
+const diagPage = await ctx.newPage();
+await diagPage.goto(`chrome-extension://${extId}/src/popup/diagnostics.html`);
+await diagPage.waitForTimeout(400);
+const diagnostics = await diagPage.evaluate(() => ({
+  version: document.getElementById('val-version')?.textContent || null,
+  tokenStatus: document.getElementById('val-tokenStatus')?.textContent || null,
+  tokenMasked: document.getElementById('val-tokenMasked')?.textContent || null,
+  settingsRowCount: document.querySelectorAll('#settingsGrid .kv-row').length,
+  errorLogText: document.getElementById('errorLog')?.textContent || '',
+}));
+// "Safe to screenshot": the raw install token must never appear (only its
+// masked form should), and nothing from the article page — its title or
+// URL — has any way to reach this page in the first place, since
+// diagnostics.js never touches the current tab. Checked directly here
+// rather than assumed.
+const diagSafety = {
+  noRawToken: !diagnostics.tokenMasked?.includes(SMOKE_TOKEN) &&
+    !(await diagPage.evaluate((t) => document.body.innerHTML.includes(t), SMOKE_TOKEN)),
+  noArticleTitle: !(await diagPage.evaluate(
+    (title) => document.body.innerHTML.includes(title), CANNED_QUESTION.q)),
+};
+await diagPage.evaluate(() => document.getElementById('deleteTokenBtn')?.click());
+await diagPage.waitForTimeout(100);
+const afterDelete = await diagPage.evaluate(() => document.getElementById('val-tokenStatus')?.textContent || null);
+await diagPage.close();
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -362,6 +393,9 @@ console.log('receipt (Alt+I)         :', JSON.stringify(receipt));
 if (failureDegrade) console.log('questions-endpoint fail :', JSON.stringify(failureDegrade), '(expect all true)');
 console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
 console.log('  new page errors       :', shortcuts.newPageErrors);
+console.log('diagnostics page        :', JSON.stringify(diagnostics));
+console.log('diagnostics safety      :', JSON.stringify(diagSafety), '(expect all true)');
+console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")');
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));
