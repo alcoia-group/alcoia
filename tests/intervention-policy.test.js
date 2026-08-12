@@ -31,7 +31,9 @@ describe('what earns an interruption', () => {
   });
 
   it.each([STATES.ON_PACE, STATES.ABSENT])('takes no action on %s', (label) => {
-    const p = createInterventionPolicy({ now: fixedClock().now });
+    // random: () => 1 disables exploration sampling — that mechanism is
+    // covered on its own further down; this test is about the base table.
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 1 });
     expect(STATE_ACTIONS[label]).toBe('none');
     expect(p.evaluate({ label, confidence: 0.9, evidence: [] }).allow).toBe(false);
   });

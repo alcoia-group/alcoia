@@ -326,10 +326,10 @@ alcoia/
 │   └── styles/
 │       └── overlay.css        Popup, calibration, highlight, nudge styles
 │
-└── server/
-    ├── index.js               Express proxy to Groq API
-    └── .env                   GROQ_API_KEY (not committed)
 ```
+
+The backend (Express proxy to Groq) used to live under `server/` in this tree. It has moved to a
+separate private repository — see "Running the Backend Server" below.
 
 ### Cross-world communication
 
@@ -361,8 +361,8 @@ See the Architecture section above for the annotated tree. Key relationships:
 
 ### Prerequisites
 - Google Chrome (or Chromium-based browser)
-- Node.js 18+ (for the backend server)
-- A Groq API key (free tier available at console.groq.com)
+- Node.js 18+ (for this repo's own tooling — lint, tests, build)
+- A running instance of the backend (separate private repo) with a Groq API key configured there
 - A webcam
 
 ### Load the extension
@@ -383,26 +383,14 @@ This is required for the PDF and PPTX viewers to fetch local files.
 
 ## Running the Backend Server
 
-The extension requires a local backend that proxies requests to the Groq API.
+The extension requires a backend that proxies requests to the Groq API. That backend's source no
+longer lives in this repository — it moved to a separate private repo as part of the ongoing
+client/server split (see `the project notes`, "Migration in progress"). Get its setup instructions from
+that repo.
 
-```bash
-cd alcoia/server
-npm install
-```
-
-Create a `.env` file in the `server/` directory:
-
-```
-GROQ_API_KEY=gsk_your_key_here
-```
-
-Start the server:
-
-```bash
-node index.js
-```
-
-The server listens on `http://localhost:3000` by default. It exposes one endpoint:
+Point the extension at wherever your instance runs — see `the project notes`'s Item 4 notes on the backend
+origin for how the default is configured. By default it still expects a local instance at
+`http://localhost:3000` for development. It exposes one endpoint:
 
 ```
 POST /api/summarize
@@ -566,7 +554,7 @@ Toggle in the popup header. Themes the popup UI and all in-page overlays (summar
 |---|---|
 | CORS restriction | Backend only accepts requests from `chrome-extension://` and `localhost` origins |
 | Rate limiting | 30 requests per minute per IP on `/api/summarize` |
-| Secret isolation | `GROQ_API_KEY` lives in `server/.env` only, never in extension files |
+| Secret isolation | `GROQ_API_KEY` lives in the backend repo's `.env` only, never in extension files |
 | `.gitignore` | `.env` is excluded from version control |
 | No remote code | All libraries (WebGazer, PDF.js, JSZip) are bundled locally; no CDN calls from the extension |
 | Input sanitisation | All text rendered in popups is HTML-escaped before insertion |
@@ -583,7 +571,7 @@ Toggle in the popup header. Themes the popup UI and all in-page overlays (summar
 
 ### Changing the AI model
 
-Edit `server/index.js` — update the `model` field in the Groq API call. The extension is model-agnostic.
+Edit `index.js` in the backend repo — update the `model` field in the Groq API call. The extension is model-agnostic.
 
 ### Retraining the classifier
 
