@@ -255,8 +255,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
       // A paragraph already answered correctly is a poor use of a recall slot.
       if (record.paragraphKey) sessionRecall.recordAnswered(record.paragraphKey, record.correct);
+      // Any answer — right or wrong — is engagement, which is what clears
+      // the dismissal backoff below.
+      try { orchestrator.interventionPolicy.recordAnswered(); } catch (e) {}
     },
-    onDismissed: () => { /* declining to be tested says nothing; record nothing */ },
+    onDismissed: () => {
+      // Declining to be tested says nothing about comprehension, and is
+      // never scored — but it is still the reader saying "not now", and
+      // three in a row raises the bar on further questions. See
+      // intervention-policy.js's dismissalBackoff.
+      try { orchestrator.interventionPolicy.recordDismissal(); } catch (e) {}
+    },
   });
 
   // ── Detection pipeline ─────────────────────────────────────────────────

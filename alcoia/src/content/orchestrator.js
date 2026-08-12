@@ -87,6 +87,14 @@ export async function createOrchestrator(deps) {
 
     let speedSignal = null;
     if (transition.left) {
+      // Feeds the interruption budget's session cap — see intervention-policy's
+      // recordCoverage(). Content read, not time in a session, is what earns
+      // a reader more interruptions.
+      try {
+        interventionPolicy.recordCoverage({
+          words: transition.left.words, dwellMs: transition.left.dwellMs, media: transition.left.media,
+        });
+      } catch (e) {}
       try { speedSignal = comprehensionMonitor.leaveParagraph(); } catch (e) {}
       if (transition.left.el) {
         const text = (transition.left.el.innerText || transition.left.el.textContent || '');
