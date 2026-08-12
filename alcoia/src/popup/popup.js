@@ -302,6 +302,59 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  /* ── Snooze (item 18) ─────────────────────────────────────────────────
+   * Labels/ids only — the actual duration math (SNOOZE_OPTIONS in
+   * snooze.js, including "rest of today") stays canonical in content.js's
+   * context and is resolved there from the id, not recomputed here. popup.js
+   * is a classic script, not a module, so it can't import snooze.js
+   * directly the way question-card.js does. */
+  const SNOOZE_DISPLAY_OPTIONS = [
+    { id: '15m', label: '15 minutes' },
+    { id: '1h', label: '1 hour' },
+    { id: 'today', label: 'Rest of today' },
+  ];
+  const snoozeActive = $('snoozeActive');
+  const snoozeInactive = $('snoozeInactive');
+  const snoozeActiveNote = $('snoozeActiveNote');
+  const snoozeOptionsEl = $('snoozeOptions');
+
+  function renderSnoozeStatus(resp) {
+    if (!snoozeActive || !snoozeInactive) return;
+    const active = !!(resp && resp.active);
+    snoozeActive.hidden = !active;
+    snoozeInactive.hidden = active;
+    if (active && snoozeActiveNote) {
+      const until = new Date(resp.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      snoozeActiveNote.textContent = `Snoozed until ${until}. Detection keeps running in the background.`;
+    }
+  }
+
+  function refreshSnoozeStatus() {
+    sendToTab({ action: 'getSnoozeStatus' }, (resp, err) => renderSnoozeStatus(err ? null : resp));
+  }
+
+  if (snoozeOptionsEl) {
+    for (const opt of SNOOZE_DISPLAY_OPTIONS) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-ghost';
+      btn.textContent = opt.label;
+      btn.addEventListener('click', () => {
+        btn.disabled = true;
+        sendToTab({ action: 'snoozeReminders', optionId: opt.id }, (resp, err) => {
+          btn.disabled = false;
+          if (!err && resp && resp.status === 'ok') refreshSnoozeStatus();
+        });
+      });
+      snoozeOptionsEl.appendChild(btn);
+    }
+  }
+
+  $('cancelSnoozeBtn')?.addEventListener('click', () => {
+    sendToTab({ action: 'cancelSnooze' }, () => refreshSnoozeStatus());
+  });
+
+  refreshSnoozeStatus();
+
   // ── Reading speed ──────────────────────────────────────────────────────
   const readingCalBtn = $('readingCalBtn');
   readingCalBtn.addEventListener('click', () => {

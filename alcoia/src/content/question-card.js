@@ -23,6 +23,7 @@
  */
 
 import { calibratedLine } from './calibration-copy.js';
+import { SNOOZE_OPTIONS } from './snooze.js';
 
 /* Wrong answers are not scolded. The reader gets the correct option marked,
  * the sentence it came from, and an offer of a fuller explanation. */
@@ -34,6 +35,7 @@ export function createQuestionCard(deps = {}) {
     fetchExplanation,   // async (spanText) => string
     onAnswered,         // (record) => void — hands the signal to the engine
     onDismissed,        // (record) => void
+    onSnooze,           // (durationMs, label) => void — item 18
   } = deps;
 
   /* question: { q, options[4], answerIndex, explanation, span }
@@ -84,6 +86,7 @@ export function createQuestionCard(deps = {}) {
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
         <button class="sra-btn sra-btn-secondary sra-q-skip">Skip this</button>
+        ${onSnooze ? '<button type="button" class="sra-q-snooze-toggle">Snooze reminders</button>' : ''}
       </div>`;
 
     let committed = false;
@@ -101,6 +104,34 @@ export function createQuestionCard(deps = {}) {
     root.querySelector('.sra-q-skip').onclick = dismiss;
 
     const body = root.querySelector('.sra-popup-body');
+
+    /* The moment a reader most wants to pause reminders is the moment one
+     * has just appeared (the project notes, snooze) — but it stays offered after
+     * answering too, for "stop bothering me for a while" once this one is
+     * done. Choosing a duration routes through the same dismiss() path
+     * "Skip this" uses: before an answer that records the dismissal (item
+     * 10's backoff); after one, dismiss() is a no-op beyond closing the
+     * card, since answering already counted as engagement, not evasion. */
+    const snoozeToggle = root.querySelector('.sra-q-snooze-toggle');
+    if (snoozeToggle) {
+      snoozeToggle.onclick = () => {
+        if (root.querySelector('.sra-q-snooze-options')) return;
+        const panel = document.createElement('div');
+        panel.className = 'sra-q-snooze-options';
+        panel.innerHTML = `
+          <span class="sra-q-snooze-label">Pause reminders for:</span>
+          ${SNOOZE_OPTIONS.map((o) => `<button type="button" data-snooze="${o.id}">${esc(o.label)}</button>`).join('')}`;
+        // Appended to the body, not .sra-actions — that row is a non-wrapping
+        // flex row and this needs its own line underneath it.
+        body.appendChild(panel);
+        for (const opt of SNOOZE_OPTIONS) {
+          panel.querySelector(`[data-snooze="${opt.id}"]`).onclick = () => {
+            onSnooze(opt.durationMs(Date.now()), opt.label);
+            dismiss();
+          };
+        }
+      };
+    }
 
     /* Grades and reveals. Called once, from the confidence step, with
      * whatever confidence — 'low', 'high', or null (skipped) — the reader
