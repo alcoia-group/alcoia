@@ -10,6 +10,19 @@
  * through the page, correlated with time, without the long jumps of someone
  * navigating. When it does not look like reading, it says nothing and the
  * viewport heuristic stays in charge.
+ *
+ * This module has one consumer path: `getPointerY()` / `isTracking()`, read
+ * directly by paragraph-tracker's override. It used to also emit a
+ * `type: 'cursor_reading'` object meant to reach the state engine as a
+ * corroborating signal, via a `signal()` method — but orchestrator.js never
+ * called `signal()`, and state-engine.js listed the type as corroborating
+ * without a `CORROBORATION` entry for it, so even a caller that drained it
+ * would have had the signal silently discarded. Nothing ever decided what
+ * cursor tracking should corroborate, so rather than invent that policy here,
+ * the dead emission path is removed. If cursor evidence is wanted in the
+ * engine later, that is a state-engine.js decision (a bonus, an evidence
+ * sentence, states it applies to) made on purpose, not a shape left lying
+ * around from before.
  */
 
 const IDLE_MS = 2500;
@@ -23,7 +36,7 @@ export function createCursorTracker(opts = {}) {
   const idleMs      = opts.idleMs ?? IDLE_MS;
 
   let samples = [];
-  let pending = null;
+  let state = null;       // the latest reading judgement — not a drainable signal
   let lastMoveAt = 0;
 
   function update(x, y, at) {
@@ -45,33 +58,28 @@ export function createCursorTracker(opts = {}) {
     // Reading with the mouse means y advances with time, gradually, downward.
     const isReading = r != null && r >= minR && maxJump <= maxJumpPx && descent > 0;
 
-    pending = {
-      type: 'cursor_reading',
-      assertable: false,
+    state = {
       tracking: isReading,
       y: samples[samples.length - 1].y,
       correlation: r,
       descent,
     };
-    return pending;
+    return state;
   }
 
   /* The reading position, or null when the cursor is not being used as a
    * pointer. Null is the common case and callers must handle it. */
   function getPointerY() {
-    if (!pending || !pending.tracking) return null;
+    if (!state || !state.tracking) return null;
     if (now() - lastMoveAt > idleMs) return null;   // hand left the mouse
-    return pending.y;
+    return state.y;
   }
-
-  function signal() { const s = pending; pending = null; return s; }
 
   return {
     update,
-    signal,
     getPointerY,
-    isTracking: () => !!(pending && pending.tracking) && now() - lastMoveAt <= idleMs,
-    reset() { samples = []; pending = null; lastMoveAt = 0; },
+    isTracking: () => !!(state && state.tracking) && now() - lastMoveAt <= idleMs,
+    reset() { samples = []; state = null; lastMoveAt = 0; },
   };
 }
 

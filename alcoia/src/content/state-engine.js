@@ -83,7 +83,7 @@ const TELEMETRY_CONFIDENCE = Object.freeze({
  * summary on selection — asserting on it too would interrupt twice for one
  * action. */
 const CORROBORATING_TYPES = Object.freeze([
-  'selection', 'copy', 'scroll_jerk', 'progression', 'cursor_reading',
+  'selection', 'copy', 'scroll_jerk', 'progression',
 ]);
 
 const CORROBORATION = Object.freeze({
