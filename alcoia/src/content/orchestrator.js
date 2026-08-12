@@ -145,7 +145,14 @@ export async function createOrchestrator(deps) {
       }
     }
     if (transition.entered?.el) {
-      try { comprehensionMonitor.enterParagraph(transition.entered.el); } catch (e) {}
+      // Figures, tables and code blocks are tracked so the reading line can
+      // find them, but they were never prose — running WPM-vs-difficulty
+      // maths against one is how a reader studying a chart used to register
+      // as "slow on easy text" (see paragraph-tracker.js). Skip pace
+      // attribution for them; still follow them with the reading band.
+      if (!transition.entered.media) {
+        try { comprehensionMonitor.enterParagraph(transition.entered.el); } catch (e) {}
+      }
       host.setCurrentParagraph({ type: 'dom', data: transition.entered.el });
     }
 
