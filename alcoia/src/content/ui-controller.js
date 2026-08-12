@@ -221,43 +221,15 @@ export function createUIController(deps = {}) {
   }
 
   /* (Re)arm the autohide countdown. It runs only when autohide is on, the card
-   * is not pinned, and the reader is not currently interacting with it — mouse
-   * hovering or gaze resting on it. Hiding a card someone is still reading is
-   * the most irritating thing this UI can do. */
+   * is not pinned, and the reader is not currently hovering it. Hiding a card
+   * someone is still reading is the most irritating thing this UI can do. */
   function resetAutohide(root, fingerprint) {
     const { autohideEnabled, autohideTimeoutSec } = getSettings();
     clearTimeout(root._hideT);
     if (!autohideEnabled || root.dataset.pinned === 'true') return;
-    if (root._mouseOver || root._gazeOver) return;
+    if (root._mouseOver) return;
     const fp = fingerprint || findFingerprint(root);
     root._hideT = setTimeout(() => closePopup(root, fp), Math.max(3, autohideTimeoutSec || 12) * 1000);
-  }
-
-  /* Pause the countdown while the gaze rests on a card, restart it when the
-   * gaze leaves. Called from the gaze handler with the current point. */
-  function updateGazeOverPopups(pt) {
-    if (!pt || !openPopups.size) return;
-    for (const [fp, entry] of openPopups) {
-      const el = entry.el;
-      if (!el || !document.contains(el)) continue;
-      const r = el.getBoundingClientRect();
-      const over = pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
-      if (over && !el._gazeOver) { el._gazeOver = true; clearTimeout(el._hideT); }
-      else if (!over && el._gazeOver) { el._gazeOver = false; resetAutohide(el, fp); }
-    }
-  }
-
-  /* True when the gaze is resting inside any open card. Reading a popup is not
-   * fresh confusion, and firing another interruption while someone is mid-card
-   * is exactly the double-interruption this architecture exists to prevent. */
-  function isGazeOverAnyPopup(pt) {
-    if (!pt) return false;
-    for (const { el } of openPopups.values()) {
-      if (!el || !document.contains(el)) continue;
-      const r = el.getBoundingClientRect();
-      if (pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom) return true;
-    }
-    return false;
   }
 
   function findFingerprint(root) {
@@ -370,19 +342,6 @@ export function createUIController(deps = {}) {
     }, 1800);
   }
 
-  function showQualityToast() {
-    toast('sra-quality-toast',
-      'Low camera quality — move to better lighting or centre your face in frame.', {
-        position: 'fixed', top: '14px', right: '14px',
-        background: '#333333', color: '#f0ede8',
-        padding: '9px 16px', borderRadius: '9px',
-        fontFamily: 'var(--alc-ui, system-ui, sans-serif)', fontSize: '12px',
-        zIndex: '2147483640', opacity: '0', transition: 'opacity 0.2s ease',
-        pointerEvents: 'none', boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
-        maxWidth: '240px', lineHeight: '1.5',
-      }, 5000);
-  }
-
   /* Re-clamp visible popups when the viewport changes, so a resize cannot
    * strand a card off-screen. Guarded against double installation because the
    * content script can be injected more than once into the same page. */
@@ -410,12 +369,11 @@ export function createUIController(deps = {}) {
   return {
     openPopups,
     installResizeWatcher,
-    updateGazeOverPopups, isGazeOverAnyPopup,
     highlightElement, clearHighlight,
     placePopup, closePopup, flashPopup, hidePopup,
     reservePopup, showPopup, resetAutohide,
     renderPopup,
-    showNudge, showSimulateToast, showQualityToast,
+    showNudge, showSimulateToast,
   };
 }
 
