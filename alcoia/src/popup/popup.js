@@ -262,6 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
   openPage('viewHighlightsBtn', 'src/popup/highlights.html');
   openPage('exportBtn',         'src/popup/export.html');
   openPage('upgradeBtn',        'src/popup/upgrade.html');
+  openPage('diagnosticsBtn',    'src/popup/diagnostics.html');
 
   // ── Reading speed ──────────────────────────────────────────────────────
   const readingCalBtn = $('readingCalBtn');
