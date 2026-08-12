@@ -1,6 +1,13 @@
 // background service worker (MV3)
 // Handles messages from content scripts and popup (notes saving, WebGazer injection)
 
+// Shared backend-origin config (src/shared/config.js). Chrome's MV3 service
+// worker is a classic (non-module) worker, so it pulls the file in directly;
+// Firefox's event page instead loads it as a preceding <script> via
+// manifests/firefox.json's `background.scripts` array, which already runs
+// in the same global scope — importScripts does not exist there.
+if (typeof importScripts === 'function') importScripts('src/shared/config.js');
+
 // ── Local PDF redirect ─────────────────────────────────────────────────────────
 // Chrome's native PDF viewer runs in a sandboxed renderer that content scripts
 // cannot inject into. When a local file:// PDF is opened, redirect it to the
@@ -59,7 +66,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // next). Both exist for the same reason: a content script's fetch carries
   // the host page's origin, which the server's CORS policy rejects.
   if (msg.action === 'summarize' || msg.action === 'apiPost') {
-    const url = msg.url || 'http://localhost:3000/api/summarize';
+    const url = msg.url || self.ALCOIA_CONFIG.SUMMARIZE_URL;
     fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -530,7 +530,8 @@
       </label>
       <div class="field-row" style="padding-top:6px">
         <span class="field-label">Backend URL</span>
-        <input class="field-input" id="backendUrl" type="text" placeholder="http://localhost:3000/api/summarize">
+        <!-- placeholder is set from src/shared/config.js by popup.js, not hardcoded here -->
+        <input class="field-input" id="backendUrl" type="text" placeholder="">
       </div>
     </div>
 
@@ -643,6 +644,7 @@
     <button class="btn-quiet" id="upgradeBtn">Premium →</button>
   </div>
 
+<script src="../shared/config.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>
