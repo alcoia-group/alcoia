@@ -6,7 +6,6 @@
   "version_name": "0.2.0 (pre-release)",
   "permissions": [
     "storage",
-    "scripting",
     "activeTab",
     "tabs",
     "webNavigation"
@@ -44,7 +43,6 @@
         "src/content/telemetry/*.js",
         "src/styles/*.css",
         "src/libs/fonts/*.woff2",
-        "src/libs/webgazer.min.js",
         "src/libs/jszip.min.js",
         "src/libs/pdfjs/*.js",
         "src/pdf-viewer/viewer.html",

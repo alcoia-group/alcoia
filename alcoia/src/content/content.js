@@ -4,10 +4,7 @@
 */
 
 // ── Double-injection guard ─────────────────────────────────────────────────
-if (window.__sra_content_loaded) {
-  // Already running — just restart the tracker if needed
-  if (window.__sra_restart_tracker) window.__sra_restart_tracker();
-} else {
+if (!window.__sra_content_loaded) {
   window.__sra_content_loaded = true;
   __sra_main();
 }
@@ -42,9 +39,6 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
    * way to actually stop it was chrome://extensions. It is wired now. */
   let assistantEnabled   = true;
   let backendUrl         = BACKEND_DEFAULT;
-  // Off until the reader turns it on. This is the boot value used before
-  // storage answers, so `true` here would start a webcam on a fresh profile.
-  let eyeTrackingEnabled = false;
   let selectionEnabled   = true;
   let highlightEnabled   = true;
   let autohideEnabled    = false;
@@ -57,10 +51,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   let currentParagraph   = null;
   let pdfHandler         = null;
   let pptxHandler        = null;
-  let cameraIsReady      = false;
-  let idleBlinkEnabled          = true;
   let comprehensionCheckEnabled = true;
-  let lastGazeReceivedAt = Date.now();  // tracks when we last got a real gaze point
 
   // ── New feature flags ──────────────────────────────────────────────────
   let ttsEnabled          = false;
@@ -69,10 +60,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   let dyslexiaEnabled     = false;
   let dyslexiaColor       = 'rgba(255,243,180,0.12)';
   let bionicEnabled       = false;
-  let personalBaseline    = null;  // from calibration or chrome.storage
   let prevParagraphText   = '';    // for AI context window
-
-  // ── Gaze quality tracking ──────────────────────────────────────────────
 
   // ── Highlight persistence ──────────────────────────────────────────────
   function saveHighlight(text, summary, state) {
@@ -117,21 +105,6 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     { key: 'orange', bg: '#FFCC80', label: 'Orange' },
   ];
 
-  // ── State smoothing ring buffer ────────────────────────────────────────
-  const STATE_HISTORY     = [];
-  const STATE_HISTORY_MAX = 3;
-
-  function getSmoothedState(newLabel) {
-    STATE_HISTORY.push(newLabel);
-    if (STATE_HISTORY.length > STATE_HISTORY_MAX) STATE_HISTORY.shift();
-    const counts = {};
-    for (const s of STATE_HISTORY) counts[s] = (counts[s] || 0) + 1;
-    return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-  }
-
-  // Expose restart hook for the double-injection guard above
-  window.__sra_restart_tracker = () => { window.__sra_tracker_started = false; startTracker(); };
-
   // ── Module loader ──────────────────────────────────────────────────────
   const loadModule = (p) => import(chrome.runtime.getURL(p));
 
@@ -155,29 +128,19 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   }
 
   // ── Load modules ───────────────────────────────────────────────────────
-  const gazeUtils    = await loadModule('src/content/gaze-utils.js');
   const overlayUtils = await loadModule('src/content/overlay-utils.js');
-  const featModule   = await loadModule('src/content/gaze-features.js');
-  const idleModule   = await loadModule('src/content/idle-overlay.js');
-  const { updateIdleState, forceStopIdle } = idleModule;
   const compModule  = await loadModule('src/content/comprehension-monitor.js');
   const readCalModule = await loadModule('src/content/reading-calibration.js');
-  const { runReadingCalibration } = readCalModule;
+  const { runSelfPacedCalibration } = readCalModule;
   const ttsModule      = await loadModule('src/content/tts-handler.js');
   const rulerModule    = await loadModule('src/content/focus-ruler.js');
   const dyslexiaModule  = await loadModule('src/content/dyslexia-utils.js');
   const segmentation     = await loadModule('src/content/telemetry/segmentation.js');
-  const langDetectModule = await loadModule('src/content/lang-detect.js');
   const mapModule       = await loadModule('src/content/reading-map.js');
 
   const ttsHandler    = ttsModule.createTTSHandler();
   const focusRuler    = rulerModule.createFocusRuler();
   const dyslexiaUtils = dyslexiaModule;
-  let scriptInfo = langDetectModule.detectScript();
-  langDetectModule.watchScriptChanges(newInfo => {
-    scriptInfo = newInfo;
-    _log(`Script re-detected: RTL=${newInfo.isRTL} CJK=${newInfo.isCJK} lang="${newInfo.lang}"`);
-  });
   const readingMap    = mapModule.createReadingMap();
   const sessionModule  = await loadModule('src/content/session-tracker.js');
   const sessionTracker = sessionModule.createSessionTracker();
@@ -188,22 +151,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   backtrackWindow:4000,
   cooldown:       30000,
 });
-  const classModule  = await loadModule('src/content/classifier.js');
-
-  const featureExtractor = featModule.createFeatureExtractor({
-    windowMs: 2500, minPoints: 15,
-    // The paragraph being read defines the text column for on_page_fraction.
-    // Returns null before anything is being tracked, and the extractor then
-    // abstains rather than reporting a fraction it cannot compute.
-    getContentRect: () => {
-      try {
-        const el = orchestrator?.getActiveParagraphEl()
-          || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
-        return el ? el.getBoundingClientRect() : null;
-      } catch (e) { return null; }
-    },
-  });
-  const { classifyGazeState, COGNITIVE_STATE_ACTIONS } = classModule;
 
   // ── UI ─────────────────────────────────────────────────────────────────
   const uiModule = await loadModule('src/content/ui-controller.js');
@@ -219,7 +166,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   const {
     openPopups, highlightElement, closePopup, flashPopup, hidePopup,
     reservePopup, showPopup, renderPopup,
-    showNudge, showSimulateToast, showQualityToast,
+    showNudge, showSimulateToast,
   } = ui;
 
   // ── Question layer ─────────────────────────────────────────────────────
@@ -292,17 +239,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   orchestrator = await orchModule.createOrchestrator({
     loadModule,
     comprehensionMonitor,
-    featureExtractor,
-    classifyGazeState,
-    getSmoothedState,
-    gazeUtils,
-    dyslexiaUtils,
-    langDetect: langDetectModule,
     // Read live: the storage listener reassigns these at runtime.
     settings: () => ({
       assistantEnabled,
-      comprehensionCheckEnabled, eyeTrackingEnabled, focusRulerEnabled,
-      debugEnabled, dyslexiaEnabled, personalBaseline, scriptInfo,
+      comprehensionCheckEnabled, focusRulerEnabled,
+      debugEnabled,
     }),
     host: {
       sessionTracker,
@@ -313,18 +254,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       setCurrentParagraph: (p) => { currentParagraph = p; },
       setPrevParagraphText: (t) => { prevParagraphText = t; },
       setCogState: (label) => { lastCogState = label; },
-      getLastGazePoint: () => lastGazePt,
-      // Reading an open card is not fresh confusion. Without this, letting your
-      // gaze settle on a popup pops another one on top of it.
-      isReadingAPopup: () => { try { return ui.isGazeOverAnyPopup(lastGazePt); } catch (e) { return false; } },
-      getLastGazeReceivedAt: () => lastGazeReceivedAt,
-      onQualityWarning: () => showQualityToast(),
       onParagraphRead: (text, dwellMs) => sessionRecall.recordRead(text, dwellMs),
       onStruggle: (text) => sessionRecall.recordStruggle(text),
-      onGazeFeatures: (rawFeatures) => {
-        if (idleBlinkEnabled) updateIdleState(rawFeatures, lastGazePt, lastGazeReceivedAt);
-        else forceStopIdle();
-      },
       onIntervention: async (decision, state, target) => {
         // Off means off: nothing reaches the screen, and the budget is not
         // spent on an offer that was never made.
@@ -351,24 +282,22 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   });
 
   // ── Load settings ──────────────────────────────────────────────────────
-  // Boot waits on this. Settings load asynchronously, and starting the tracker
-  // before they arrive means booting the camera on the `sra_eye: true` default
-  // regardless of what the reader actually chose.
+  // Boot waits on this so nothing acts on defaults before the reader's real
+  // choices arrive.
   let settingsLoaded;
   const settingsReady = new Promise((resolve) => { settingsLoaded = resolve; });
 
   chrome.storage.local.get({
     sra_enabled: true,
-    sra_backend_url: BACKEND_DEFAULT, sra_eye: false, sra_selection: true,
+    sra_backend_url: BACKEND_DEFAULT, sra_selection: true,
     sra_highlight_para: true, sra_autohide: false, sra_autohide_timeout: 12,
-    sra_pin_default: false, sra_debug: false, sra_idle_blink: true, sra_comprehension: true,
+    sra_pin_default: false, sra_debug: false, sra_comprehension: true,
     sra_tts: false, sra_focus_ruler: false, sra_dyslexia: false,
     sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
-    sra_personal_baseline: null, sra_baseline_wpm: null, sra_dark_mode: false,
+    sra_baseline_wpm: null, sra_dark_mode: false,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     assistantEnabled   = res.sra_enabled !== false;
-    eyeTrackingEnabled = res.sra_eye === true;
     selectionEnabled   = res.sra_selection !== false;
     highlightEnabled   = res.sra_highlight_para !== false;
     autohideEnabled    = !!res.sra_autohide;
@@ -381,7 +310,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     dyslexiaEnabled   = !!res.sra_dyslexia;
     dyslexiaColor     = res.sra_dyslexia_color || 'rgba(255,243,180,0.12)';
     bionicEnabled     = !!res.sra_bionic;
-    personalBaseline  = res.sra_personal_baseline || null;
     if (res.sra_baseline_wpm) comprehensionMonitor.seedWpmFromCalibration(res.sra_baseline_wpm);
     if (dyslexiaEnabled) dyslexiaUtils.applyDyslexiaCSS(dyslexiaColor);
     if (focusRulerEnabled) focusRuler.enable();
@@ -444,10 +372,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   // ── Simulated states (testing only) ────────────────────────────────────
   // The panel and these shortcuts speak the engine's vocabulary — on_pace,
-  // skimming, struggling, drifting. The classifier's action table still uses
-  // the older labels it was trained against, so the translation lives here
-  // rather than leaking old names back into the UI. `simplify` is kept
-  // reachable on Alt+2 because nothing else exercises that renderer.
+  // skimming, struggling, drifting. `simplify` is kept reachable on Alt+2
+  // because nothing else exercises that renderer.
   const SIM_ACTIONS = Object.freeze({
     struggling: 'explain',
     drifting:   'nudge',
@@ -463,7 +389,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   async function runSimulatedState(spec) {
     const [state, forced] = String(spec).split(':');
-    const action = forced || SIM_ACTIONS[state] || COGNITIVE_STATE_ACTIONS[state] || 'none';
+    const action = forced || SIM_ACTIONS[state] || 'none';
 
     showSimulateToast(state);
     lastActionAt = 0;
@@ -860,8 +786,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   let _wordBubble     = null;
   let _wordTimer      = null;
   let _lastHoveredWord = null;
-  let _imageDwellEl   = null;
-  let _imageDwellStart = 0;
 
   document.addEventListener('keydown', e => { if (e.key === 'Control' || e.key === 'Meta') _ctrlHeld = true; });
   document.addEventListener('keyup',   e => {
@@ -1069,7 +993,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     return { type: 'dom', data: overlayUtils.getBlockAncestor(el) || el };
   }
 
-  // ── Gaze-triggered AI ──────────────────────────────────────────────────
+  // ── Summarise/explain a paragraph (simulate path, manual Alt+S) ────────
   async function triggerAIForParagraph(paraInfo, reason) {
     if (!paraInfo) return;
 
@@ -1112,67 +1036,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     } finally {
       if (_fp) inFlightFingerprints.delete(_fp);
     }
-  }
-
-  // ── Gaze processing ────────────────────────────────────────────────────
-  const gazeState = gazeUtils.createGazeState({ smoothingAlpha:0.35, dropoutFrames:3, velocityThreshold:1800 });
-  let consecutiveNull = 0, lastGazePt = null;
-
-  async function onGaze(data) {
-    if (!eyeTrackingEnabled) return;
-    if (!data) { consecutiveNull++; if (consecutiveNull >= gazeState.dropoutFrames) lastGazePt = null; return; }
-    consecutiveNull = 0;
-    const pt = gazeUtils.normalizeAndSmooth(data, gazeState);
-    if (!pt) return;
-    pt.x = clamp(pt.x, 0, window.innerWidth  - 1);
-    pt.y = clamp(pt.y, 0, window.innerHeight - 1);
-    if (!gazeUtils.checkVelocity(gazeState, pt)) return;
-    lastGazePt = pt;
-    lastGazeReceivedAt = Date.now();
-    featureExtractor.addPoint(pt);
-
-    // Image dwell: if gaze stays on the same image while confused/overloaded for >2s, explain it
-    const _gazeTopEl = document.elementFromPoint(pt.x, pt.y);
-    const _gazeImg   = _gazeTopEl?.tagName === 'IMG' ? _gazeTopEl
-      : (_gazeTopEl?.closest?.('figure')?.querySelector?.('img') || null);
-    if (_gazeImg) {
-      if (_gazeImg !== _imageDwellEl) { _imageDwellEl = _gazeImg; _imageDwellStart = Date.now(); }
-      else if (lastCogState === 'struggling' && Date.now() - _imageDwellStart > 2000) {
-        const _ifp = 'img:' + (_gazeImg.src || '').slice(-60) + ':' + (_gazeImg.alt || '').slice(0, 20);
-        if (!inFlightFingerprints.has(_ifp)) {
-          _imageDwellStart = Date.now() + 30000; // suppress for 30s after trigger
-          triggerImageExplanation(_gazeImg, pt.x, pt.y, lastCogState);
-        }
-      }
-    } else {
-      _imageDwellEl = null;
-    }
-
-    // Pause autohide on any card the gaze is resting on (from main).
-    try { ui.updateGazeOverPopups(pt); } catch (e) {}
-
-    // Focus ruler follows gaze Y in real time
-    if (focusRulerEnabled) focusRuler.update(pt.y);
-
-    try {
-      const f = await findParagraphAt(pt.x, pt.y);
-      if (f) {
-        const isPopup = f.type === 'dom' && f.data &&
-          (f.data.classList?.contains('sra-popup') || !!f.data.closest?.('.sra-popup'));
-        if (!isPopup) {
-          if (comprehensionCheckEnabled && f.type === 'dom' && f.data !== (currentParagraph && currentParagraph.data)) {
-            // Paragraph timing is owned by paragraph-tracker via syncParagraph()
-            // now — it works with the camera off, which this path never did.
-            // Gaze still refines which paragraph is under the reader.
-            if (currentParagraph?.type === 'dom' && currentParagraph.data) {
-              prevParagraphText = (currentParagraph.data.innerText || currentParagraph.data.textContent || '')
-                .trim().slice(0, 800);
-            }
-          }
-          currentParagraph = f;
-        }
-      }
-    } catch (e) {}
   }
 
   // ── Comprehension signal handler ──────────────────────────────────────────
@@ -1294,95 +1157,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     return `${observed}<div>Want a summary?</div>`;
   }
 
-  // ── WebGazer bootstrap ─────────────────────────────────────────────────
-  // CSP-safe: URL passed via data attribute, no inline scripts
-  async function startTracker() {
-    if (window.__sra_tracker_started) return;
-    window.__sra_tracker_started = true;
-
-    try {
-      const script = document.createElement('script');
-      script.dataset.webgazerUrl = chrome.runtime.getURL('src/libs/webgazer.min.js');
-      script.src = chrome.runtime.getURL('src/content/webgazer-bootstrap.js');
-      (document.head || document.documentElement).appendChild(script);
-
-      // Fallback injection if bootstrap doesn't fire cameraReady or cameraError within 8s
-      let gotSignal = false;
-      const fallback = setTimeout(() => {
-        if (gotSignal) return;
-        _warn('No signal from WebGazer after 8s — trying background injection…');
-        chrome.runtime.sendMessage({ action: 'injectWebgazerBootstrap' }, r => {
-          if (chrome.runtime.lastError) _warn(chrome.runtime.lastError.message);
-        });
-      }, 8000);
-
-      window.addEventListener('message', async (ev) => {
-        if (ev.source !== window || !ev.data) return;
-        const d = ev.data;
-
-        if (d.source === 'sra-webgazer') {
-          try { if (d.gaze) onGaze(d.gaze); } catch (e) {}
-          return;
-        }
-
-        if (d.source === 'sra-control' && d.type === 'cameraReady') {
-          gotSignal = true;
-          clearTimeout(fallback);
-          cameraIsReady = true;
-          chrome.storage.local.set({ sra_camera_ready: true });
-          _log('WebGazer camera ready ✓');
-
-          setTimeout(async () => {
-            try {
-              // One-time calibration: if user has calibrated before, restore
-              // the saved model silently. No overlay, no interruption.
-              // Recalibrate anytime via the popup buttons.
-              const stored = await new Promise(resolve =>
-                chrome.storage.local.get({ sra_ever_calibrated: false }, r => resolve(r))
-              );
-              if (stored.sra_ever_calibrated) {
-                // Restore the saved regression model for a warm start, then let
-                // continuous click recording refine it for the current session.
-                _log('Calibration persisted — restoring model from previous session');
-                await gazeUtils.restoreWebgazerModel();
-              } else {
-                _log('First-time calibration starting...');
-                const cal = await gazeUtils.runCalibrationSequence();
-                if (cal) {
-                  await gazeUtils.setCalibration(cal);
-                  chrome.storage.local.set({ sra_ever_calibrated: true });
-                  await gazeUtils.saveWebgazerModel();
-                  _log('First-time calibration complete and saved');
-                }
-              }
-            } catch (e) {
-              _warn('Calibration step failed (non-fatal):', e.message);
-            }
-            orchestrator.startClassificationLoop();
-          }, 800);
-        }
-
-        if (d.source === 'sra-control' && d.type === 'cameraError') {
-          gotSignal = true;
-          clearTimeout(fallback);
-          chrome.storage.local.set({ sra_camera_ready: false, sra_camera_error: d.error || 'unknown' });
-          _warn('WebGazer error:', d.error);
-          // Still start classification loop — it'll run without gaze data (no action will fire since lastGazePt stays null)
-        }
-      }, false);
-    } catch (e) { _warn('startTracker failed:', e); }
-  }
-
-  // Continuous click recording: every click is a WebGazer training example.
-  // This is the correct way — postMessage to the bootstrap in page context,
-  // which calls webgazer.recordScreenPosition(). Content scripts can't access
-  // window.webgazer directly (isolated world), but postMessage crosses worlds.
-  document.addEventListener('click', (e) => {
-    try {
-      window.postMessage({ source: 'sra-cal-record', x: e.clientX, y: e.clientY }, '*');
-    } catch (err) {}
-  }, { passive: true, capture: false });
-
   // ── PDF/PPTX handlers ─────────────────────────────────────────────────
   async function detectAndInitHandlers() {
     const url = window.location.href;
@@ -1396,33 +1170,19 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   // ── Public API ─────────────────────────────────────────────────────────
   window.sra = window.sra || {};
-  window.sra.runCalibration = async () => {
-    const cal = await gazeUtils.runCalibrationSequence();
-    if (cal) {
-      await gazeUtils.setCalibration(cal);
-      await gazeUtils.saveWebgazerModel();
-    }
-    return cal;
-  };
   window.sra.getState = () => lastCogState;
-  window.sra.isCameraReady = () => cameraIsReady;
 
   // ── Message listener ───────────────────────────────────────────────────
   chrome.runtime.onMessage.addListener(async (msg, _, sendResponse) => {
     if (!msg?.type) return;
 
     if (msg.type === 'settings') {
-      if (msg.eye           !== undefined) {
-        eyeTrackingEnabled = !!msg.eye;
-        if (!eyeTrackingEnabled) forceStopIdle();
-      }
       if (msg.selection     !== undefined) selectionEnabled   = !!msg.selection;
       if (msg.highlightPara !== undefined) highlightEnabled   = !!msg.highlightPara;
       if (msg.autohide      !== undefined) autohideEnabled    = !!msg.autohide;
       if (msg.autohideTimeout !== undefined) autohideTimeoutSec = Number(msg.autohideTimeout) || 12;
       if (msg.pinDefault    !== undefined) pinDefault         = !!msg.pinDefault;
       if (msg.debug         !== undefined) debugEnabled       = !!msg.debug;
-      if (msg.idleBlink     !== undefined) { idleBlinkEnabled = !!msg.idleBlink; if (!idleBlinkEnabled) forceStopIdle(); }
       if (msg.comprehension !== undefined) comprehensionCheckEnabled = !!msg.comprehension;
       if (msg.backendUrl)                  backendUrl         = msg.backendUrl;
       // New feature flags
@@ -1440,73 +1200,33 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       }
       if (msg.bionic        !== undefined) bionicEnabled = !!msg.bionic;
       if (msg.darkMode      !== undefined) { darkModeEnabled = !!msg.darkMode; applyDarkMode(darkModeEnabled); }
-      try { window.postMessage({ source:'sra-control', type:'setPredictionPoints', enabled:!!debugEnabled },'*'); } catch(e){}
       sendResponse({ status: 'ok' }); return;
-    }
-    if (msg.type === 'runCalibration') {
-      (async () => {
-        try {
-          const cal = await gazeUtils.runCalibrationSequence();
-          if (cal) {
-            await gazeUtils.setCalibration(cal);
-            await gazeUtils.saveWebgazerModel();
-            // Mark calibrated so the auto-modal doesn't reappear on future pages
-            chrome.storage.local.set({ sra_ever_calibrated: true });
-          }
-          sendResponse({ status: 'ok', calibration: cal });
-        }
-        catch (e) { sendResponse({ status: 'error', error: String(e) }); }
-      })(); return true;
     }
     if (msg.type === 'debugToggle') {
       debugEnabled = !!msg.enabled;
-      try { window.postMessage({source:'sra-control',type:'setPredictionPoints',enabled:debugEnabled},'*'); } catch(e){}
       sendResponse({ status:'ok' }); return true;
     }
     if (msg.type === 'startReadingCalibration') {
       (async () => {
         try {
-          // Reset feature extractor so calibration gaze data builds a clean baseline
-          featureExtractor.reset();
-          const result = await runReadingCalibration({
-            msPerWord:  220,
+          const result = await runSelfPacedCalibration({
             onComplete: (success, wpm) => {
               _log('Reading calibration complete, success:', success, 'wpm:', wpm);
+              // Seed comprehension monitor's WPM baseline and persist it —
+              // it used to be written only inside a gaze-feature-baseline
+              // branch, so a reader who had just sat there measuring lost
+              // the number the moment the page unloaded.
               if (success && wpm) {
-                // Seed comprehension monitor WPM baseline from calibration
                 comprehensionMonitor.seedWpmFromCalibration(wpm);
-                // The WPM is persisted on its own. It used to be written only
-                // inside the gaze-baseline branch below, so with the camera
-                // off — where computeFeatures() returns null — the number the
-                // reader had just sat there measuring survived only until the
-                // page unloaded.
                 chrome.storage.local.set({ sra_baseline_wpm: wpm });
-
-                // Gaze feature baseline, when there was a camera producing one.
-                const baselineFeatures = featureExtractor.computeFeatures();
-                if (baselineFeatures) {
-                  personalBaseline = baselineFeatures;
-                  chrome.storage.local.set({ sra_personal_baseline: baselineFeatures });
-                  _log('Personal baseline saved:', baselineFeatures);
-                }
               }
             }
           });
-          try { await gazeUtils.saveWebgazerModel(); } catch(e) {}
-          // Mark calibrated so the auto dot-calibration modal doesn't reappear
-          chrome.storage.local.set({ sra_ever_calibrated: true });
           sendResponse({ status: 'ok', result });
         } catch (e) {
           sendResponse({ status: 'error', error: String(e) });
         }
       })();
-      return true;
-    }
-
-    if (msg.type === 'startCamera') {
-      window.__sra_tracker_started = false;
-      try { await startTracker(); sendResponse({status:'ok'}); }
-      catch (e) { sendResponse({status:'error',error:String(e)}); }
       return true;
     }
     if (msg.action === 'sessionRecall') {
@@ -1532,7 +1252,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
 
     if (msg.type === 'getState') {
-      sendResponse({ state: lastCogState, cameraReady: cameraIsReady });
+      sendResponse({ state: lastCogState });
       return;
     }
 
@@ -1699,18 +1419,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   // ── Boot ───────────────────────────────────────────────────────────────
   await detectAndInitHandlers();
-
-  // Never boot the camera unless the reader turned it on. webgazer.begin()
-  // calls getUserMedia, so starting the tracker speculatively would prompt for
-  // the webcam on a page the reader only wanted read. Telemetry detection below
-  // runs either way — it never needed the camera.
   await settingsReady;
-  if (eyeTrackingEnabled) await startTracker();
-  else _log('Eye tracking off — tracker not started, camera untouched');
 
   /* Turning the switch off has to leave the page as if the extension were
-   * not installed: no cards, no ruler, no sidebar, no speech, no camera, and
-   * no telemetry accruing in the background. Turning it back on resumes
+   * not installed: no cards, no ruler, no sidebar, no speech, and no
+   * telemetry accruing in the background. Turning it back on resumes
    * whatever the reader's settings already said. */
   function setAssistantEnabled(on) {
     const was = assistantEnabled;
@@ -1721,7 +1434,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       try { hidePopup(true); } catch (e) { /* nothing open */ }
       try { ui.clearHighlight(); } catch (e) { /* nothing highlighted */ }
       try { focusRuler.disable(); } catch (e) { /* never enabled */ }
-      try { forceStopIdle(); } catch (e) { /* no idle overlay */ }
       try { ttsHandler.stop(); } catch (e) { /* not speaking */ }
       try { document.getElementById('sra-reading-map')?.classList.remove('open'); } catch (e) {}
       try { document.querySelector('.sra-word-bubble')?.remove(); } catch (e) {}

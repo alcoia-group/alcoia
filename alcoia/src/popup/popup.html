@@ -44,10 +44,8 @@
     body.dark-mode .brand-mark.on-dark { display: block; }
 
     /* ── Reading-state card ──────────────────────────────────────────────
-       The honest summary of what the extension currently knows. The state
-       comes from the fused estimate; the source line says which signals are
-       actually running, because "camera off" is the normal case and the UI
-       used to imply the opposite. */
+       The honest summary of what the extension currently knows: the fused
+       state estimate, and the one signal source that drives it. */
     .state-card {
       margin: 12px 16px 0;
       padding: 12px 14px;
@@ -226,15 +224,6 @@
     body.assistant-off .state-card { opacity: 0.55; }
     body.assistant-off .tab-panel  { opacity: 0.6; }
 
-    /* ── Platform gating ──────────────────────────────────────────────
-       Safari on iOS and iPadOS does not give a web extension a usable
-       camera, and on a phone the whole gaze path is dead weight. Rather
-       than offering a control that silently does nothing, popup.js sets
-       .no-camera on <body> and everything camera-only leaves the panel.
-       Detection stays telemetry-only there, which is the primary path
-       anyway — nothing else about the product changes. */
-    body.no-camera [data-camera-only] { display: none !important; }
-
     /* ── Touch and narrow viewports ── */
     /* 360px, not 400px: the Chrome popup body *is* 400px wide, so a
        max-width:400px query fires in the ordinary case and collapses both
@@ -318,7 +307,6 @@
     <div class="state-why" id="stateWhy">Open an article and start reading — the estimate appears here.</div>
     <div class="state-sources">
       <span class="src-chip on" id="signalChip"><i></i><span id="signalStatus">Reading signals</span></span>
-      <span class="src-chip" id="cameraChip" data-camera-only><i id="cameraDot"></i><span id="cameraStatus">Camera off</span></span>
     </div>
   </div>
 
@@ -355,9 +343,7 @@
       </div>
     </div>
 
-    <!-- Signals, in the order they actually carry weight. Telemetry is the
-         primary path and needs no permission; the camera is an optional
-         extra that only reports whether you are there. -->
+    <!-- Telemetry is the only detection path and needs no permission. -->
     <div class="section">
       <div class="section-label">What it watches</div>
       <div class="toggle-grid">
@@ -368,14 +354,6 @@
             <label class="pill"><input type="checkbox" id="comprehensionToggle" checked><span class="pill-track"></span></label>
           </div>
           <span class="toggle-cell-desc">Your pace against the difficulty of the text, re-reads, and where you stop. No permission needed.</span>
-        </label>
-
-        <label class="toggle-cell" for="eyeToggle" data-camera-only>
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Camera <span class="opt-tag">optional</span></span>
-            <label class="pill"><input type="checkbox" id="eyeToggle"><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Adds only whether you are at the screen and roughly where you are looking. Off by default; video never leaves your machine.</span>
         </label>
 
       </div>
@@ -438,14 +416,6 @@
             <label class="pill"><input type="checkbox" id="pinDefaultToggle"><span class="pill-track"></span></label>
           </div>
           <span class="toggle-cell-desc">Keep cards until you close them</span>
-        </label>
-
-        <label class="toggle-cell" for="idleBlinkToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Idle pulse</span>
-            <label class="pill"><input type="checkbox" id="idleBlinkToggle" checked><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Soft edge pulse when you look away</span>
         </label>
 
         <label class="toggle-cell" for="darkModeToggle">
@@ -521,10 +491,10 @@
 
     <div class="section">
       <div class="section-label">Developer</div>
-      <label class="toggle-row" for="debugTogglePopup" data-camera-only>
+      <label class="toggle-row" for="debugTogglePopup">
         <div class="toggle-info">
           <span class="toggle-name">Debug overlay</span>
-          <span class="toggle-desc">Draw gaze prediction dots (camera only)</span>
+          <span class="toggle-desc">Narrate detection state to the console</span>
         </div>
         <label class="pill"><input type="checkbox" id="debugTogglePopup"><span class="pill-track"></span></label>
       </label>
@@ -580,25 +550,6 @@
         <button class="btn btn-ghost" id="viewHighlightsBtn">Highlights</button>
         <button class="btn btn-ghost" id="exportBtn">Export</button>
       </div>
-    </div>
-
-    <div class="section" data-camera-only>
-      <div class="section-label">Camera — optional</div>
-      <div class="btn-row">
-        <button class="btn btn-ghost" id="startCameraBtn">Turn the camera on</button>
-        <div class="btn-grid">
-          <button class="btn btn-ghost" id="calibrateBtn">Calibrate</button>
-          <button class="btn btn-ghost" id="troubleshootBtn">Permissions</button>
-        </div>
-        <p class="section-note" id="cameraHelp" hidden>
-          Open the padlock in the address bar, then Permissions, and allow the camera
-          for this site.
-        </p>
-      </div>
-      <p class="section-note">
-        The camera is a secondary sensor: it reports whether you are at the screen
-        and roughly which region you are looking at. Detection runs without it.
-      </p>
     </div>
 
     <div class="section">
