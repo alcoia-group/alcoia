@@ -20,7 +20,11 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
 (async function () {
 
   // ── Constants ──────────────────────────────────────────────────────────
-  const BACKEND_DEFAULT     = 'http://localhost:3000/api/summarize';
+  // Defined in src/shared/config.js, loaded as a preceding content script —
+  // see manifests/base.json. One place for the shipped origin; a developer
+  // overrides it at runtime via the popup's Backend URL setting instead of
+  // editing source.
+  const BACKEND_DEFAULT     = self.ALCOIA_CONFIG.SUMMARIZE_URL;
   const MIN_SELECTION_CHARS = 15;
   // Interruption cooldowns and budget now live in intervention-policy.js —
   // one place, applied to telemetry and gaze alike.

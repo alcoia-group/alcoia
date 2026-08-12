@@ -91,6 +91,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const bionicToggle        = $('bionicToggle');
   const dyslexiaColorSelect = $('dyslexiaColorSelect');
   const backendUrlInput     = $('backendUrl');
+  // The static HTML placeholder would drift from the real default the
+  // moment either changed independently — set it from the same config.
+  backendUrlInput.placeholder = self.ALCOIA_CONFIG.SUMMARIZE_URL;
   const darkModeToggle      = $('darkModeToggle');
 
   const stateDot     = $('stateDot');
@@ -105,7 +108,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // sra_eye is false by default. A reading assistant that asks for the webcam
   // on first run is a reading assistant nobody installs twice.
   const DEFAULTS = {
-    sra_backend_url: 'http://localhost:3000/api/summarize',
+    // Defined in src/shared/config.js, loaded before this file — see
+    // popup.html. One place for the shipped origin; overriding this field
+    // (below, in the Settings panel) is the documented way to point a dev
+    // build at a local backend without editing source or the manifest.
+    sra_backend_url: self.ALCOIA_CONFIG.SUMMARIZE_URL,
     sra_eye: false, sra_selection: true, sra_highlight_para: true,
     sra_autohide: false, sra_autohide_timeout: 12,
     sra_pin_default: false, sra_debug: false, sra_enabled: true,
