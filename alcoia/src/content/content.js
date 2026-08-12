@@ -621,6 +621,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       evidence: decision.evidence,
       anchorRect,
       paragraphKey: text.slice(0, 80).trim(),
+      wasExplorationSample: decision.wasExplorationSample === true,
     });
   }
 
