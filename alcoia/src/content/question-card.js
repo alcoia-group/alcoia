@@ -22,6 +22,8 @@
  *    with whatever confidence (or none, it is skippable) the reader gave.
  */
 
+import { calibratedLine } from './calibration-copy.js';
+
 /* Wrong answers are not scolded. The reader gets the correct option marked,
  * the sentence it came from, and an offer of a fuller explanation. */
 export function createQuestionCard(deps = {}) {
@@ -159,20 +161,6 @@ export function createQuestionCard(deps = {}) {
   return { show };
 }
 
-/* From the project notes' confidence-calibration table, reworded as reader-facing
- * copy. Wrong+high gets no harsher tone than wrong+low — confidently wrong
- * is the case learning matters most for, not a case for a scolding tone. */
-const CALIBRATION_COPY = Object.freeze({
-  correct: {
-    high: 'Correct, and appropriately confident.',
-    low:  "Correct — you knew more than you thought.",
-  },
-  incorrect: {
-    high: "Not quite — you were sure, and that's worth noticing.",
-    low:  "Not quite — you weren't sure, and that's good calibration.",
-  },
-});
-
 /* Mark the options and show the sentence the answer came from. The span is
  * the reason the server insists on a verbatim citation — without it this
  * would just be an assertion.
@@ -199,9 +187,7 @@ function revealAnswer(root, question, chosen, confidence, esc) {
   const correct = chosen === question.answerIndex;
   // A reader who committed without rating confidence gets the bare path —
   // confidence rating is skippable and must not gate grading on anything.
-  const calibrated = (confidence === 'low' || confidence === 'high')
-    ? CALIBRATION_COPY[correct ? 'correct' : 'incorrect'][confidence]
-    : null;
+  const calibrated = calibratedLine(correct, confidence);
 
   const note = document.createElement('div');
   note.className = correct ? 'sra-q-result sra-q-result-correct' : 'sra-q-result sra-q-result-wrong';
