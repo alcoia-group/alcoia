@@ -319,6 +319,38 @@ const receipt = await page.evaluate(() => {
   };
 });
 
+// Item 15: the coverage gate accumulates from the same reading simulated
+// above, persisted (not in-memory) and keyed by hostname+pathname — not
+// window.location.href — so it survives a query string. Verified here by
+// reloading the exact same page with an added ?utm_source= and confirming
+// the accumulated coverage carried over rather than resetting.
+//
+// chrome.storage.local is only reachable from a content script or an
+// extension page, not from the article page's own JS context (`page`,
+// above) — so this reads it through a throwaway extension page, the same
+// way the settings are seeded via `cfg` near the top of this file.
+async function readCoverage(pageKey) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const result = await helper.evaluate((key) => new Promise((r) => {
+    chrome.storage.local.get({ sra_doc_coverage: {} }, (data) => {
+      const doc = (data.sra_doc_coverage || {})[key];
+      r(doc
+        ? { tracked: true, paragraphsCovered: doc.fingerprints.length, totalParagraphs: doc.totalParagraphs, dwellMs: doc.dwellMs }
+        : { tracked: false, paragraphsCovered: 0, totalParagraphs: 0, dwellMs: 0 });
+    });
+  }), pageKey);
+  await helper.close();
+  return result;
+}
+
+const pageKey = new URL(page.url()).hostname + new URL(page.url()).pathname;
+const coverage = { key: pageKey, ...(await readCoverage(pageKey)) };
+
+await page.goto('http://localhost:8731/?utm_source=smoke-test', { waitUntil: 'load' });
+await page.waitForTimeout(1500);
+const coverageAfterQueryString = await readCoverage(pageKey); // pathname-only key — the query string above is not part of it
+
 const failureDegrade = FAIL_QUESTIONS ? {
   questionsEndpointCalled: apiHits.questions > 0,
   noQuestionCardShown: !questionCard.shown,
@@ -390,6 +422,9 @@ console.log('after answering         :', JSON.stringify(graded));
 if (correctAnswerSilence) console.log('correct-answer silence  :', JSON.stringify(correctAnswerSilence), '(expect all true)');
 console.log('session recall (Alt+R)  :', JSON.stringify(recall));
 console.log('receipt (Alt+I)         :', JSON.stringify(receipt));
+console.log('coverage gate           :', JSON.stringify(coverage));
+console.log('  survives ?query reload:', JSON.stringify(coverageAfterQueryString),
+  coverageAfterQueryString.paragraphsCovered >= coverage.paragraphsCovered ? '(did not reset — good)' : '(RESET — bug)');
 if (failureDegrade) console.log('questions-endpoint fail :', JSON.stringify(failureDegrade), '(expect all true)');
 console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
 console.log('  new page errors       :', shortcuts.newPageErrors);
