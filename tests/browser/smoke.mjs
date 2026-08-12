@@ -56,6 +56,14 @@ const CANNED_QUESTION = ZH ? {
 
 const apiHits = { questions: 0, summarize: 0 };
 
+/* FAIL=questions simulates the server rejecting every question — a 422 with
+ * no citable span, the same shape a real "nothing passed the citation check"
+ * response takes. Item 8 in the build brief made this degrade to silence
+ * (no card at all) instead of falling back to a comprehension-offer popup;
+ * this mode is what actually exercises that fix end to end, since none of
+ * content.js's internals are exported for a unit test to reach directly. */
+const FAIL_QUESTIONS = process.env.FAIL === 'questions';
+
 const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url.startsWith('/api/')) {
     let body = '';
@@ -63,6 +71,11 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
       const isQuestions = req.url.includes('/api/questions');
       if (isQuestions) apiHits.questions++; else apiHits.summarize++;
+      if (isQuestions && FAIL_QUESTIONS) {
+        res.writeHead(422, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'no_citable_question' }));
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(isQuestions
         ? { questions: [CANNED_QUESTION], cached: false }
@@ -261,6 +274,12 @@ const receipt = await page.evaluate(() => {
   };
 });
 
+const failureDegrade = FAIL_QUESTIONS ? {
+  questionsEndpointCalled: apiHits.questions > 0,
+  noQuestionCardShown: !questionCard.shown,
+  noPageErrors: findings.pageErrors.length === 0,
+} : null;
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -276,6 +295,7 @@ console.log('question card           :', JSON.stringify(questionCard));
 console.log('after answering         :', JSON.stringify(graded));
 console.log('session recall (Alt+R)  :', JSON.stringify(recall));
 console.log('receipt (Alt+I)         :', JSON.stringify(receipt));
+if (failureDegrade) console.log('questions-endpoint fail :', JSON.stringify(failureDegrade), '(expect all true)');
 console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
 console.log('  new page errors       :', shortcuts.newPageErrors);
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));

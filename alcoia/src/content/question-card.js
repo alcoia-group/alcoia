@@ -28,9 +28,26 @@ export function createQuestionCard(deps = {}) {
   } = deps;
 
   /* question: { q, options[4], answerIndex, explanation, span }
-   * Returns true only if the card actually reached the screen. */
+   * Returns true only if the card actually reached the screen.
+   *
+   * Malformed model output degrades to silence here, not to a broken card.
+   * A response that passed the server's own validation could still arrive
+   * truncated or reshaped by a network failure between there and here, and
+   * the shape checked below is exactly what the rest of this function reads
+   * without a further guard — `q` and `options` are rendered as text,
+   * `answerIndex` selects one of `options`, and `span || q` seeds the
+   * dedup fingerprint. Any one of those missing used to mean either an
+   * uncaught exception (`undefined.slice()` on the fingerprint) or a card
+   * reading literally "undefined" to the person looking at it — worse than
+   * showing nothing, which is what invariant 9 asks for. */
   function show(question, context = {}) {
-    if (!question || !Array.isArray(question.options) || question.options.length !== 4) return false;
+    if (!question
+      || typeof question.q !== 'string' || !question.q.trim()
+      || !Array.isArray(question.options) || question.options.length !== 4
+      || question.options.some((o) => typeof o !== 'string' || !o.trim())
+      || !Number.isInteger(question.answerIndex)
+      || question.answerIndex < 0 || question.answerIndex > 3
+    ) return false;
 
     const fingerprint = 'q-' + (question.span || question.q).slice(0, 80).trim();
     const root = ui.reservePopup(fingerprint);
