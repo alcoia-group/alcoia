@@ -68,8 +68,19 @@ function render() {
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
     }) : '';
 
+    // Item 25: delete every highlight on this one document, not just this
+    // one highlight or the whole store. Shown on every card for a document
+    // (simplest placement — the list isn't grouped by document) rather than
+    // once per group.
+    const docDelete = document.createElement('span');
+    docDelete.className = 'hl-doc-delete';
+    docDelete.textContent = 'Delete all on this page';
+    docDelete.style.cssText = 'cursor:pointer;text-decoration:underline;';
+    docDelete.addEventListener('click', () => deleteDocument(urlKey));
+
     meta.appendChild(site);
     meta.appendChild(date);
+    meta.appendChild(docDelete);
     card.appendChild(del);
     card.appendChild(text);
     card.appendChild(meta);
@@ -91,6 +102,20 @@ function deleteEntry(id, urlKey, cardEl) {
       cardEl.style.maxHeight = cardEl.offsetHeight + 'px';
       requestAnimationFrame(() => { cardEl.style.maxHeight = '0'; });
       setTimeout(() => { render(); }, 280);
+    });
+  });
+}
+
+// Item 25: delete every highlight for one document (hostname+pathname key),
+// distinct from deleting one highlight or the whole store.
+function deleteDocument(urlKey) {
+  const count = allHighlights.filter(h => h.urlKey === urlKey).length;
+  if (!confirm(`Delete all ${count} highlight${count !== 1 ? 's' : ''} on this page? This cannot be undone.`)) return;
+  chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: store }) => {
+    delete store[urlKey];
+    chrome.storage.local.set({ sra_text_highlights: store }, () => {
+      allHighlights = allHighlights.filter(h => h.urlKey !== urlKey);
+      render();
     });
   });
 }
