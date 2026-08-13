@@ -43,6 +43,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const assistantToggle     = $('assistantToggle');
   const selToggle           = $('selToggle');
   const highlightToggle     = $('highlightToggle');
+  const highlightColorToggle      = $('highlightColorToggle');
+  const highlightSummarizeToggle  = $('highlightSummarizeToggle');
   const autohideToggle      = $('autohideToggle');
   const autohideTimeout     = $('autohideTimeout');
   const timeoutRow          = $('timeoutRow');
@@ -75,6 +77,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // build at a local backend without editing source or the manifest.
     sra_backend_url: self.ALCOIA_CONFIG.SUMMARIZE_URL,
     sra_selection: true, sra_highlight_para: true,
+    // Item 26: two independent controls rather than one four-way mode —
+    // colour is a free, client-only display preference; summarising spends
+    // an assist, so it defaults off regardless of what colour defaults to.
+    sra_highlight_color: true, sra_highlight_summarize: false,
     sra_autohide: false, sra_autohide_timeout: 12,
     sra_pin_default: false, sra_debug: false, sra_enabled: true,
     sra_comprehension: true, sra_current_state: '',
@@ -87,6 +93,8 @@ document.addEventListener('DOMContentLoaded', () => {
     backendUrlInput.value       = res.sra_backend_url;
     selToggle.checked           = res.sra_selection !== false;
     highlightToggle.checked     = res.sra_highlight_para !== false;
+    highlightColorToggle.checked     = res.sra_highlight_color !== false;
+    highlightSummarizeToggle.checked = !!res.sra_highlight_summarize;
     autohideToggle.checked      = !!res.sra_autohide;
     autohideTimeout.value       = res.sra_autohide_timeout;
     timeoutRow.style.display    = res.sra_autohide ? 'flex' : 'none';
@@ -159,6 +167,8 @@ document.addEventListener('DOMContentLoaded', () => {
       sra_backend_url:      backendUrlInput.value.trim(),
       sra_selection:        selToggle.checked,
       sra_highlight_para:   highlightToggle.checked,
+      sra_highlight_color:      highlightColorToggle.checked,
+      sra_highlight_summarize:  highlightSummarizeToggle.checked,
       sra_autohide:         autohideToggle.checked,
       sra_autohide_timeout: Number(autohideTimeout.value) || 12,
       sra_pin_default:      pinDefaultToggle.checked,
@@ -183,6 +193,8 @@ document.addEventListener('DOMContentLoaded', () => {
         backendUrl: s.sra_backend_url,
         selection: s.sra_selection,
         highlightPara: s.sra_highlight_para,
+        highlightColor: s.sra_highlight_color,
+        highlightSummarize: s.sra_highlight_summarize,
         autohide: s.sra_autohide, autohideTimeout: s.sra_autohide_timeout,
         pinDefault: s.sra_pin_default, debug: s.sra_debug,
         comprehension: s.sra_comprehension,
@@ -212,7 +224,8 @@ document.addEventListener('DOMContentLoaded', () => {
     dyslexiaOptions.style.display = dyslexiaToggle.checked ? 'block' : 'none';
     saveAndBroadcast();
   });
-  [selToggle, highlightToggle, pinDefaultToggle, debugTogglePopup,
+  [selToggle, highlightToggle, highlightColorToggle, highlightSummarizeToggle,
+   pinDefaultToggle, debugTogglePopup,
    comprehensionToggle, ttsToggle, focusRulerToggle,
    bionicToggle, darkModeToggle]
     .forEach((el) => el.addEventListener('change', saveAndBroadcast));

@@ -717,8 +717,17 @@ const HL_PHRASE  = 'real but weak, and it becomes';
 // in earlier attempts to write this check, so it never fired at all.
 async function selectAndCtrlDrag(hlPage, phrase) {
   const pt = await hlPage.evaluate((ph) => {
-    const textNode = document.getElementById('hl-target').firstChild;
-    const start = textNode.textContent.indexOf(ph);
+    // Search every text node under <body>, not just #hl-target — item 26's
+    // second-phrase check lives in the fixture's second paragraph.
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let textNode = null;
+    let start = -1;
+    let n;
+    while ((n = walker.nextNode())) {
+      const i = n.textContent.indexOf(ph);
+      if (i !== -1) { textNode = n; start = i; break; }
+    }
+    if (!textNode) throw new Error(`selectAndCtrlDrag: phrase not found on page: ${ph}`);
     const range = document.createRange();
     range.setStart(textNode, start);
     range.setEnd(textNode, start + ph.length);
@@ -912,6 +921,97 @@ try {
 // Clean the highlight store so it doesn't bleed into a re-run.
 await writeHighlightStore({});
 
+// ── Two highlight toggles (item 26) ──────────────────────────────────────
+// Highlight colour (free, client-only) and summarise-on-highlight (spends
+// an assist) are independent settings — this exercises all four
+// combinations for real, plus that a setting change reaches an
+// already-open tab without a reload.
+async function setHighlightToggles(colorOn, summarizeOn) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((s) => new Promise((r) => chrome.storage.local.set({
+    sra_highlight_color: s.colorOn, sra_highlight_summarize: s.summarizeOn,
+    sra_text_highlights: {}, // clear so item 25's restore never masks this run's fresh phrase
+  }, r)), { colorOn, summarizeOn });
+  await helper.close();
+}
+
+let toggleResult;
+try {
+  const combos = [
+    { colorOn: true,  summarizeOn: false, label: 'colour ON, summarize OFF (default)' },
+    { colorOn: true,  summarizeOn: true,  label: 'colour ON, summarize ON' },
+    { colorOn: false, summarizeOn: true,  label: 'colour OFF, summarize ON (summary only)' },
+    { colorOn: false, summarizeOn: false, label: 'colour OFF, summarize OFF' },
+  ];
+  const combosResult = [];
+  for (const { colorOn, summarizeOn, label } of combos) {
+    await setHighlightToggles(colorOn, summarizeOn);
+    const before = apiHits.summarize;
+    const tPage = await ctx.newPage();
+    await tPage.goto('http://localhost:8731/hl-fixture.html');
+    await tPage.waitForTimeout(600);
+    await selectAndCtrlDrag(tPage, HL_PHRASE);
+    if (colorOn) {
+      const pv = await tPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+      if (pv) {
+        await tPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+        await tPage.waitForTimeout(500);
+      }
+    }
+    const outcome = await tPage.evaluate(() => ({
+      markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+      popupShown: !!document.querySelector('.sra-popup.show'),
+    }));
+    await tPage.close();
+    combosResult.push({
+      label,
+      markCreated: outcome.markCount > 0,
+      popupShown: outcome.popupShown,
+      serverCallMade: apiHits.summarize > before,
+    });
+  }
+
+  // Settings change reaching an already-open tab without a reload: start on
+  // colour-only (no summarize), confirm no server call, then broadcast a
+  // live settings change to the SAME tab and confirm the very next
+  // highlight (a different phrase, so it cannot collide with the first)
+  // now triggers a summary — with no navigation in between.
+  await setHighlightToggles(true, false);
+  const livePage = await ctx.newPage();
+  await livePage.goto('http://localhost:8731/hl-fixture.html');
+  await livePage.waitForTimeout(600);
+  await selectAndCtrlDrag(livePage, HL_PHRASE);
+  const firstPickerVisible = await livePage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (firstPickerVisible) {
+    await livePage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await livePage.waitForTimeout(500);
+  }
+  const beforeLiveChange = apiHits.summarize;
+
+  await sendToArticleTab({ type: 'settings', highlightSummarize: true }, 'http://localhost:8731/hl-fixture.html');
+  // Snapshot right after the broadcast, before the second highlight fires —
+  // proves the settings message itself makes no server call on its own.
+  const afterBroadcastBeforeSecondHighlight = apiHits.summarize;
+  const SECOND_PHRASE = 'unrelated paragraph so the page';
+  await selectAndCtrlDrag(livePage, SECOND_PHRASE);
+  const secondPickerVisible = await livePage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (secondPickerVisible) {
+    await livePage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await livePage.waitForTimeout(500);
+  }
+  const liveUpdateResult = {
+    noServerCallBeforeChange: beforeLiveChange === afterBroadcastBeforeSecondHighlight, // sanity: broadcast alone made no call
+    serverCallAfterLiveChange: apiHits.summarize > afterBroadcastBeforeSecondHighlight,
+  };
+  await livePage.close();
+
+  toggleResult = { attempted: true, combos: combosResult, liveSettingsUpdate: liveUpdateResult };
+} catch (e) {
+  toggleResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeHighlightStore({});
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -946,6 +1046,7 @@ console.log('diagnostics page        :', JSON.stringify(diagnostics));
 console.log('diagnostics safety      :', JSON.stringify(diagSafety), '(expect all true)');
 console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")');
 console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2));
+console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));

@@ -41,6 +41,12 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   let backendUrl         = BACKEND_DEFAULT;
   let selectionEnabled   = true;
   let highlightEnabled   = true;
+  // Item 26: two independent controls, not one four-way mode — colour is a
+  // free, client-only display preference; summarising is the AI-calling
+  // half and defaults off. Read live through these lets, same as every
+  // other setting here, so a change takes effect without a page reload.
+  let highlightColorEnabled     = true;
+  let highlightSummarizeEnabled = false;
   let autohideEnabled    = false;
   let autohideTimeoutSec = 12;
   let pinDefault         = false;
@@ -459,11 +465,14 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     sra_tts: false, sra_focus_ruler: false, sra_dyslexia: false,
     sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
     sra_baseline_wpm: null, sra_dark_mode: false,
+    sra_highlight_color: true, sra_highlight_summarize: false,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     assistantEnabled   = res.sra_enabled !== false;
     selectionEnabled   = res.sra_selection !== false;
     highlightEnabled   = res.sra_highlight_para !== false;
+    highlightColorEnabled     = res.sra_highlight_color !== false;
+    highlightSummarizeEnabled = !!res.sra_highlight_summarize;
     autohideEnabled    = !!res.sra_autohide;
     autohideTimeoutSec = res.sra_autohide_timeout || 12;
     pinDefault         = !!res.sra_pin_default;
@@ -852,7 +861,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   // this is exceeded.
   const MAX_HIGHLIGHT_DOCS = 150;
 
-  function applyTextHighlight(range, bgColor, colorKey) {
+  async function applyTextHighlight(range, bgColor, colorKey) {
     if (!range || range.collapsed) return;
     const text = range.toString().trim();
     if (!text || text.length > 2000) return; // guard against Ctrl+A
@@ -903,6 +912,24 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
       chrome.storage.local.set({ sra_text_highlights: hl });
     });
+
+    // Item 26: the AI-calling half of "what a highlight does", off by
+    // default and independent of the colour toggle above — a reader can
+    // want the colour mark without spending an assist on every one of them.
+    // Read live at the point of action, not a captured copy, same as every
+    // other flag in this file.
+    if (highlightSummarizeEnabled) {
+      let anchorRect = null;
+      try { const r = mark.getBoundingClientRect(); if (r.width || r.height) anchorRect = r; } catch (e) {}
+      const mode = isLikelyCode(text) ? 'explain_code' : 'tldr';
+      const summary = await fetchSummary(text, mode);
+      if (summary) {
+        renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source: 'highlight', mode });
+      }
+      // A failed fetch degrades to silence here, same as every other AI call
+      // in this file (invariant 9) — the colour mark itself already landed
+      // and is not undone by a summary that could not be fetched.
+    }
   }
 
   function deleteTextHighlight(hlId, markEl) {
@@ -1171,6 +1198,43 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   // ── Selection alcoia (or Ctrl+drag → colour highlight) ──────────────────
   document.addEventListener('mouseup', async (ev) => {
     if (!assistantEnabled) return;
+
+    // Ctrl/Cmd + drag → colour highlight and/or an AI summary, per the two
+    // independent item-26 toggles (never the plain-selection summary toggle
+    // below — a reader can want either of these without the other):
+    //   colour on,  summarize on/off → the existing colour-picker flow;
+    //     applyTextHighlight() itself checks highlightSummarizeEnabled once
+    //     a swatch is actually picked.
+    //   colour off, summarize on     → no picker, no mark; summarise the
+    //     selection directly (the rejected four-way design's "summary only").
+    //   colour off, summarize off    → Ctrl+drag does nothing.
+    if (ev.ctrlKey || ev.metaKey) {
+      if (!highlightColorEnabled && !highlightSummarizeEnabled) return;
+      let selRange = null;
+      let selText  = '';
+      try {
+        const sel = window.getSelection();
+        selText = sel?.toString().trim() || '';
+        if (selText.length >= MIN_SELECTION_CHARS && sel.rangeCount > 0) {
+          selRange = sel.getRangeAt(0).cloneRange();
+        }
+      } catch (e) {}
+      if (!selRange) return;
+
+      if (highlightColorEnabled) {
+        removeColorPicker();
+        showColorPicker(selRange, ev.clientX, ev.clientY);
+      } else {
+        let anchorRect = null;
+        try { const r = selRange.getBoundingClientRect(); if (r.width || r.height) anchorRect = r; } catch (e) {}
+        if (!anchorRect) anchorRect = { left: ev.clientX, right: ev.clientX + 8, top: ev.clientY, bottom: ev.clientY + 8 };
+        const mode = isLikelyCode(selText) ? 'explain_code' : 'tldr';
+        const summary = await fetchSummary(selText, mode);
+        if (summary) renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text: selText, source: 'highlight', mode });
+      }
+      return;
+    }
+
     if (!selectionEnabled) return;
 
     let selected = '';
@@ -1181,13 +1245,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       if (sel?.rangeCount > 0) selRange = sel.getRangeAt(0).cloneRange();
     } catch (e) {}
     if (!selected || selected.length < MIN_SELECTION_CHARS) return;
-
-    // Ctrl/Cmd + drag → colour highlight instead of AI summary
-    if (ev.ctrlKey || ev.metaKey) {
-      removeColorPicker();
-      if (selRange) showColorPicker(selRange, ev.clientX, ev.clientY);
-      return;
-    }
 
     // Highlight source element
     try {
@@ -1333,6 +1390,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (msg.type === 'settings') {
       if (msg.selection     !== undefined) selectionEnabled   = !!msg.selection;
       if (msg.highlightPara !== undefined) highlightEnabled   = !!msg.highlightPara;
+      if (msg.highlightColor     !== undefined) highlightColorEnabled     = !!msg.highlightColor;
+      if (msg.highlightSummarize !== undefined) highlightSummarizeEnabled = !!msg.highlightSummarize;
       if (msg.autohide      !== undefined) autohideEnabled    = !!msg.autohide;
       if (msg.autohideTimeout !== undefined) autohideTimeoutSec = Number(msg.autohideTimeout) || 12;
       if (msg.pinDefault    !== undefined) pinDefault         = !!msg.pinDefault;
