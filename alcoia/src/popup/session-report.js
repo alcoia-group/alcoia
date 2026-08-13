@@ -1,11 +1,4 @@
-const STATE_COLORS = {
-  focused: '#5F4589', skimming: '#5B7A99', confused: '#9A6B2F',
-  zoning_out: '#7E6E5A', overloaded: '#B4795F',
-};
-const STATE_LABELS = {
-  focused: 'Focused', skimming: 'Skimming', confused: 'Confused',
-  zoning_out: 'Zoning Out', overloaded: 'Overloaded',
-};
+import { STATE_COLORS, STATE_LABELS } from './session-report-state.js';
 
 function dur(ms) {
   const s = Math.round(ms / 1000);
@@ -33,21 +26,36 @@ function renderReport(session) {
     `<div class="leg-item"><div class="leg-dot" style="background:${s.color}"></div>${STATE_LABELS[s.state]} ${s.pct}%</div>`
   ).join('');
 
-  // Signals
+  /* Signals. orchestrator.js's stateEngine.subscribe only calls
+   * sessionTracker.recordSignal(type, subtype, evidence) for a signal
+   * that actually reached the screen — type is state.label (one of the
+   * six states above), subtype is decision.action ('ask'/'nudge').
+   * question-card.js separately records answers as type: 'response',
+   * subtype: 'correct'/'incorrect'/'dismissed' (response-signals.js). A
+   * raw 'backtrack' or 'speed_mismatch' telemetry signal is never itself
+   * pushed into session.signals — those only ever fold into a resulting
+   * struggling/skimming state above — so filtering on those two type
+   * strings, or on the removed 'confused'/'overloaded' subtype values,
+   * always matched zero signals regardless of what actually happened in
+   * the session. struggling and skimming both produce a shown question
+   * with quoted evidence, which is what this section is for; a wrong
+   * answer is the other half of "where the reading struggled". */
   const interesting = (session.signals || []).filter(s =>
-    s.type === 'backtrack' || s.subtype === 'confused' || s.subtype === 'overloaded' || s.type === 'speed_mismatch'
+    s.type === 'struggling' || s.type === 'skimming' ||
+    (s.type === 'response' && s.subtype === 'incorrect')
   );
   const sigHtml = interesting.length
     ? interesting.map(s => {
-        const bc = s.type === 'backtrack' ? '#7E6E5A' : s.subtype === 'overloaded' ? '#B4795F' : '#9A6B2F';
-        const lab = s.type === 'backtrack' ? 'scroll backtrack' : (s.subtype || s.type);
+        const bc = s.type === 'struggling' ? 'var(--warn)'
+          : s.type === 'skimming' ? '#5B7A99' : 'var(--wrong)';
+        const lab = s.type === 'response' ? 'answered incorrectly' : STATE_LABELS[s.type];
         const txt = s.text ? `<p class="sig-text">"${s.text.slice(0, 120)}${s.text.length > 120 ? '…' : ''}"</p>` : '';
         return `<div class="signal-item">
-          <span class="sig-badge" style="background:${bc}18;color:${bc};border:1px solid ${bc}40">${lab}</span>
+          <span class="sig-badge" style="background:color-mix(in srgb, ${bc} 15%, transparent);color:${bc};border:1px solid color-mix(in srgb, ${bc} 40%, transparent)">${lab}</span>
           ${txt}
         </div>`;
       }).join('')
-    : '<p style="color:var(--muted);font-style:italic;font-size:12px">No confusion signals this session — great reading!</p>';
+    : '<p style="color:var(--muted);font-style:italic;font-size:12px">No struggle signals this session — great reading!</p>';
 
   const dateStr = session.startedAt ? new Date(session.startedAt).toLocaleString([], { dateStyle:'medium', timeStyle:'short' }) : '—';
   const pageTitle = (session.title || session.url || '').slice(0, 80);
@@ -58,7 +66,7 @@ function renderReport(session) {
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-value">${dur(totalMs)}</div><div class="stat-label">Time on Page</div></div>
       <div class="stat-card"><div class="stat-value">${session.avgWpm || '—'}</div><div class="stat-label">Avg WPM</div></div>
-      <div class="stat-card"><div class="stat-value">${session.confusionCount || 0}</div><div class="stat-label">Confusion Triggers</div></div>
+      <div class="stat-card"><div class="stat-value">${session.struggleCount || 0}</div><div class="stat-label">Struggle Triggers</div></div>
       <div class="stat-card"><div class="stat-value">${session.backtrackCount || 0}</div><div class="stat-label">Scroll Backtracks</div></div>
     </div>
 
@@ -66,7 +74,7 @@ function renderReport(session) {
     <div class="state-bar">${barHtml}</div>
     <div class="state-legend">${legHtml || '<span style="color:var(--muted);font-style:italic;font-size:11px">No state data yet</span>'}</div>
 
-    <div class="sec-title">Confusion &amp; Struggle Points</div>
+    <div class="sec-title">Struggle Points</div>
     <div class="signal-list">${sigHtml}</div>
   `;
 }

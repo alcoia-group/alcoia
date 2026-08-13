@@ -107,12 +107,15 @@ Reading-rate baselines are kept per language.
 Passage text **is** sent to a server to generate questions and explanations. That is the one
 thing that leaves your machine, and it is stated here rather than buried.
 
-**The quiz is the first feature that keeps something on disk.** Take the quiz from the end-of-page
-offer or the popup, and the questions, your answers and your confidence ratings are saved on your
-device — in IndexedDB, not synced, not sent anywhere — so you can review a result later. The
-passage itself is never part of that record: there is no retake, so there is nothing regeneration
-would need it for. Delete a quiz, or all of them, from the quiz page itself, and deletion actually
-removes the record.
+**Reading content is kept on disk in a few places, all local-only.** Colour highlights you draw
+with Ctrl+drag are the oldest of these: the highlighted text and a little surrounding context, so
+the same passage can be found again on a later visit. The quiz is newer: take it from the
+end-of-page offer or the popup, and the questions, your answers and your confidence ratings are
+saved on your device — in IndexedDB, not synced, not sent anywhere — so you can review a result
+later. The passage itself is never part of that record: there is no retake, so there is nothing
+regeneration would need it for. Every one of these is deletable — a single highlight, every
+highlight on a page, or all of them; a single quiz or all of them — and deletion actually removes
+the record.
 
 Full data map, including everything stored locally and the disclosure obligations that follow
 from it: [`LEGAL-DISCLOSURE-MAP.md`](LEGAL-DISCLOSURE-MAP.md).
@@ -150,7 +153,7 @@ extension's own setup, keyboard shortcuts and configuration reference.
 
 ```bash
 npm run lint                    # ESLint — a defect linter, not a style linter
-npm test                        # 452 tests
+npm test                        # 462 tests
 npm run test:browser            # loads the extension in Chromium, English article
 PAGE=zh npm run test:browser    # same checklist against a Chinese article
 ```

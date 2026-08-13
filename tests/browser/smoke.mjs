@@ -115,6 +115,21 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  // Item 25: colour-highlight persistence fixture. Same pathname regardless
+  // of query string — content.js's urlKey (hostname+pathname) ignores the
+  // query — so ?insert=1 serving extra prepended content simulates the same
+  // document having changed between visits, without changing its storage
+  // key, which is exactly the "anchoring survives text shifting" case.
+  if (req.url.startsWith('/hl-fixture.html')) {
+    const insert = req.url.includes('insert=1');
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><body>
+      ${insert ? '<p>A new paragraph the page did not have on the first visit, pushing everything below it further down.</p>'.repeat(3) : ''}
+      <p id="hl-target">The relationship between where the eyes point and what the mind does is real but weak, and it becomes weaker as the measurement apparatus becomes cheaper and noisier than the laboratory equipment on which the original findings were established.</p>
+      <p>A second, unrelated paragraph so the page has more than one block of text.</p>
+    </body></html>`);
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(html);
 }).listen(8731);
@@ -298,7 +313,7 @@ async function alt(key) {
   await page.waitForTimeout(350);
 }
 
-await alt('Digit1');   // simulate confused
+await alt('Digit1');   // simulate struggling
 shortcuts.results.altDigit1_toast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
 await alt('KeyT');     // toggle TTS
 shortcuts.results.altT_toast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
@@ -670,6 +685,333 @@ await diagPage.waitForTimeout(100);
 const afterDelete = await diagPage.evaluate(() => document.getElementById('val-tokenStatus')?.textContent || null);
 await diagPage.close();
 
+// ── Colour highlight persistence (item 25) ───────────────────────────────
+// This predates the sequenced items (a pre-existing, undocumented feature —
+// see the project notes' item-25 note), verified end to end here rather than
+// assumed: real creation via a real Ctrl+drag-shaped gesture, reload
+// survival, deletion actually removing the storage entry (not just the
+// DOM), anchoring surviving content shifting around the highlighted text,
+// anchoring failing silently (no misattached mark) when the text is truly
+// gone, and both the per-document and cross-document storage caps.
+async function readHighlightStore() {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const store = await helper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_text_highlights: {} }, (res) => r(res.sra_text_highlights))));
+  await helper.close();
+  return store;
+}
+async function writeHighlightStore(store) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((s) => new Promise((r) => chrome.storage.local.set({ sra_text_highlights: s }, r)), store);
+  await helper.close();
+}
+
+const HL_URL_KEY = 'localhost/hl-fixture.html';
+const HL_PHRASE  = 'real but weak, and it becomes';
+
+// Real Ctrl+drag needs a real MouseEvent dispatched on the element under
+// the selection, not on `document` — dispatching on document left the
+// content script's mouseup listener seeing an empty window.getSelection()
+// in earlier attempts to write this check, so it never fired at all.
+async function selectAndCtrlDrag(hlPage, phrase) {
+  const pt = await hlPage.evaluate((ph) => {
+    // Search every text node under <body>, not just #hl-target — item 26's
+    // second-phrase check lives in the fixture's second paragraph.
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let textNode = null;
+    let start = -1;
+    let n;
+    while ((n = walker.nextNode())) {
+      const i = n.textContent.indexOf(ph);
+      if (i !== -1) { textNode = n; start = i; break; }
+    }
+    if (!textNode) throw new Error(`selectAndCtrlDrag: phrase not found on page: ${ph}`);
+    const range = document.createRange();
+    range.setStart(textNode, start);
+    range.setEnd(textNode, start + ph.length);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const r = range.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, phrase);
+  await hlPage.evaluate((p) => {
+    const el = document.elementFromPoint(p.x, p.y);
+    (el || document).dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true, cancelable: true, ctrlKey: true, clientX: p.x, clientY: p.y, view: window,
+    }));
+  }, pt);
+  await hlPage.waitForTimeout(400);
+}
+
+let highlightResult;
+try {
+  await writeHighlightStore({}); // start clean
+
+  // Round trip: real creation via the real UI, then survives a reload.
+  const hlPage = await ctx.newPage();
+  await hlPage.goto('http://localhost:8731/hl-fixture.html');
+  await hlPage.waitForTimeout(600);
+  await selectAndCtrlDrag(hlPage, HL_PHRASE);
+  const pickerVisible = await hlPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (pickerVisible) {
+    await hlPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await hlPage.waitForTimeout(400);
+  }
+  const afterCreate = await hlPage.evaluate(() => ({
+    markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+    text: document.querySelector('mark[data-sra-hl-id]')?.textContent,
+  }));
+
+  await hlPage.reload();
+  await hlPage.waitForTimeout(800);
+  const afterReload = await hlPage.evaluate(() => ({
+    markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+    text: document.querySelector('mark[data-sra-hl-id]')?.textContent,
+  }));
+
+  // Deletion: double-click removes the DOM mark and the storage entry, and
+  // both stay gone after a further reload.
+  await hlPage.evaluate(() => document.querySelector('mark[data-sra-hl-id]')
+    ?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+  await hlPage.waitForTimeout(400);
+  const afterDeleteDom = await hlPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+  const storeAfterDelete = await readHighlightStore();
+  await hlPage.reload();
+  await hlPage.waitForTimeout(800);
+  const afterDeleteReload = await hlPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+  await hlPage.close();
+
+  // Anchoring survives content shifting: seed a highlight for this document,
+  // then load a version with three new paragraphs inserted before the
+  // target — same urlKey (the query string is not part of it), but the
+  // highlighted text now sits at a completely different absolute position.
+  await writeHighlightStore({
+    [HL_URL_KEY]: [{
+      id: 'sra-hl-shift-test', text: HL_PHRASE, color: '#FFF59D', colorKey: 'yellow',
+      ctxBefore: 'he eyes point and what the mind does is',
+      ctxAfter: 'weaker as the measurement apparatus bec',
+      paragraphIndex: 0,
+      url: 'http://localhost:8731/hl-fixture.html', title: 'test', timestamp: Date.now(),
+    }],
+  });
+  const shiftPage = await ctx.newPage();
+  await shiftPage.goto('http://localhost:8731/hl-fixture.html?insert=1');
+  await shiftPage.waitForTimeout(800);
+  const survivesShift = await shiftPage.evaluate(() => ({
+    markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+    text: document.querySelector('mark[data-sra-hl-id]')?.textContent,
+  }));
+  await shiftPage.close();
+
+  // Restores after SPA navigation, not just full page load. Found while
+  // building this: content.js's history.pushState/replaceState monkey-patch
+  // runs in the content script's isolated world, which does not propagate
+  // to the page's own main-world `history` object — confirmed directly by
+  // reading history.pushState.toString() from a page.evaluate() call (main
+  // world) after the patch runs, and it is still `[native code]`. A real
+  // SPA framework's own routing code calls pushState from the main world
+  // too, so onSpaNavigate() never actually fires from a real route change
+  // via pushState — only popstate (browser back/forward) does, since that
+  // is a genuine DOM event delivered to both worlds. This test exercises
+  // the one path that is actually reachable (popstate via history.back())
+  // rather than pushState, which would silently prove nothing.
+  await writeHighlightStore({}); // clean — the seed below must land after page load, not before
+  const spaPage = await ctx.newPage();
+  await spaPage.goto('http://localhost:8731/'); // hostname+pathname 'localhost/' — the base article page
+  await spaPage.waitForTimeout(600);
+  const beforeSeed = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+
+  // Seed only now, simulating a highlight that exists in storage (made in
+  // another tab, say) but that this already-open, already-restored tab has
+  // not rendered — nothing should pick it up until something re-triggers
+  // restoration.
+  await writeHighlightStore({
+    'localhost/': [{
+      id: 'sra-hl-spa-test', text: HL_PHRASE, color: '#FFF59D', colorKey: 'yellow',
+      ctxBefore: 'he eyes point and what the mind does is',
+      ctxAfter: 'weaker as the measurement apparatus bec',
+      paragraphIndex: 0, url: 'http://localhost:8731/', title: 'test', timestamp: Date.now(),
+    }],
+  });
+  const beforeSpaNav = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+  await spaPage.evaluate(() => { history.pushState({}, '', '/#/route-a'); history.back(); });
+  await spaPage.waitForTimeout(700); // restoreTextHighlights() fires via a 300ms setTimeout in onSpaNavigate()
+  const afterSpaNav = await spaPage.evaluate(() => ({
+    markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+    text: document.querySelector('mark[data-sra-hl-id]')?.textContent,
+  }));
+  await spaPage.close();
+
+  // Fails silently when the text is genuinely gone — no misattached mark,
+  // no thrown error, and the entry stays in storage rather than being
+  // deleted on a failed match (a later visit might succeed).
+  await writeHighlightStore({
+    [HL_URL_KEY]: [{
+      id: 'sra-hl-miss-test', text: 'this exact phrase does not exist anywhere on this fixture page',
+      color: '#FFF59D', colorKey: 'yellow', ctxBefore: '', ctxAfter: '', paragraphIndex: 0,
+      url: 'http://localhost:8731/hl-fixture.html', title: 'test', timestamp: Date.now(),
+    }],
+  });
+  const missPage = await ctx.newPage();
+  const missPageErrors = [];
+  missPage.on('pageerror', (e) => missPageErrors.push(e.message));
+  await missPage.goto('http://localhost:8731/hl-fixture.html');
+  await missPage.waitForTimeout(800);
+  const missMarkCount = await missPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+  const storeAfterMiss = await readHighlightStore();
+  await missPage.close();
+
+  // Caps: a document already at the per-document cap drops its oldest entry
+  // when one more is added; a store already at the document cap drops the
+  // least-recently-touched *document* when a highlight lands on a new one.
+  const manyEntries = Array.from({ length: 100 }, (_, i) => ({
+    id: `sra-hl-cap-${i}`, text: `filler text number ${i} padded out`, color: '#FFF59D', colorKey: 'yellow',
+    ctxBefore: '', ctxAfter: '', paragraphIndex: 0,
+    url: 'http://localhost:8731/hl-fixture.html', title: 'test', timestamp: 1000 + i,
+  }));
+  const manyDocs = {};
+  for (let i = 0; i < 150; i++) {
+    manyDocs[`example${i}.test/`] = [{
+      id: `sra-hl-doc-${i}`, text: 'irrelevant', color: '#FFF59D', colorKey: 'yellow',
+      ctxBefore: '', ctxAfter: '', paragraphIndex: 0, url: `http://example${i}.test/`, title: '', timestamp: i,
+    }];
+  }
+  await writeHighlightStore({ ...manyDocs, [HL_URL_KEY]: manyEntries });
+
+  const capPage = await ctx.newPage();
+  await capPage.goto('http://localhost:8731/hl-fixture.html');
+  await capPage.waitForTimeout(600);
+  await selectAndCtrlDrag(capPage, HL_PHRASE);
+  const capPickerVisible = await capPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (capPickerVisible) {
+    await capPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await capPage.waitForTimeout(400);
+  }
+  await capPage.close();
+  const storeAfterCapWrite = await readHighlightStore();
+
+  highlightResult = {
+    attempted: true,
+    pickerVisible,
+    roundTrip: { afterCreate, afterReload },
+    deletion: {
+      domClearedImmediately: afterDeleteDom === 0,
+      removedFromStorage: (storeAfterDelete[HL_URL_KEY]?.length ?? 0) === 0,
+      staysGoneAfterReload: afterDeleteReload === 0,
+    },
+    survivesContentShift: survivesShift,
+    restoresAfterSpaNavigation: { beforeSeed, beforeSpaNav, afterSpaNav },
+    failsSilentlyWhenTextGone: {
+      markCount: missMarkCount,
+      pageErrors: missPageErrors.length,
+      entryKeptInStorageForRetry: (storeAfterMiss[HL_URL_KEY]?.length ?? 0) > 0,
+    },
+    caps: {
+      perDocCapHeld: (storeAfterCapWrite[HL_URL_KEY]?.length ?? 0) <= 100,
+      globalDocCapHeld: Object.keys(storeAfterCapWrite).length <= 150,
+      evictedTheActualOldestDoc: !('example0.test/' in storeAfterCapWrite),
+    },
+  };
+} catch (e) {
+  highlightResult = { attempted: true, error: String((e && e.message) || e) };
+}
+// Clean the highlight store so it doesn't bleed into a re-run.
+await writeHighlightStore({});
+
+// ── Two highlight toggles (item 26) ──────────────────────────────────────
+// Highlight colour (free, client-only) and summarise-on-highlight (spends
+// an assist) are independent settings — this exercises all four
+// combinations for real, plus that a setting change reaches an
+// already-open tab without a reload.
+async function setHighlightToggles(colorOn, summarizeOn) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((s) => new Promise((r) => chrome.storage.local.set({
+    sra_highlight_color: s.colorOn, sra_highlight_summarize: s.summarizeOn,
+    sra_text_highlights: {}, // clear so item 25's restore never masks this run's fresh phrase
+  }, r)), { colorOn, summarizeOn });
+  await helper.close();
+}
+
+let toggleResult;
+try {
+  const combos = [
+    { colorOn: true,  summarizeOn: false, label: 'colour ON, summarize OFF (default)' },
+    { colorOn: true,  summarizeOn: true,  label: 'colour ON, summarize ON' },
+    { colorOn: false, summarizeOn: true,  label: 'colour OFF, summarize ON (summary only)' },
+    { colorOn: false, summarizeOn: false, label: 'colour OFF, summarize OFF' },
+  ];
+  const combosResult = [];
+  for (const { colorOn, summarizeOn, label } of combos) {
+    await setHighlightToggles(colorOn, summarizeOn);
+    const before = apiHits.summarize;
+    const tPage = await ctx.newPage();
+    await tPage.goto('http://localhost:8731/hl-fixture.html');
+    await tPage.waitForTimeout(600);
+    await selectAndCtrlDrag(tPage, HL_PHRASE);
+    if (colorOn) {
+      const pv = await tPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+      if (pv) {
+        await tPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+        await tPage.waitForTimeout(500);
+      }
+    }
+    const outcome = await tPage.evaluate(() => ({
+      markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+      popupShown: !!document.querySelector('.sra-popup.show'),
+    }));
+    await tPage.close();
+    combosResult.push({
+      label,
+      markCreated: outcome.markCount > 0,
+      popupShown: outcome.popupShown,
+      serverCallMade: apiHits.summarize > before,
+    });
+  }
+
+  // Settings change reaching an already-open tab without a reload: start on
+  // colour-only (no summarize), confirm no server call, then broadcast a
+  // live settings change to the SAME tab and confirm the very next
+  // highlight (a different phrase, so it cannot collide with the first)
+  // now triggers a summary — with no navigation in between.
+  await setHighlightToggles(true, false);
+  const livePage = await ctx.newPage();
+  await livePage.goto('http://localhost:8731/hl-fixture.html');
+  await livePage.waitForTimeout(600);
+  await selectAndCtrlDrag(livePage, HL_PHRASE);
+  const firstPickerVisible = await livePage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (firstPickerVisible) {
+    await livePage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await livePage.waitForTimeout(500);
+  }
+  const beforeLiveChange = apiHits.summarize;
+
+  await sendToArticleTab({ type: 'settings', highlightSummarize: true }, 'http://localhost:8731/hl-fixture.html');
+  // Snapshot right after the broadcast, before the second highlight fires —
+  // proves the settings message itself makes no server call on its own.
+  const afterBroadcastBeforeSecondHighlight = apiHits.summarize;
+  const SECOND_PHRASE = 'unrelated paragraph so the page';
+  await selectAndCtrlDrag(livePage, SECOND_PHRASE);
+  const secondPickerVisible = await livePage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (secondPickerVisible) {
+    await livePage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await livePage.waitForTimeout(500);
+  }
+  const liveUpdateResult = {
+    noServerCallBeforeChange: beforeLiveChange === afterBroadcastBeforeSecondHighlight, // sanity: broadcast alone made no call
+    serverCallAfterLiveChange: apiHits.summarize > afterBroadcastBeforeSecondHighlight,
+  };
+  await livePage.close();
+
+  toggleResult = { attempted: true, combos: combosResult, liveSettingsUpdate: liveUpdateResult };
+} catch (e) {
+  toggleResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeHighlightStore({});
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -703,6 +1045,8 @@ console.log('  new page errors       :', shortcuts.newPageErrors);
 console.log('diagnostics page        :', JSON.stringify(diagnostics));
 console.log('diagnostics safety      :', JSON.stringify(diagSafety), '(expect all true)');
 console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")');
+console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2));
+console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));
