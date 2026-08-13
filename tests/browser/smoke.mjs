@@ -298,7 +298,7 @@ async function alt(key) {
   await page.waitForTimeout(350);
 }
 
-await alt('Digit1');   // simulate confused
+await alt('Digit1');   // simulate struggling
 shortcuts.results.altDigit1_toast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
 await alt('KeyT');     // toggle TTS
 shortcuts.results.altT_toast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
