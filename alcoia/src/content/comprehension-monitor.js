@@ -187,6 +187,21 @@ export function createComprehensionMonitor(opts = {}) {
     // this returned early on every one of them and the monitor produced nothing.
     if (countWords(text, lang) < MIN_WORD_COUNT) return;
     const readability = analyzeDifficulty(text, { lang });
+    /* Invariant 5: text-difficulty.js's structureIsUnreadable() case (a
+     * script such as Thai or Khmer with no terminal punctuation, so the
+     * whole paragraph parses as one "sentence") returns basis:
+     * 'structure_unavailable' alongside a placeholder score: 60,
+     * grade: 'standard' — a plausible-looking default standing in for a
+     * measurement that was never taken. Leaving paragraphEntry unset here
+     * means leaveParagraph()'s own `if (!paragraphEntry) return null;`
+     * guard makes the whole paragraph a no-op: no expectedMs, no WPM
+     * baseline sample, no residual, no speed_mismatch signal. The reader
+     * gets `unknown` for this paragraph, and unknown never interrupts —
+     * not a guess dressed up as a measurement. Backtrack and scroll
+     * regression are untouched: neither reads paragraphEntry or difficulty
+     * at all, so the extension keeps working, just without a pace signal
+     * for text nothing could actually measure. */
+    if (readability.basis === 'structure_unavailable') return;
     paragraphEntry = { el, text, lang, readability, enteredAt: Date.now() };
   }
 
