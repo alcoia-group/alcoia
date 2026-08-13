@@ -353,8 +353,10 @@ Full detail lives in the top-level [`../README.md`](../README.md#privacy) and
 - No camera path exists in this extension. No `getUserMedia` call, no hidden mode, no fingerprinting.
 - Passage text is sent to the backend to generate questions, explanations and summaries: the one
   thing that leaves your machine, stated plainly rather than buried.
-- The quiz is the first feature that keeps reading content on disk: locally, in IndexedDB, never
-  synced, deletable per-quiz or all at once.
+- Colour highlights (Ctrl+drag) and the quiz both keep reading content on disk, locally only,
+  never synced. Highlights persist the highlighted text and its surrounding context so the same
+  passage can be re-found on a later visit; the quiz persists in IndexedDB. Both are deletable:
+  a single highlight, every highlight on a page, or all of them; a single quiz or all of them.
 - Settings, the WPM baseline, and UI preferences persist locally and are not reading content.
 
 ---
