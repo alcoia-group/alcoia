@@ -41,6 +41,12 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   let backendUrl         = BACKEND_DEFAULT;
   let selectionEnabled   = true;
   let highlightEnabled   = true;
+  // Item 26: two independent controls, not one four-way mode — colour is a
+  // free, client-only display preference; summarising is the AI-calling
+  // half and defaults off. Read live through these lets, same as every
+  // other setting here, so a change takes effect without a page reload.
+  let highlightColorEnabled     = true;
+  let highlightSummarizeEnabled = false;
   let autohideEnabled    = false;
   let autohideTimeoutSec = 12;
   let pinDefault         = false;
@@ -459,11 +465,14 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     sra_tts: false, sra_focus_ruler: false, sra_dyslexia: false,
     sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
     sra_baseline_wpm: null, sra_dark_mode: false,
+    sra_highlight_color: true, sra_highlight_summarize: false,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     assistantEnabled   = res.sra_enabled !== false;
     selectionEnabled   = res.sra_selection !== false;
     highlightEnabled   = res.sra_highlight_para !== false;
+    highlightColorEnabled     = res.sra_highlight_color !== false;
+    highlightSummarizeEnabled = !!res.sra_highlight_summarize;
     autohideEnabled    = !!res.sra_autohide;
     autohideTimeoutSec = res.sra_autohide_timeout || 12;
     pinDefault         = !!res.sra_pin_default;
@@ -825,7 +834,34 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (p) p.remove();
   }
 
-  function applyTextHighlight(range, bgColor, colorKey) {
+  // Item 25: which block (by index among the same p/li/blockquote selector
+  // paragraph-tracker.js's own scan uses) a highlight's mark sits in. Cheap
+  // to compute, and used only as a *secondary* signal at restore time —
+  // never to pick a match on its own. Positions shift when ads or images
+  // load; the quoted text plus its context is what actually identifies the
+  // highlight, this is only a tie-breaker among candidates the text+context
+  // check already accepts.
+  const HIGHLIGHT_BLOCK_SELECTOR = 'p, li, blockquote';
+  function blockIndexOf(node) {
+    const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    const block = el?.closest?.(HIGHLIGHT_BLOCK_SELECTOR);
+    if (!block) return -1;
+    return Array.prototype.indexOf.call(document.querySelectorAll(HIGHLIGHT_BLOCK_SELECTOR), block);
+  }
+
+  // Per-document highlight count, matching the existing sra_highlights cap.
+  const MAX_HIGHLIGHTS_PER_DOC = 100;
+  // Total documents tracked across the whole extension, mirroring
+  // coverage-gate.js's MAX_DOCS (150) and sra_last_visit's existing cap —
+  // the same shape used everywhere else this codebase keys data per
+  // document. Least-recently-touched document (by its highlights' own
+  // latest timestamp — the stored shape is { [urlKey]: [...entries] } with
+  // no separate per-document metadata, so the entries' own timestamps are
+  // the only signal of when a document was last touched) is evicted once
+  // this is exceeded.
+  const MAX_HIGHLIGHT_DOCS = 150;
+
+  async function applyTextHighlight(range, bgColor, colorKey) {
     if (!range || range.collapsed) return;
     const text = range.toString().trim();
     if (!text || text.length > 2000) return; // guard against Ctrl+A
@@ -848,23 +884,52 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
     mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
 
-    // Context for restoration
+    // Context for restoration — the W3C Web Annotation TextQuoteSelector
+    // shape: the exact text plus a short prefix and suffix of surrounding
+    // context. This, not position, is the primary anchor at restore time.
     const bodyText = document.body.innerText || '';
     const pos = bodyText.indexOf(text);
     const ctxBefore = pos > 0 ? bodyText.slice(Math.max(0, pos - 40), pos).trim() : '';
     const ctxAfter  = pos >= 0 ? bodyText.slice(pos + text.length, pos + text.length + 40).trim() : '';
+    const paragraphIndex = blockIndexOf(mark);
 
     const urlKey = window.location.hostname + window.location.pathname;
     chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: hl }) => {
       if (!hl[urlKey]) hl[urlKey] = [];
       hl[urlKey].push({
         id: hlId, text: text.slice(0, 300), color: bgColor, colorKey,
-        ctxBefore, ctxAfter,
+        ctxBefore, ctxAfter, paragraphIndex,
         url: window.location.href, title: document.title, timestamp: Date.now(),
       });
-      if (hl[urlKey].length > 100) hl[urlKey].shift();
+      if (hl[urlKey].length > MAX_HIGHLIGHTS_PER_DOC) hl[urlKey].shift();
+
+      const keys = Object.keys(hl);
+      if (keys.length > MAX_HIGHLIGHT_DOCS) {
+        const lastTouched = (k) => hl[k].reduce((max, e) => Math.max(max, e.timestamp || 0), 0);
+        const oldest = keys.reduce((a, b) => (lastTouched(a) <= lastTouched(b) ? a : b));
+        if (oldest !== urlKey) delete hl[oldest];
+      }
+
       chrome.storage.local.set({ sra_text_highlights: hl });
     });
+
+    // Item 26: the AI-calling half of "what a highlight does", off by
+    // default and independent of the colour toggle above — a reader can
+    // want the colour mark without spending an assist on every one of them.
+    // Read live at the point of action, not a captured copy, same as every
+    // other flag in this file.
+    if (highlightSummarizeEnabled) {
+      let anchorRect = null;
+      try { const r = mark.getBoundingClientRect(); if (r.width || r.height) anchorRect = r; } catch (e) {}
+      const mode = isLikelyCode(text) ? 'explain_code' : 'tldr';
+      const summary = await fetchSummary(text, mode);
+      if (summary) {
+        renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source: 'highlight', mode });
+      }
+      // A failed fetch degrades to silence here, same as every other AI call
+      // in this file (invariant 9) — the colour mark itself already landed
+      // and is not undone by a summary that could not be fetched.
+    }
   }
 
   function deleteTextHighlight(hlId, markEl) {
@@ -891,37 +956,80 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     });
   }
 
-  function restoreSingleHighlight({ id: hlId, text, color, ctxBefore }) {
+  /* Quote-based anchoring (W3C TextQuoteSelector shape): find every place
+   * the exact highlighted text still occurs, score each by how well the
+   * stored prefix/suffix context matches around it, and only fall back to
+   * the stored paragraphIndex as a *tie-breaker* among candidates the
+   * context already accepts — never to pick a match on its own. If nothing
+   * has any context confirmation at all (a repeated short phrase with no
+   * matching surroundings anywhere), this refuses to guess and leaves the
+   * entry in storage untouched: attaching a reader's highlight to text they
+   * did not highlight is worse than not showing it. */
+  function restoreSingleHighlight({ id: hlId, text, color, ctxBefore, ctxAfter, paragraphIndex }) {
     if (!text || text.length < 2) return;
+
+    const candidates = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
       const tag = node.parentElement?.tagName?.toUpperCase?.();
-      if (['SCRIPT','STYLE','NOSCRIPT','MARK'].includes(tag)) continue;
-      const idx = node.textContent.indexOf(text);
-      if (idx === -1) continue;
-      // Light context check to avoid wrong match
-      const pre = node.textContent.slice(0, idx).trim().slice(-20);
-      if (ctxBefore && ctxBefore.length > 4 && !ctxBefore.endsWith(pre.slice(-4)) && !pre.endsWith(ctxBefore.slice(-8))) continue;
-
-      const range = document.createRange();
-      range.setStart(node, idx);
-      range.setEnd(node, Math.min(idx + text.length, node.textContent.length));
-
-      const mark = document.createElement('mark');
-      mark.dataset.sraHlId = hlId;
-      mark.style.cssText = `background:${color};border-radius:3px;padding:0 1px;mix-blend-mode:multiply;cursor:default;`;
-      mark.title = 'Double-click to remove highlight';
-      mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
-
-      try {
-        range.surroundContents(mark);
-      } catch (_) {
-        const frag = range.extractContents();
-        mark.appendChild(frag);
-        range.insertNode(mark);
+      if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'MARK'].includes(tag)) continue;
+      let from = 0, idx;
+      while ((idx = node.textContent.indexOf(text, from)) !== -1) {
+        candidates.push({ node, idx });
+        from = idx + 1;
       }
-      return;
+    }
+    if (!candidates.length) return; // text is gone — fail silently, stays in storage
+
+    const contextScore = ({ node, idx }) => {
+      const pre  = node.textContent.slice(0, idx).trim().slice(-40);
+      const post = node.textContent.slice(idx + text.length).trim().slice(0, 40);
+      let score = 0;
+      if (ctxBefore && ctxBefore.length > 4 && (pre.endsWith(ctxBefore.slice(-20)) || ctxBefore.endsWith(pre.slice(-8)))) score += 2;
+      if (ctxAfter && ctxAfter.length > 4 && (post.startsWith(ctxAfter.slice(0, 20)) || ctxAfter.startsWith(post.slice(0, 8)))) score += 2;
+      return score;
+    };
+
+    let winner = null;
+    if (candidates.length === 1) {
+      winner = candidates[0];
+    } else {
+      const scored = candidates
+        .map((c) => ({ ...c, score: contextScore(c) }))
+        .filter((c) => c.score > 0);
+      if (scored.length === 1) {
+        winner = scored[0];
+      } else if (scored.length > 1) {
+        // Position is only consulted among candidates context already
+        // confirmed, and only to break ties between equally-confirmed ones.
+        scored.sort((a, b) => (b.score - a.score)
+          || ((Number.isInteger(paragraphIndex) ? Math.abs(blockIndexOf(a.node) - paragraphIndex) : Infinity)
+            - (Number.isInteger(paragraphIndex) ? Math.abs(blockIndexOf(b.node) - paragraphIndex) : Infinity)));
+        winner = scored[0];
+      }
+      // scored.length === 0: multiple identical-text candidates, none with
+      // any matching context — genuinely ambiguous. Abstain.
+    }
+    if (!winner) return;
+
+    const { node: winnerNode, idx } = winner;
+    const range = document.createRange();
+    range.setStart(winnerNode, idx);
+    range.setEnd(winnerNode, Math.min(idx + text.length, winnerNode.textContent.length));
+
+    const mark = document.createElement('mark');
+    mark.dataset.sraHlId = hlId;
+    mark.style.cssText = `background:${color};border-radius:3px;padding:0 1px;mix-blend-mode:multiply;cursor:default;`;
+    mark.title = 'Double-click to remove highlight';
+    mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
+
+    try {
+      range.surroundContents(mark);
+    } catch (_) {
+      const frag = range.extractContents();
+      mark.appendChild(frag);
+      range.insertNode(mark);
     }
   }
 
@@ -1090,6 +1198,43 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   // ── Selection alcoia (or Ctrl+drag → colour highlight) ──────────────────
   document.addEventListener('mouseup', async (ev) => {
     if (!assistantEnabled) return;
+
+    // Ctrl/Cmd + drag → colour highlight and/or an AI summary, per the two
+    // independent item-26 toggles (never the plain-selection summary toggle
+    // below — a reader can want either of these without the other):
+    //   colour on,  summarize on/off → the existing colour-picker flow;
+    //     applyTextHighlight() itself checks highlightSummarizeEnabled once
+    //     a swatch is actually picked.
+    //   colour off, summarize on     → no picker, no mark; summarise the
+    //     selection directly (the rejected four-way design's "summary only").
+    //   colour off, summarize off    → Ctrl+drag does nothing.
+    if (ev.ctrlKey || ev.metaKey) {
+      if (!highlightColorEnabled && !highlightSummarizeEnabled) return;
+      let selRange = null;
+      let selText  = '';
+      try {
+        const sel = window.getSelection();
+        selText = sel?.toString().trim() || '';
+        if (selText.length >= MIN_SELECTION_CHARS && sel.rangeCount > 0) {
+          selRange = sel.getRangeAt(0).cloneRange();
+        }
+      } catch (e) {}
+      if (!selRange) return;
+
+      if (highlightColorEnabled) {
+        removeColorPicker();
+        showColorPicker(selRange, ev.clientX, ev.clientY);
+      } else {
+        let anchorRect = null;
+        try { const r = selRange.getBoundingClientRect(); if (r.width || r.height) anchorRect = r; } catch (e) {}
+        if (!anchorRect) anchorRect = { left: ev.clientX, right: ev.clientX + 8, top: ev.clientY, bottom: ev.clientY + 8 };
+        const mode = isLikelyCode(selText) ? 'explain_code' : 'tldr';
+        const summary = await fetchSummary(selText, mode);
+        if (summary) renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text: selText, source: 'highlight', mode });
+      }
+      return;
+    }
+
     if (!selectionEnabled) return;
 
     let selected = '';
@@ -1100,13 +1245,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       if (sel?.rangeCount > 0) selRange = sel.getRangeAt(0).cloneRange();
     } catch (e) {}
     if (!selected || selected.length < MIN_SELECTION_CHARS) return;
-
-    // Ctrl/Cmd + drag → colour highlight instead of AI summary
-    if (ev.ctrlKey || ev.metaKey) {
-      removeColorPicker();
-      if (selRange) showColorPicker(selRange, ev.clientX, ev.clientY);
-      return;
-    }
 
     // Highlight source element
     try {
@@ -1252,6 +1390,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (msg.type === 'settings') {
       if (msg.selection     !== undefined) selectionEnabled   = !!msg.selection;
       if (msg.highlightPara !== undefined) highlightEnabled   = !!msg.highlightPara;
+      if (msg.highlightColor     !== undefined) highlightColorEnabled     = !!msg.highlightColor;
+      if (msg.highlightSummarize !== undefined) highlightSummarizeEnabled = !!msg.highlightSummarize;
       if (msg.autohide      !== undefined) autohideEnabled    = !!msg.autohide;
       if (msg.autohideTimeout !== undefined) autohideTimeoutSec = Number(msg.autohideTimeout) || 12;
       if (msg.pinDefault    !== undefined) pinDefault         = !!msg.pinDefault;
@@ -1481,6 +1621,17 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       }
     }
     inFlightFingerprints.clear();
+
+    // Item 25: colour highlights are keyed per document (hostname+pathname),
+    // and used to only ever restore once, at initial page load — so an SPA
+    // route change never brought back highlights for the new route without
+    // a full reload. restoreTextHighlights() re-reads window.location at
+    // call time, so it naturally picks up the new URL's key; the short
+    // delay gives the SPA framework a chance to actually render the new
+    // route's content first; restoreSingleHighlight() already fails silently
+    // on unmatched text, so a still-mid-transition DOM just yields no match
+    // rather than a wrong one.
+    setTimeout(restoreTextHighlights, 300);
   }
 
   if (!window.__sra_history_patched) {
