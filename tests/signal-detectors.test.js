@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createParagraphTracker } from '../alcoia/src/content/telemetry/paragraph-tracker.js';
-import { createScrollRegressionDetector, FAST_RETURN_MS, SLOW_RETURN_MS } from '../alcoia/src/content/telemetry/scroll-regression.js';
-import { createInteractionSignals, LONG_BLUR_MS } from '../alcoia/src/content/telemetry/interaction-signals.js';
-import { createScrollDynamics } from '../alcoia/src/content/telemetry/scroll-dynamics.js';
+import { createParagraphTracker } from '../alcoia/src/content/signals/paragraph-tracker.js';
+import { createScrollRegressionDetector, FAST_RETURN_MS, SLOW_RETURN_MS } from '../alcoia/src/content/signals/scroll-regression.js';
+import { createInteractionSignals, LONG_BLUR_MS } from '../alcoia/src/content/signals/interaction-signals.js';
+import { createScrollDynamics } from '../alcoia/src/content/signals/scroll-dynamics.js';
 import { createComprehensionMonitor } from '../alcoia/src/content/comprehension-monitor.js';
 
 function fixedClock(start = 1_000_000) {

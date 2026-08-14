@@ -5,7 +5,7 @@
  * A wrong answer is not evidence that someone is probably struggling — it is
  * a reader failing to retrieve something they just read.
  *
- * So these outrank every telemetry signal in the engine, and a correct answer
+ * So these outrank every other signal in the engine, and a correct answer
  * is as informative as a wrong one: it says the slow reading that triggered
  * the question was fine, and the system should stop pressing.
  *

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createResponseSignals } from '../alcoia/src/content/telemetry/response-signals.js';
+import { createResponseSignals } from '../alcoia/src/content/signals/response-signals.js';
 import { createReadingStateEngine, STATES } from '../alcoia/src/content/state-engine.js';
 import { createInterventionPolicy } from '../alcoia/src/content/intervention-policy.js';
 
@@ -149,25 +149,25 @@ describe('response-signals', () => {
 
 /* The signal hierarchy from the project notes, made testable: reader responses are
  * the only ground truth and outrank everything else. */
-describe('responses outrank telemetry in the engine', () => {
-  it('a wrong answer is struggling, above any telemetry confidence', () => {
+describe('responses outrank reading signals in the engine', () => {
+  it('a wrong answer is struggling, above any reading-signal confidence', () => {
     const engine = createReadingStateEngine();
-    const viaTelemetry = createReadingStateEngine().update({
-      telemetry: { type: 'speed_mismatch', subtype: 'too_slow', actualWpm: 90, baselineWpm: 225 },
+    const viaSignal = createReadingStateEngine().update({
+      reading: { type: 'speed_mismatch', subtype: 'too_slow', actualWpm: 90, baselineWpm: 225 },
     });
     const viaAnswer = engine.update({
-      telemetry: { type: 'response', subtype: 'incorrect', correct: false },
+      reading: { type: 'response', subtype: 'incorrect', correct: false },
     });
 
     expect(viaAnswer.label).toBe(STATES.STRUGGLING);
-    expect(viaAnswer.confidence).toBeGreaterThan(viaTelemetry.confidence);
+    expect(viaAnswer.confidence).toBeGreaterThan(viaSignal.confidence);
     expect(viaAnswer.evidence[0]).toMatch(/different answer/);
   });
 
-  it('a correct answer overrides telemetry that said struggling', () => {
+  it('a correct answer overrides a reading signal that said struggling', () => {
     const engine = createReadingStateEngine();
     const s = engine.update({
-      telemetry: [
+      reading: [
         { type: 'speed_mismatch', subtype: 'too_slow', actualWpm: 90, baselineWpm: 225 },
         { type: 'response', subtype: 'correct', correct: true },
       ],
@@ -183,14 +183,14 @@ describe('responses outrank telemetry in the engine', () => {
     // question here is whether a correct answer's resulting on_pace state
     // earns an interruption on its own merits, not a probabilistic one.
     const policy = createInterventionPolicy({ random: () => 1 });
-    const s = engine.update({ telemetry: { type: 'response', subtype: 'correct', correct: true } });
+    const s = engine.update({ reading: { type: 'response', subtype: 'correct', correct: true } });
     expect(policy.evaluate(s).allow).toBe(false);
   });
 
   it('a dismissal asserts nothing at all', () => {
     const engine = createReadingStateEngine();
     const s = engine.update({
-      telemetry: { type: 'response', subtype: 'dismissed', correct: null },
+      reading: { type: 'response', subtype: 'dismissed', correct: null },
     });
     expect(s.label).toBe(STATES.UNKNOWN);
   });
@@ -201,14 +201,14 @@ describe('responses outrank telemetry in the engine', () => {
     const policy = createInterventionPolicy({ now: clock.now });
 
     // The question that was asked cost an interruption.
-    const first = engine.update({ telemetry: { type: 'backtrack', backtrackPx: 200 } });
+    const first = engine.update({ reading: { type: 'backtrack', backtrackPx: 200 } });
     const d1 = policy.evaluate(first, {});
     expect(d1.allow).toBe(true);
     policy.record(d1);
 
     // They got it wrong. That is real, and it still waits its turn.
     clock.advance(5000);
-    const after = engine.update({ telemetry: { type: 'response', subtype: 'incorrect', correct: false } });
+    const after = engine.update({ reading: { type: 'response', subtype: 'incorrect', correct: false } });
     expect(after.label).toBe(STATES.STRUGGLING);
     expect(policy.evaluate(after, {}).allow).toBe(false);
   });
