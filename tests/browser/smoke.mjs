@@ -205,6 +205,41 @@ const ITEM30C_SCANNED_PDF_BYTES = (() => {
   return Buffer.from(out, 'latin1');
 })();
 
+// Item 30d: a real two-column PDF (hand-built, known text positions — left
+// column at x=72pt, right column at x=320pt on a 612x792pt page, same shape
+// item 20 already verified for text-layer alignment) — for confirming
+// rotate/fit-width/fit-page never break the correspondence between the
+// canvas and its text layer, which are always built from the same pdf.js
+// viewport object.
+const ITEM30D_TWO_COLUMN_PDF_BYTES = (() => {
+  const esc = (s) => s.replace(/([\\()])/g, '\\$1');
+  const ops = [
+    ...['Left column line one of real text here.', 'Left column line two continues the text.']
+      .map((line, i) => `1 0 0 1 72 ${700 - i * 16} Tm (${esc(line)}) Tj`),
+    ...['Right column line one of real text here.', 'Right column line two continues the text.']
+      .map((line, i) => `1 0 0 1 320 ${700 - i * 16} Tm (${esc(line)}) Tj`),
+  ];
+  const stream = `BT /F1 12 Tf ${ops.join(' ')} ET`;
+  const objects = [
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Catalog /Pages 4 0 R >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 5 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+})();
+
 const server = http.createServer((req, res) => {
   if (req.url.startsWith('/item30c-multi2.pdf')) {
     res.writeHead(200, { 'Content-Type': 'application/pdf' });
@@ -219,6 +254,11 @@ const server = http.createServer((req, res) => {
   if (req.url.startsWith('/item30c-scanned.pdf')) {
     res.writeHead(200, { 'Content-Type': 'application/pdf' });
     res.end(ITEM30C_SCANNED_PDF_BYTES);
+    return;
+  }
+  if (req.url.startsWith('/item30d-two-column.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30D_TWO_COLUMN_PDF_BYTES);
     return;
   }
   if (req.url.startsWith('/item29-test.pdf')) {
@@ -1867,6 +1907,139 @@ try {
 }
 await writeCoverageStore({});
 
+// ── PDF viewer parity: fit width/page, rotate, download (item 30d) ─────────
+// Native-reader parity beyond item 29's escape hatch and print. Rotate and
+// the two fit modes all go through the same rebuildAllPages() → renderPage()
+// path, which builds the canvas and its text layer from the SAME pdf.js
+// viewport object — the real risk this item's own brief calls out is the
+// two drifting apart after a scale/rotation change, not either one simply
+// failing to render. Verified directly against a real two-column PDF (the
+// same shape item 20 already used for alignment), not asserted from the
+// outside.
+// canvas.width/.height are integer attributes (assignment truncates a float
+// viewport width); the text layer's CSS width/height carries the same
+// pdf.js viewport value at full float precision — so a sub-pixel difference
+// between them is expected and not a sign the two have drifted apart. Real
+// drift would be off by many pixels (a stale scale, a stale rotation), not
+// a fraction of one.
+const closeEnough = (a, b) => Math.abs(a - b) < 1;
+
+let pdfParityResult;
+try {
+  const twoColUrl = 'http://localhost:8731/item30d-two-column.pdf';
+  const pPage = await ctx.newPage();
+  const pErrors = [];
+  pPage.on('pageerror', (e) => pErrors.push(String(e)));
+  await pPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(twoColUrl)}`);
+  await pPage.waitForTimeout(1500);
+
+  // pdf.js's own renderTextLayer() sets the container's width/height as a
+  // CSS calc()/round() expression driven by a --scale-factor custom
+  // property, not a plain px string — parseFloat(el.style.width) reads NaN
+  // against that, regardless of whether canvas and text layer actually
+  // agree. getBoundingClientRect() reads the real, laid-out, CSS-resolved
+  // size for both, which is what "does the text layer still line up with
+  // the canvas" actually means, independent of how either internally
+  // expresses its own CSS.
+  const readViewerState = () => {
+    const canvas = document.querySelector('.page-wrap canvas');
+    const tl = document.querySelector('.textLayer');
+    const cr = canvas ? canvas.getBoundingClientRect() : { width: 0, height: 0 };
+    const tr = tl ? tl.getBoundingClientRect() : { width: 0, height: 0 };
+    return {
+      canvasW: canvas?.width || 0,
+      canvasH: canvas?.height || 0,
+      canvasRectW: cr.width, canvasRectH: cr.height,
+      textLayerRectW: tr.width, textLayerRectH: tr.height,
+      spanCount: document.querySelectorAll('.textLayer span').length,
+      hasLeftColumnText: [...document.querySelectorAll('.textLayer span')].some((s) => s.textContent.includes('Left column')),
+    };
+  };
+
+  const before = await pPage.evaluate(() => {
+    const canvas = document.querySelector('.page-wrap canvas');
+    const tl = document.querySelector('.textLayer');
+    const cr = canvas.getBoundingClientRect();
+    const tr = tl.getBoundingClientRect();
+    const spans = [...document.querySelectorAll('.textLayer span')];
+    const left  = spans.find((s) => s.textContent.includes('Left column'));
+    const right = spans.find((s) => s.textContent.includes('Right column'));
+    return {
+      canvasW: canvas.width, canvasH: canvas.height,
+      canvasRectW: cr.width, canvasRectH: cr.height,
+      textLayerRectW: tr.width, textLayerRectH: tr.height,
+      hasBothColumns: !!left && !!right,
+      leftX: left ? left.getBoundingClientRect().left : null,
+      rightX: right ? right.getBoundingClientRect().left : null,
+    };
+  });
+
+  await pPage.click('#fitWidthBtn');
+  await pPage.waitForTimeout(700);
+  const afterFitWidth = await pPage.evaluate(readViewerState);
+
+  await pPage.click('#fitPageBtn');
+  await pPage.waitForTimeout(700);
+  const beforeRotate = await pPage.evaluate(readViewerState);
+
+  await pPage.click('#rotateRightBtn');
+  await pPage.waitForTimeout(700);
+  const afterRotate = await pPage.evaluate(readViewerState);
+
+  await pPage.click('#rotateLeftBtn');
+  await pPage.waitForTimeout(700);
+  const afterRotateBack = await pPage.evaluate(readViewerState);
+
+  const [download] = await Promise.all([
+    pPage.waitForEvent('download'),
+    pPage.click('#downloadBtn'),
+  ]);
+  const downloadFilename = download.suggestedFilename();
+
+  const escapeHatchStillPresent = await pPage.evaluate(() => !!document.getElementById('openNativeBtn'));
+
+  await pPage.close();
+
+  pdfParityResult = {
+    attempted: true,
+    twoColumnBaseline: {
+      hasBothColumns: before.hasBothColumns,
+      columnsSeparatedHorizontally: before.leftX != null && before.rightX != null && before.rightX > before.leftX + 50,
+      textLayerMatchesCanvas: closeEnough(before.textLayerRectW, before.canvasRectW) && closeEnough(before.textLayerRectH, before.canvasRectH),
+    },
+    fitWidth: {
+      changedScale: afterFitWidth.canvasW !== before.canvasW,
+      textLayerMatchesCanvas: closeEnough(afterFitWidth.textLayerRectW, afterFitWidth.canvasRectW) && closeEnough(afterFitWidth.textLayerRectH, afterFitWidth.canvasRectH),
+      stillHasRealText: afterFitWidth.hasLeftColumnText,
+    },
+    fitPage: {
+      rendered: beforeRotate.canvasW > 0 && beforeRotate.canvasH > 0,
+      textLayerMatchesCanvas: closeEnough(beforeRotate.textLayerRectW, beforeRotate.canvasRectW) && closeEnough(beforeRotate.textLayerRectH, beforeRotate.canvasRectH),
+    },
+    rotate: {
+      // A 90° rotation at the same scale swaps width and height — checked
+      // against the state captured immediately before rotating, not the
+      // very first baseline, since fit-width/fit-page already changed scale.
+      dimensionsSwapped: afterRotate.canvasW === beforeRotate.canvasH && afterRotate.canvasH === beforeRotate.canvasW,
+      textLayerStillMatchesCanvas: closeEnough(afterRotate.textLayerRectW, afterRotate.canvasRectW) && closeEnough(afterRotate.textLayerRectH, afterRotate.canvasRectH),
+      stillHasRealText: afterRotate.hasLeftColumnText,
+      spanCountUnchanged: afterRotate.spanCount === beforeRotate.spanCount,
+    },
+    rotateReversible: {
+      backToPreRotationDimensions: afterRotateBack.canvasW === beforeRotate.canvasW && afterRotateBack.canvasH === beforeRotate.canvasH,
+      textLayerStillMatchesCanvas: closeEnough(afterRotateBack.textLayerRectW, afterRotateBack.canvasRectW) && closeEnough(afterRotateBack.textLayerRectH, afterRotateBack.canvasRectH),
+    },
+    download: {
+      triggered: !!downloadFilename,
+      filename: downloadFilename,
+    },
+    escapeHatchStillPresent,
+    newPageErrors: pErrors.length,
+  };
+} catch (e) {
+  pdfParityResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
 // ── Pin / auto-dismiss exclusivity (item 34) ────────────────────────────────
 // A real popup.html load, checking the UI itself rather than just the
 // source text: clicking "Keep cards until I close them" must force "Clear
@@ -2076,6 +2249,7 @@ console.log('highlight explanations (36):', JSON.stringify(explanationResult, nu
 console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
 console.log('PDF reading detection (30c):', JSON.stringify(pdfDetectionResult, null, 2));
+console.log('PDF viewer parity (30d)  :', JSON.stringify(pdfParityResult, null, 2));
 console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));
 console.log('pin/auto-dismiss (34)   :', JSON.stringify(pinAutohideResult, null, 2));
 console.log('AI-call rate limit (38) :', JSON.stringify(rateLimitResult, null, 2));
