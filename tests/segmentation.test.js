@@ -11,9 +11,9 @@ import { describe, it, expect } from 'vitest';
 import {
   countWords, splitSentences, countClauseMarks, isSpaceDelimited,
   structureIsUnreadable, detectLanguage,
-} from '../alcoia/src/content/telemetry/segmentation.js';
-import { analyzeDifficulty, syntacticLoad } from '../alcoia/src/content/telemetry/text-difficulty.js';
-import { createParagraphTracker } from '../alcoia/src/content/telemetry/paragraph-tracker.js';
+} from '../alcoia/src/content/signals/segmentation.js';
+import { analyzeDifficulty, syntacticLoad } from '../alcoia/src/content/signals/text-difficulty.js';
+import { createParagraphTracker } from '../alcoia/src/content/signals/paragraph-tracker.js';
 
 const ZH = '人工智能正在改变世界的运作方式。许多研究人员认为，这项技术将在未来十年内彻底重塑经济结构。然而，也有人担心它带来的风险远远超过收益。';
 const JA = '読書は人間の思考を形づくる重要な行為である。文章を目で追うだけでは理解したことにならない。実際に内容を思い出せるかどうかが、理解の唯一の証拠である。';

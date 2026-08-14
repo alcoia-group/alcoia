@@ -25,8 +25,8 @@ passage you just read, with the sentence containing the answer quoted underneath
 the only thing in the system that produces ground truth: getting it right ends the interruption,
 getting it wrong is when an explanation appears.
 
-There is no webcam mode. Detection is telemetry only — no camera, no permission prompt, no video
-of any kind, ever.
+There is no webcam mode. Detection runs on reading signals only — no camera, no permission prompt,
+no video of any kind, ever.
 
 ---
 
@@ -35,12 +35,12 @@ of any kind, ever.
 Two sources, in order of authority. This ordering is the product, not an implementation detail.
 
 1. **Reader responses** — answers to retrieval questions. The only ground truth here. An answer
-   outranks anything telemetry says. A correct answer resolves to `on_pace` and stops the system
-   pressing; a dismissal asserts nothing at all, because declining to be tested says nothing
-   about comprehension.
-2. **Browser telemetry** — reading rate against text difficulty and your own baseline, scroll
-   regressions, selection, copy, blur, idle. Precise, always available, no permission needed.
-   **This is the only detection path.**
+   outranks anything a reading signal says. A correct answer resolves to `on_pace` and stops the
+   system pressing; a dismissal asserts nothing at all, because declining to be tested says
+   nothing about comprehension.
+2. **Browser reading signals** — reading rate against text difficulty and your own baseline,
+   scroll regressions, selection, copy, blur, idle. Precise, always available, no permission
+   needed. **This is the only detection path.**
 
 ## Reading states
 
@@ -99,7 +99,7 @@ Reading-rate baselines are kept per language.
   that could have started one is not in the extension.
 - **No video, image or webcam frame is ever transmitted.** Verified by an automated browser test
   that inspects every outbound request body.
-- **No analytics, no telemetry-to-vendor, no crash reporting, no third-party fonts or scripts.**
+- **No analytics, no usage data sent to a vendor, no crash reporting, no third-party fonts or scripts.**
   Verified: zero third-party requests in the browser test.
 - **There is no covert mode**, and there will not be one. Not behind a flag, not for an
   institution, not for testing.
@@ -107,11 +107,17 @@ Reading-rate baselines are kept per language.
 Passage text **is** sent to a server to generate questions and explanations. That is the one
 thing that leaves your machine, and it is stated here rather than buried.
 
-**The quiz is the first feature that keeps something on disk.** Take the quiz from the end-of-page
-offer or the popup, and the questions, your answers and your confidence ratings are saved on your
-device — in IndexedDB, not synced, not sent anywhere — so you can review a result later. The
-passage itself is never part of that record: there is no retake, so there is nothing regeneration
-would need it for. Delete a quiz, or all of them, from the quiz page itself, and deletion actually
+**Reading content is kept on disk in a few places, all local-only.** Colour highlights you draw
+with Ctrl+drag are the oldest of these: the highlighted text and a little surrounding context, so
+the same passage can be found again on a later visit. If you also turn on "Save an explanation
+with each highlight," the AI's explanation is kept with it too — capped shorter than what the
+one-time popup shows — and appears on the Highlights page; that toggle is off by default, and
+turning it on never retroactively summarises highlights you already made. The quiz is newer: take
+it from the end-of-page offer or the popup, and the questions, your answers and your confidence
+ratings are saved on your device — in IndexedDB, not synced, not sent anywhere — so you can review
+a result later. The passage itself is never part of that record: there is no retake, so there is
+nothing regeneration would need it for. Every one of these is deletable — a single highlight,
+every highlight on a page, or all of them; a single quiz or all of them — and deletion actually
 removes the record.
 
 Full data map, including everything stored locally and the disclosure obligations that follow
@@ -150,7 +156,7 @@ extension's own setup, keyboard shortcuts and configuration reference.
 
 ```bash
 npm run lint                    # ESLint — a defect linter, not a style linter
-npm test                        # 431 tests
+npm test                        # 462 tests
 npm run test:browser            # loads the extension in Chromium, English article
 PAGE=zh npm run test:browser    # same checklist against a Chinese article
 ```
@@ -165,7 +171,7 @@ stylesheet actually reaches its elements, and that every keyboard shortcut still
 ```
 alcoia/                  the extension (AGPL-3.0)
   src/content/           content scripts — detection, fusion, UI
-    telemetry/           the detectors; each exports { update(), signal() }
+    signals/              the detectors; each exports { update(), signal() }
   src/popup/             the toolbar panel and its pages
   src/shared/config.js   the one place the backend origin is defined
   src/shared/install-token.js  the opaque per-install token that gates every AI call
@@ -190,3 +196,18 @@ still bundled under `src/libs/` is permissive or OFL.
 Fonts (Literata, Plus Jakarta Sans) are **SIL OFL 1.1**, with their licences alongside the
 binaries. The API server is a separate program in a separate private repository and was never
 covered by this grant. Details in [`NOTICE.md`](NOTICE.md).
+
+## About this repository
+
+This repository is public **for transparency and verification** — so anyone can read exactly what
+the extension does with a reader's data, rather than take a claim on trust. It is not a
+solicitation for contributions. Issues and pull requests may be read but are not actively triaged,
+and an unsolicited PR is not likely to be merged. If you have found a security issue, see
+[`SECURITY.md`](SECURITY.md) instead of opening a public issue.
+
+[`ARCHITECTURE.md`](ARCHITECTURE.md) explains how the system works in more detail than this file.
+The team's own internal engineering-context file, which additionally tracks line-by-line
+implementation status and in-progress work, is not published.
+
+The code is [AGPL-3.0](LICENSE), as above — see that file and `NOTICE.md` for exactly what it
+covers.

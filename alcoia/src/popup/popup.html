@@ -306,7 +306,7 @@
     </div>
     <div class="state-why" id="stateWhy">Open an article and start reading — the estimate appears here.</div>
     <div class="state-sources">
-      <span class="src-chip on" id="signalChip"><i></i><span id="signalStatus">Reading signals</span></span>
+      <span class="src-chip on" id="signalChip"><i></i><span id="signalStatus">Noticing</span></span>
     </div>
   </div>
 
@@ -343,14 +343,14 @@
       </div>
     </div>
 
-    <!-- Telemetry is the only detection path and needs no permission. -->
+    <!-- Reading signals are the only detection path and need no permission. -->
     <div class="section">
       <div class="section-label">What it watches</div>
       <div class="toggle-grid">
 
         <label class="toggle-cell" for="comprehensionToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Reading signals</span>
+            <span class="toggle-cell-name">Notice when I'm struggling</span>
             <label class="pill"><input type="checkbox" id="comprehensionToggle" checked><span class="pill-track"></span></label>
           </div>
           <span class="toggle-cell-desc">Your pace against the difficulty of the text, re-reads, and where you stop. No permission needed.</span>
@@ -365,18 +365,34 @@
 
         <label class="toggle-cell" for="selToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Selection summaries</span>
+            <span class="toggle-cell-name">Explain text I select</span>
             <label class="pill"><input type="checkbox" id="selToggle" checked><span class="pill-track"></span></label>
           </div>
-          <span class="toggle-cell-desc">Explain any passage you highlight</span>
+          <span class="toggle-cell-desc">Look up a word, explain an image, or summarise a passage — on selection or Ctrl+hover. Nothing is kept; uses one assist each time.</span>
         </label>
 
         <label class="toggle-cell" for="highlightToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Show the passage</span>
+            <span class="toggle-cell-name">Outline the paragraph</span>
             <label class="pill"><input type="checkbox" id="highlightToggle" checked><span class="pill-track"></span></label>
           </div>
           <span class="toggle-cell-desc">Outline the paragraph a card refers to</span>
+        </label>
+
+        <label class="toggle-cell" for="highlightColorToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Highlight colour</span>
+            <label class="pill"><input type="checkbox" id="highlightColorToggle" checked><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Ctrl+drag to mark a passage in colour. Costs nothing — stays on your device.</span>
+        </label>
+
+        <label class="toggle-cell" for="highlightSummarizeToggle">
+          <div class="toggle-cell-top">
+            <span class="toggle-cell-name">Save an explanation with each highlight</span>
+            <label class="pill"><input type="checkbox" id="highlightSummarizeToggle"><span class="pill-track"></span></label>
+          </div>
+          <span class="toggle-cell-desc">Asks the AI to explain what you highlighted, keeps the explanation with the highlight, and shows it on the Highlights page. Uses one assist each time.</span>
         </label>
 
         <label class="toggle-cell" for="ttsToggle">
@@ -389,7 +405,7 @@
 
         <label class="toggle-cell" for="focusRulerToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Focus ruler</span>
+            <span class="toggle-cell-name">Reading guide</span>
             <label class="pill"><input type="checkbox" id="focusRulerToggle"><span class="pill-track"></span></label>
           </div>
           <span class="toggle-cell-desc">Dim everything but the current line · <kbd>Alt+F</kbd></span>
@@ -404,18 +420,18 @@
 
         <label class="toggle-cell" for="autohideToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Auto-dismiss</span>
+            <span class="toggle-cell-name">Clear cards automatically</span>
             <label class="pill"><input type="checkbox" id="autohideToggle"><span class="pill-track"></span></label>
           </div>
-          <span class="toggle-cell-desc">Clear cards after a timeout</span>
+          <span class="toggle-cell-desc">Clear cards after a timeout. Off while "Keep cards until I close them" is on — the two contradict, and keeping wins.</span>
         </label>
 
         <label class="toggle-cell" for="pinDefaultToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Pin by default</span>
+            <span class="toggle-cell-name">Keep cards until I close them</span>
             <label class="pill"><input type="checkbox" id="pinDefaultToggle"><span class="pill-track"></span></label>
           </div>
-          <span class="toggle-cell-desc">Keep cards until you close them</span>
+          <span class="toggle-cell-desc">Cards stay open until you dismiss them. Turns off automatic clearing above.</span>
         </label>
 
         <label class="toggle-cell" for="darkModeToggle">
@@ -451,6 +467,34 @@
           detection keeps running, so coverage and the quiz still work — only interruptions stop.</p>
         <div class="btn-grid" id="snoozeOptions"></div>
       </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">PDF &amp; PPTX documents</div>
+      <label class="toggle-row" for="pdfTakeoverToggle">
+        <div class="toggle-info">
+          <span class="toggle-name">Open local PDF/PPTX files in alcoia</span>
+          <span class="toggle-desc">Off leaves them to your browser's own handling instead — its
+            full native viewer for a PDF, its default download behaviour for a PPTX — with no
+            alcoia detection either way</span>
+        </div>
+        <label class="pill"><input type="checkbox" id="pdfTakeoverToggle" checked><span class="pill-track"></span></label>
+      </label>
+      <p class="section-note">
+        Every alcoia viewer page has its own "Open in browser viewer" button too, for a document
+        you have already opened. You are never stuck in a viewer you did not want.
+      </p>
+
+      <label class="toggle-row" for="webPdfTakeoverToggle" style="margin-top:10px">
+        <div class="toggle-info">
+          <span class="toggle-name">Also open PDFs linked from the web</span>
+          <span class="toggle-desc">Off by default. On means a PDF opened from a website — not just
+            a file on your computer — opens in alcoia too. Only whole-tab links; a PDF embedded in a
+            page (an iframe) is never redirected. A PDF that fails to load this way always falls
+            back to your browser's own viewer rather than showing an error.</span>
+        </div>
+        <label class="pill"><input type="checkbox" id="webPdfTakeoverToggle"><span class="pill-track"></span></label>
+      </label>
     </div>
 
   </div>
@@ -512,11 +556,10 @@
         </div>
         <label class="pill"><input type="checkbox" id="debugTogglePopup"><span class="pill-track"></span></label>
       </label>
-      <div class="field-row" style="padding-top:6px">
-        <span class="field-label">Backend URL</span>
-        <!-- placeholder is set from src/shared/config.js by popup.js, not hardcoded here -->
-        <input class="field-input" id="backendUrl" type="text" placeholder="">
-      </div>
+      <p class="section-note">
+        More developer tools — a backend URL override and a state simulator, for local testing —
+        live on the diagnostics page once this is on.
+      </p>
       <div class="btn-row" style="padding-top:10px">
         <button class="btn btn-ghost" id="diagnosticsBtn">Diagnostics</button>
       </div>
@@ -594,17 +637,6 @@
           <kbd>Esc</kbd><span class="kbd-desc">Close open cards</span>
         </div>
       </div>
-    </div>
-
-    <div class="section">
-      <div class="section-label">Simulate a state</div>
-      <div class="btn-grid">
-        <button class="btn btn-ghost" id="simStrugglingBtn">Struggling <kbd>Alt+1</kbd></button>
-        <button class="btn btn-ghost" id="simDriftingBtn">Drifting <kbd>Alt+3</kbd></button>
-        <button class="btn btn-ghost" id="simSkimmingBtn">Skimming <kbd>Alt+4</kbd></button>
-        <button class="btn btn-ghost" id="simOnPaceBtn">On pace <kbd>Alt+5</kbd></button>
-      </div>
-      <p class="section-note">Forces the matching intervention on the paragraph in view, for testing.</p>
     </div>
 
   </div>

@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createComprehensionMonitor } from '../alcoia/src/content/comprehension-monitor.js';
-import { analyzeDifficulty } from '../alcoia/src/content/telemetry/text-difficulty.js';
+import { analyzeDifficulty } from '../alcoia/src/content/signals/text-difficulty.js';
 
 // Short sentences, simple words: scores as 'easy' (>=80), which is one of the
 // two grades the WPM baseline is allowed to learn from.
@@ -331,22 +331,34 @@ describe('expected reading time scales with word count and difficulty', () => {
  * substitute plausible defaults for missing data." text-difficulty.js's
  * syntacticLoad() names the case where it cannot measure structure at all
  * (structureIsUnreadable(): a script like Thai or Khmer with no terminal
- * punctuation, so the whole paragraph parses as one "sentence") — and then
- * returns `score: 60, grade: 'standard'` for it anyway, labelled
- * `basis: 'structure_unavailable'` so a caller COULD tell the difference.
- * comprehension-monitor.js never checks `basis`; it treats this exactly like
- * a real 'standard' grade for baseline calibration and speed-mismatch
- * comparisons alike. That is a plausible default standing in for missing
- * data, which is the specific thing invariant 5 forbids. Documented here as
- * a finding, not fixed — this test file adds coverage for the code as it
- * stands, per this item's own instructions. */
-describe('difficulty basis: structure unavailable (documents a finding, not a fix)', () => {
-  it('is labelled structure_unavailable but scored as an ordinary standard paragraph', () => {
+ * punctuation, so the whole paragraph parses as one "sentence") and returns
+ * `score: 60, grade: 'standard'` for it anyway, labelled
+ * `basis: 'structure_unavailable'` so a caller could tell the difference.
+ *
+ * Item 7 documented this here as a finding: comprehension-monitor.js never
+ * checked `basis` and treated the placeholder exactly like a real 'standard'
+ * grade, for baseline calibration and speed-mismatch comparisons alike — a
+ * plausible default standing in for missing data, which invariant 5
+ * forbids. Item 24 closed the gap: enterParagraph() now checks `basis` and
+ * abstains outright when structure is unmeasurable, leaving
+ * `paragraphEntry` unset so the paragraph never contributes an expectation,
+ * a WPM sample, a residual, or a speed_mismatch signal. */
+describe('difficulty basis: structure unavailable (item 24 — abstains, does not guess)', () => {
+  it('text-difficulty.js still labels the case and still returns a placeholder score', () => {
     // detectLanguage() caches its result against `document` for 5s; earlier
     // tests in this file already primed that cache for 'en' at this same
     // fake-timer instant, so it has to be pushed stale before the language
     // change below will actually take effect.
-    vi.advanceTimersByTime(6000);
+    // detectLanguage()'s cache is module-level and keyed on `document`
+    // identity + a 5s TTL against Date.now() — not reset between tests.
+    // beforeEach resets the fake clock to the *same* fixed instant every
+    // test, so a prior test that advanced its own clock further before
+    // writing the cache can leave langCache.at ahead of this test's fresh
+    // start, making a small advance look "still fresh" by comparison. A
+    // day comfortably exceeds any cumulative advance any single test in
+    // this file performs, so it reliably busts the cache regardless of
+    // execution order.
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000);
     document.documentElement.lang = 'th';
 
     // No sentence-terminal punctuation anywhere and > 60 words: exactly the
@@ -356,15 +368,130 @@ describe('difficulty basis: structure unavailable (documents a finding, not a fi
     expect(r.basis).toBe('structure_unavailable');
     expect(r.grade).toBe('standard');
     expect(r.score).toBe(60);
+  });
+
+  it('comprehension-monitor.js abstains instead of proceeding on the placeholder', () => {
+    // detectLanguage()'s cache is module-level and keyed on `document`
+    // identity + a 5s TTL against Date.now() — not reset between tests.
+    // beforeEach resets the fake clock to the *same* fixed instant every
+    // test, so a prior test that advanced its own clock further before
+    // writing the cache can leave langCache.at ahead of this test's fresh
+    // start, making a small advance look "still fresh" by comparison. A
+    // day comfortably exceeds any cumulative advance any single test in
+    // this file performs, so it reliably busts the cache regardless of
+    // execution order.
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000);
+    document.documentElement.lang = 'th';
+    const text = Array(90).fill('word').join(' ');
 
     const m = createComprehensionMonitor();
     m.enterParagraph(el(text));
-    // The monitor proceeds as though this were a real standard-difficulty
-    // measurement — getCurrentExpectation() returns a normal expectation,
-    // not null / an abstention.
+    // No expectation at all — not null-because-nothing-is-being-timed, but
+    // specifically because this paragraph was never entered.
+    expect(m.getCurrentExpectation()).toBeNull();
+    // leaveParagraph() must be a no-op too: no residual, no speed_mismatch,
+    // no WPM sample.
+    vi.advanceTimersByTime(5000);
+    expect(m.leaveParagraph()).toBeNull();
+    expect(m.getResidualStats().n).toBe(0);
+  });
+
+  it('does not contribute to the WPM baseline even after many such paragraphs', () => {
+    // detectLanguage()'s cache is module-level and keyed on `document`
+    // identity + a 5s TTL against Date.now() — not reset between tests.
+    // beforeEach resets the fake clock to the *same* fixed instant every
+    // test, so a prior test that advanced its own clock further before
+    // writing the cache can leave langCache.at ahead of this test's fresh
+    // start, making a small advance look "still fresh" by comparison. A
+    // day comfortably exceeds any cumulative advance any single test in
+    // this file performs, so it reliably busts the cache regardless of
+    // execution order.
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000);
+    document.documentElement.lang = 'th';
+    const text = Array(90).fill('word').join(' ');
+
+    const m = createComprehensionMonitor();
+    for (let i = 0; i < 10; i++) {
+      m.enterParagraph(el(text));
+      vi.advanceTimersByTime(20000); // plausible reading time, irrelevant here
+      m.leaveParagraph();
+    }
+
+    // getBaselineWpm() (no argument) only ever reports the 'en'/fallback
+    // bucket, which this test never touches either way — asserting on it
+    // directly would pass regardless of whether the abstention fix works,
+    // since WpmRegistry keys baselines per language and 'th' is a separate
+    // bucket. Probe the 'th' bucket specifically the only way the public
+    // API allows: enter one genuinely measurable 'th' paragraph and check
+    // that its expected reading time still comes from the generic
+    // per-grade constant (comprehension-monitor.js's GENERIC_WPM), not a
+    // personalised figure — which is only possible if the ten unmeasurable
+    // "readings" above never seeded a personal baseline for 'th'.
+    const probeText = EASY(90); // short real sentences — genuinely measurable
+    m.enterParagraph(el(probeText));
     const exp = m.getCurrentExpectation();
     expect(exp).not.toBeNull();
-    expect(exp.expectedMs).toBeGreaterThan(0);
+    const r = analyzeDifficulty(probeText, { lang: 'th' });
+    expect(r.basis).not.toBe('structure_unavailable'); // confirms the probe is real
+    const GENERIC_WPM_STANDARD = 220; // comprehension-monitor.js's GENERIC_WPM.standard
+    const GENERIC_WPM_EASY = 260;     // comprehension-monitor.js's GENERIC_WPM.easy
+    const expectedGenericMs = (r.wordCount / (r.grade === 'easy' ? GENERIC_WPM_EASY : GENERIC_WPM_STANDARD)) * 60000;
+    expect(exp.expectedMs).toBeCloseTo(expectedGenericMs, 0);
+  });
+
+  it('a genuinely unpunctuated but short (<=60-word) paragraph is unaffected', () => {
+    // structureIsUnreadable() requires wordCount > 60 — this isolates that
+    // exact boundary (via text-difficulty.js directly, which has no word
+    // floor of its own) so the abstention path is confirmed to trigger only
+    // on the condition it's meant for, not on every sentence-less paragraph.
+    // detectLanguage()'s cache is module-level and keyed on `document`
+    // identity + a 5s TTL against Date.now() — not reset between tests.
+    // beforeEach resets the fake clock to the *same* fixed instant every
+    // test, so a prior test that advanced its own clock further before
+    // writing the cache can leave langCache.at ahead of this test's fresh
+    // start, making a small advance look "still fresh" by comparison. A
+    // day comfortably exceeds any cumulative advance any single test in
+    // this file performs, so it reliably busts the cache regardless of
+    // execution order.
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000);
+    document.documentElement.lang = 'th';
+    const text = Array(60).fill('word').join(' '); // exactly at the boundary, not over it
+
+    const r = analyzeDifficulty(text, { lang: 'th' });
+    expect(r.basis).not.toBe('structure_unavailable'); // 60 is not > 60
+    expect(r.basis).toBe('syntactic');
+  });
+
+  it('backtrack detection is untouched on a page made entirely of unmeasurable text', () => {
+    // Backtrack reads window.scrollY, never paragraphEntry or readability —
+    // confirming the extension still functions, just more quietly, exactly
+    // as this item asked to verify rather than assume.
+    // detectLanguage()'s cache is module-level and keyed on `document`
+    // identity + a 5s TTL against Date.now() — not reset between tests.
+    // beforeEach resets the fake clock to the *same* fixed instant every
+    // test, so a prior test that advanced its own clock further before
+    // writing the cache can leave langCache.at ahead of this test's fresh
+    // start, making a small advance look "still fresh" by comparison. A
+    // day comfortably exceeds any cumulative advance any single test in
+    // this file performs, so it reliably busts the cache regardless of
+    // execution order.
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000);
+    document.documentElement.lang = 'th';
+    const text = Array(90).fill('word').join(' ');
+
+    const m = createComprehensionMonitor();
+    m.enterParagraph(el(text)); // abstains — paragraphEntry stays null
+    expect(m.getCurrentExpectation()).toBeNull();
+
+    for (const y of [100, 250, 400, 500]) {
+      scrollTo(y);
+      expect(m.onScroll()).toBeNull();
+      vi.advanceTimersByTime(200);
+    }
+    scrollTo(50);
+    const signal = m.onScroll();
+    expect(signal.type).toBe('backtrack');
+    expect(signal.backtrackPx).toBe(450);
   });
 });
 

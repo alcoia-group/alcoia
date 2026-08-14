@@ -24,13 +24,15 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   const BACKEND_DEFAULT     = self.ALCOIA_CONFIG.SUMMARIZE_URL;
   const MIN_SELECTION_CHARS = 15;
   // Interruption cooldowns and budget live in intervention-policy.js — one
-  // place, applied to every telemetry-driven decision.
+  // place, applied to every signal-driven decision.
   // Popup geometry, the open-popup registry and the eviction cap now live in
   // ui-controller.js — it owns everything the reader sees.
   // Fingerprints of paragraphs currently awaiting an AI response (race-condition guard)
   const inFlightFingerprints = new Set();
-  // Session-level cache: mode:fingerprint → summary text (cleared on page unload)
-  const _summaryCache        = new Map();
+  // Item 30a: the AI-fetch pipeline (fetchSummary/fetchQuestions, their
+  // cache, and item 38's rate limiting) now lives in host.js, since it is
+  // required by orchestrator.js's host.onIntervention as much as by the
+  // manual paths below. Reached here via hostApi.fetchSummary/fetchQuestions.
 
   // ── Runtime state ──────────────────────────────────────────────────────
   /* The popup's master switch. It used to write `sra_enabled` to storage and
@@ -41,14 +43,23 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   let backendUrl         = BACKEND_DEFAULT;
   let selectionEnabled   = true;
   let highlightEnabled   = true;
+  // Item 26: two independent controls, not one four-way mode — colour is a
+  // free, client-only display preference; summarising is the AI-calling
+  // half and defaults off. Read live through these lets, same as every
+  // other setting here, so a change takes effect without a page reload.
+  let highlightColorEnabled     = true;
+  let highlightSummarizeEnabled = false;
   let autohideEnabled    = false;
   let autohideTimeoutSec = 12;
   let pinDefault         = false;
   let debugEnabled       = false;
-  let lastCogState       = 'unknown';
   let lastActionAt       = 0;           // manual/simulate paths only; automatic ones use the policy
   let orchestrator       = null;
-  let currentParagraph   = null;
+  // Item 30a: currentParagraph, prevParagraphText and lastCogState now live
+  // in host.js — the exact state setCurrentParagraph/setPrevParagraphText/
+  // setCogState/getCurrentParagraph hold. Reached here via
+  // hostApi.host.getCurrentParagraph()/.setCurrentParagraph(), and
+  // hostApi.getPrevParagraphText()/hostApi.getCogState().
   let pdfHandler         = null;
   let pptxHandler        = null;
   let comprehensionCheckEnabled = true;
@@ -60,7 +71,6 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   let dyslexiaEnabled     = false;
   let dyslexiaColor       = 'rgba(255,243,180,0.12)';
   let bionicEnabled       = false;
-  let prevParagraphText   = '';    // for AI context window
 
   // ── Highlight persistence ──────────────────────────────────────────────
   function saveHighlight(text, summary, state) {
@@ -128,103 +138,70 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   }
 
   // ── Load modules ───────────────────────────────────────────────────────
-  // Loaded here, not from background.js: install-token.js is a real ES
-  // module, and Chrome disallows dynamic import() from inside a service
-  // worker outright. Content scripts have no such restriction. background.js
-  // stays a dumb relay that requires a token to already be attached — see
-  // its 'summarize'/'apiPost' handler and install-token.js's own header.
-  const installTokenModule = await loadModule('src/shared/install-token.js');
-  const installToken = installTokenModule.createInstallTokenManager({
-    tokenUrl: self.ALCOIA_CONFIG.TOKEN_URL,
-  });
-  // Every failure here already degrades to silence for the reader
-  // (invariant 9) — this only makes that silence inspectable afterward, on
-  // the diagnostics page. Never fed passage text, a URL or a page title;
-  // see diag-log.js's own header for why.
-  const diagLogModule = await loadModule('src/shared/diag-log.js');
-  const diagLog = diagLogModule.createDiagLog();
-  // Same origin as wherever the AI call is actually going — a developer who
-  // pointed the popup's Backend URL setting at a local server gets their
-  // token from that same server, not the shipped default.
-  const tokenUrl = () => {
-    try { return new URL('/api/token', backendUrl || BACKEND_DEFAULT).href; }
-    catch (e) { return self.ALCOIA_CONFIG.TOKEN_URL; }
-  };
-  // Every AI request goes through here: resolve the token, attach it, relay
-  // the background worker's response. `ok:false` covers every failure this
-  // item's brief lists — unreachable, non-ok, malformed, or simply no token
-  // yet — and every caller below already treats an ok:false/falsy result as
-  // "nothing to show", so no separate error UI is needed on top of this.
-  async function callBackend(action, url, body) {
-    const token = await installToken.getToken(tokenUrl());
-    if (!token) { diagLog.log(action, 'no_install_token'); return { ok: false, error: 'no_install_token' }; }
-    return await new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage({ action, url, body, token }, (resp) => {
-          if (chrome.runtime.lastError || !resp) { diagLog.log(action, 'no_response'); resolve({ ok: false, error: 'no_response' }); return; }
-          if (resp.tokenRejected) {
-            installToken.invalidate();
-            diagLog.log(action, `token_rejected_${resp.status}`);
-          } else if (!resp.ok) {
-            diagLog.log(action, resp.error || `status_${resp.status}`);
-          }
-          resolve(resp);
-        });
-      } catch (e) { diagLog.log(action, String(e && e.message || e)); resolve({ ok: false, error: String(e && e.message || e) }); }
-    });
-  }
-
   const overlayUtils = await loadModule('src/content/overlay-utils.js');
-  const compModule  = await loadModule('src/content/comprehension-monitor.js');
   const readCalModule = await loadModule('src/content/reading-calibration.js');
   const { runSelfPacedCalibration } = readCalModule;
   const ttsModule      = await loadModule('src/content/tts-handler.js');
-  const rulerModule    = await loadModule('src/content/focus-ruler.js');
   const dyslexiaModule  = await loadModule('src/content/dyslexia-utils.js');
-  const segmentation     = await loadModule('src/content/telemetry/segmentation.js');
+  const segmentation     = await loadModule('src/content/signals/segmentation.js');
   const mapModule       = await loadModule('src/content/reading-map.js');
 
   const ttsHandler    = ttsModule.createTTSHandler();
-  const focusRuler    = rulerModule.createFocusRuler();
   const dyslexiaUtils = dyslexiaModule;
   const readingMap    = mapModule.createReadingMap();
-  const sessionModule  = await loadModule('src/content/session-tracker.js');
-  const sessionTracker = sessionModule.createSessionTracker();
-const comprehensionMonitor = compModule.createComprehensionMonitor({
-  speedRatio:     0.30,
-  minWords:       70,
-  minDifficulty:  58,
-  backtrackWindow:4000,
-  cooldown:       30000,
-});
 
   // ── UI ─────────────────────────────────────────────────────────────────
   const uiModule = await loadModule('src/content/ui-controller.js');
   const { esc, clamp, applyDarkMode } = uiModule;
+  // hostApi is constructed just below and needs `ui` already built (it is a
+  // single shared registry — the project notes: "ui-controller.js owns openPopups
+  // and nothing else may mutate it" — so there can only ever be one
+  // instance). ui's own fetchSummary callback is only ever invoked later,
+  // from a click handler, never at construction time, so this deferred
+  // reference (set right after hostApi exists, a few lines down) resolves
+  // the circularity with no behavioural change — the same pattern this file
+  // already uses for `orchestrator` itself.
+  let hostApi = null;
   const ui = uiModule.createUIController({
     // Read through a getter: the storage listener reassigns these at runtime
     // and a captured copy would go stale.
     getSettings: () => ({
       highlightEnabled, pinDefault, autohideEnabled, autohideTimeoutSec,
     }),
-    fetchSummary: (...a) => fetchSummary(...a),
+    fetchSummary: (...a) => hostApi.fetchSummary(...a),
   });
   const {
     openPopups, highlightElement, closePopup, flashPopup, hidePopup,
-    renderPopup, reservePopup, showPopup,
-    showNudge, showSimulateToast, showStatusToast,
+    renderPopup,
+    showNudge, showSimulateToast,
   } = ui;
 
-  // ── Snooze (item 18) ─────────────────────────────────────────────────────
-  const snoozeModule = await loadModule('src/content/snooze.js');
-  const snoozeControl = snoozeModule.createSnoozeControl();
-
-  // ── Question layer ─────────────────────────────────────────────────────
-  const responseModule = await loadModule('src/content/telemetry/response-signals.js');
-  const cardModule     = await loadModule('src/content/question-card.js');
-  const responseSignals = responseModule.createResponseSignals();
-  const recallModule = await loadModule('src/content/telemetry/session-recall.js');
-  const sessionRecall = recallModule.createSessionRecall();
+  // ── Host (item 30a) ─────────────────────────────────────────────────────
+  // Everything orchestrator.js's 12-callback host contract needs — the
+  // AI-fetch pipeline (and item 38's rate limiting on it), the question
+  // card, quiz generation, session recall/tracking, the focus ruler and
+  // snooze — now lives in host.js, importable from a content script or an
+  // extension page alike. See the project notes' "Extracting the host from
+  // content.js (item 30a)" section for the full inventory and reasoning.
+  const hostModule = await loadModule('src/content/host.js');
+  hostApi = await hostModule.createHost({
+    loadModule,
+    ui,
+    esc,
+    log: _log,
+    warn: _warn,
+    // Read live: the storage listener reassigns these at runtime. A
+    // deliberately small surface — only what host.js's own code reads.
+    settings: () => ({ assistantEnabled, backendUrl }),
+  });
+  const {
+    fetchSummary, callBackend,
+    runQuiz, runSessionRecall, startSnooze, snoozeControl, SNOOZE_OPTIONS,
+    sessionRecall, responseSignals, sessionTracker, focusRuler,
+    comprehensionMonitor, setPdfHandler, setPptxHandler, getCogState,
+    getPrevParagraphText, setOrchestrator,
+  } = hostApi;
+  const hostCallbacks = hostApi.host;
 
   // ── Receipt ────────────────────────────────────────────────────────────
   // Reader-generated only. Nothing below runs on a timer, and nothing leaves
@@ -259,191 +236,31 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   function showReceipt() { receiptPanel.show(buildCurrentReceipt()); }
 
-  // Opens the quiz page in a new tab. Content scripts cannot call
-  // chrome.tabs.create directly — relayed through background.js's existing
-  // 'openTab' handler, the same one popup.js's notes/highlights/etc. use via
-  // chrome.tabs.create itself (an extension page can call it directly; a
-  // content script cannot, hence the relay only here).
-  function openQuizPage(key) {
-    const url = chrome.runtime.getURL('src/popup/quiz.html') + (key ? '?key=' + encodeURIComponent(key) : '');
-    try { chrome.runtime.sendMessage({ action: 'openTab', url }); } catch (e) {}
-  }
-
-  /* the project notes: "5-8 questions... one server call per quiz... one passage
-   * batch in, N questions out." session-recall.js's weighted select() picks
-   * the paragraphs; they are joined into ONE passage and sent in ONE
-   * fetchQuestions() call with count set to the top of the range — the
-   * existing /api/questions contract already accepts a count, so this reuses
-   * it rather than inventing a batch endpoint the server does not have.
-   * `clampCount` in the server's own question-validation contract caps count
-   * at 5 today (see tests/contract/questions.js), so a real deployment may
-   * return fewer than 8 even when asked for more; nothing here assumes a
-   * specific number back, only a minimum worth showing as a quiz. */
-  const QUIZ_TARGET_COUNT = 8;
-  const QUIZ_MIN_QUESTIONS = 5;
-  let quizGenerating = false;
-
-  /* Selects, generates and stashes a quiz for the current document, then
-   * opens the quiz page to pick it up. Returns true only if a quiz was
-   * actually produced — the caller (the offer card, or the popup via
-   * startQuiz) uses that to show or not show a busy/failure state. Nothing
-   * here writes passage text to disk: the joined text lives only in this
-   * function's memory and in the one outgoing request body. */
-  async function runQuiz() {
-    if (quizGenerating) return false;
-    const key = orchestrator.documentKey();
-    if (!key) return false;
-
-    quizGenerating = true;
-    try {
-      const picked = sessionRecall.select(QUIZ_TARGET_COUNT);
-      if (!picked.length) return false;
-
-      const combinedText = picked.map((p) => p.text).join('\n\n');
-      const questions = await fetchQuestions(combinedText, { count: QUIZ_TARGET_COUNT, kind: 'recall' });
-      // Fewer than the floor is a generation failure, not a shorter quiz —
-      // invariant 9's "a wrong intervention is worse than a missed one"
-      // extends here as "no quiz is better than a thin, unrepresentative one".
-      if (questions.length < QUIZ_MIN_QUESTIONS) return false;
-
-      await new Promise((resolve) => chrome.storage.local.set({
-        sra_quiz_pending: { key, questions: questions.slice(0, QUIZ_TARGET_COUNT), createdAt: Date.now() },
-      }, resolve));
-
-      openQuizPage(key);
-      return true;
-    } catch (e) {
-      return false;
-    } finally {
-      quizGenerating = false;
-    }
-  }
-
-  /* The unprompted end-of-reading offer. Reader-initiated once shown — no
-   * interruption budget was spent to put it on screen (quiz-offer.js never
-   * touches intervention-policy.js) and none is spent by dismissing it. */
-  function showQuizOffer(result) {
-    if (!assistantEnabled) return;
-    const fingerprint = 'quiz-offer-' + (result.key || 'doc');
-    const root = reservePopup(fingerprint);
-    if (!root) return;
-
-    root.innerHTML = `
-      <div class="sra-controls">
-        <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
-      </div>
-      <div class="sra-popup-body">
-        <div class="sra-state-badge sra-q-badge">quiz</div>
-        <div class="sra-q-text">Ready to test what you remember?</div>
-      </div>
-      <div class="sra-popup-divider"></div>
-      <div class="sra-actions">
-        <button class="sra-btn sra-btn-primary sra-quiz-start-btn">Take the quiz</button>
-        <button class="sra-btn sra-btn-secondary sra-q-skip">Not now</button>
-      </div>`;
-
-    const dismiss = () => closePopup(root, fingerprint);
-    root.querySelector('.sra-close-btn').onclick = dismiss;
-    root.querySelector('.sra-q-skip').onclick = dismiss;
-    root.querySelector('.sra-quiz-start-btn').onclick = async () => {
-      const btn = root.querySelector('.sra-quiz-start-btn');
-      btn.disabled = true;
-      btn.textContent = 'Preparing…';
-      const ok = await runQuiz();
-      if (!ok) { btn.disabled = false; btn.textContent = 'Take the quiz'; return; }
-      dismiss();
-    };
-
-    showPopup(root, null);
-  }
-  const questionCard = cardModule.createQuestionCard({
-    ui,
-    esc,
-    responseSignals,
-    // Scoped to the sentence the reader missed, not the whole paragraph.
-    fetchExplanation: (spanText) => fetchSummary(spanText, 'explain_more'),
-    onAnswered: (record) => {
-      // An answer outranks every telemetry signal — see state-engine.js.
-      try { orchestrator.pumpTelemetry(record); } catch (e) {}
-      try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
-      // A paragraph already answered correctly is a poor use of a recall slot.
-      if (record.paragraphKey) sessionRecall.recordAnswered(record.paragraphKey, record.correct);
-      // Any answer — right or wrong — is engagement, which is what clears
-      // the dismissal backoff below.
-      try { orchestrator.interventionPolicy.recordAnswered(); } catch (e) {}
-    },
-    onDismissed: () => {
-      // Declining to be tested says nothing about comprehension, and is
-      // never scored — but it is still the reader saying "not now", and
-      // three in a row raises the bar on further questions. See
-      // intervention-policy.js's dismissalBackoff.
-      try { orchestrator.interventionPolicy.recordDismissal(); } catch (e) {}
-    },
-    onSnooze: (durationMs, label) => { startSnooze(durationMs, label); },
-  });
-
-  /* Shared by the card's own snooze control and the popup's. Recording the
-   * dismissal for a popup-triggered snooze happens at the message handler,
-   * not here — from the card, dismiss() (called right after this) already
-   * records it, and doing it twice would double-count one snooze as two
-   * consecutive dismissals toward item 10's backoff. */
-  async function startSnooze(durationMs, label) {
-    const until = await snoozeControl.snooze(durationMs);
-    showStatusToast(`Snoozed${label ? ' for ' + label : ''} — reminders paused`);
-    return until;
-  }
-
   // ── Detection pipeline ─────────────────────────────────────────────────
   // orchestrator.js owns the detectors, the state engine and the interruption
-  // budget. It decides; this file renders. onIntervention returns whether
-  // anything actually reached the screen, and the budget is spent only on a
-  // yes — an offer that bails out here must not burn one of the reader's five.
+  // budget. It decides; this file (via host.js) renders. onIntervention
+  // returns whether anything actually reached the screen, and the budget is
+  // spent only on a yes — an offer that bails out here must not burn one of
+  // the reader's five.
   const orchModule = await loadModule('src/content/orchestrator.js');
   orchestrator = await orchModule.createOrchestrator({
     loadModule,
     comprehensionMonitor,
-    // Read live: the storage listener reassigns these at runtime.
+    // Read live: the storage listener reassigns these at runtime. A
+    // separate accessor from host.js's own settings() above — orchestrator.js
+    // reads a different, wider subset.
     settings: () => ({
       assistantEnabled,
       comprehensionCheckEnabled, focusRulerEnabled,
       debugEnabled,
     }),
-    host: {
-      sessionTracker,
-      focusRuler,
-      log: _log,
-      findParagraphAt: (x, y) => findParagraphAt(x, y),
-      getCurrentParagraph: () => currentParagraph,
-      setCurrentParagraph: (p) => { currentParagraph = p; },
-      setPrevParagraphText: (t) => { prevParagraphText = t; },
-      setCogState: (label) => { lastCogState = label; },
-      onParagraphRead: (text, dwellMs) => sessionRecall.recordRead(text, dwellMs),
-      onStruggle: (text) => sessionRecall.recordStruggle(text),
-      onQuizOfferEligible: (result) => showQuizOffer(result),
-      onIntervention: async (decision, state, target) => {
-        // Off means off: nothing reaches the screen, and the budget is not
-        // spent on an offer that was never made.
-        if (!assistantEnabled) return false;
-        // Item 18: only the final render is suppressed. Detection, coverage
-        // tracking and the quiz gate all keep running above this — pausing
-        // those too would mean a reader who snoozes never reaches the quiz
-        // gate, which is a worse outcome than a paused reminder.
-        if (await snoozeControl.isActive()) return false;
-        if (decision.action === 'nudge') {
-          showNudge(target);
-          if (target) highlightElement(target, 3000);
-          return true;
-        }
-        if (decision.action === 'ask') {
-          return await handleAsk(decision, state, target);
-        }
-        // intervention-policy.js's STATE_ACTIONS only ever produces 'ask' or
-        // 'nudge' for an allowed decision — 'none' is denied before this is
-        // ever called — so there is no third branch to fall through to here.
-        return false;
-      },
-    },
+    host: hostCallbacks,
   });
+  // host.js's questionCard/runQuiz callbacks reference orchestrator, which
+  // did not exist yet when they were built — see host.js's own header for
+  // why this is safe (a reader cannot answer a question before boot
+  // completes).
+  setOrchestrator(orchestrator);
 
   // ── Load settings ──────────────────────────────────────────────────────
   // Boot waits on this so nothing acts on defaults before the reader's real
@@ -459,11 +276,14 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     sra_tts: false, sra_focus_ruler: false, sra_dyslexia: false,
     sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
     sra_baseline_wpm: null, sra_dark_mode: false,
+    sra_highlight_color: true, sra_highlight_summarize: false,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     assistantEnabled   = res.sra_enabled !== false;
     selectionEnabled   = res.sra_selection !== false;
     highlightEnabled   = res.sra_highlight_para !== false;
+    highlightColorEnabled     = res.sra_highlight_color !== false;
+    highlightSummarizeEnabled = !!res.sra_highlight_summarize;
     autohideEnabled    = !!res.sra_autohide;
     autohideTimeoutSec = res.sra_autohide_timeout || 12;
     pinDefault         = !!res.sra_pin_default;
@@ -484,50 +304,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   // ── Utilities ──────────────────────────────────────────────────────────
   // esc and clamp live in ui-controller.js, imported above with the rest of it.
-
-  // ── AI fetch ───────────────────────────────────────────────────────────
-  async function fetchSummary(text, mode = 'tldr', context = '') {
-    // Cache hit: serve instantly for repeated requests within the same session.
-    // page_summary is excluded — it depends on the full live page content.
-    if (mode !== 'page_summary') {
-      const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
-      if (_summaryCache.has(cacheKey)) {
-        _log(`Cache hit: ${mode}`);
-        return _summaryCache.get(cacheKey);
-      }
-    }
-    try {
-      const url = backendUrl || BACKEND_DEFAULT;
-      _log(`Fetching ${url} mode=${mode} len=${text.length}`);
-      const body = { text: text.slice(0, 3500), mode };
-      if (context) body.context = context.slice(0, 800);
-
-      // Route the request through the background service worker rather than
-      // fetching directly. A direct fetch from a content script carries the
-      // host PAGE's origin (e.g. https://en.wikipedia.org), which the server's
-      // CORS policy correctly rejects. The background worker's fetch carries no
-      // page origin, so it passes CORS while keeping the server locked down to
-      // the extension only. callBackend() attaches the install token and
-      // relays whatever background.js returns.
-      const resp = await callBackend('summarize', url, body);
-      if (!resp.ok) { _warn(`Server ${resp.status || ''} ${resp.error || ''}`); return null; }
-      const j = resp.data;
-      if (!j) return null;
-
-      const result = j.summary || j.result || null;
-      if (result && mode !== 'page_summary') {
-        const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
-        _summaryCache.set(cacheKey, result);
-        // Keep cache size bounded — drop oldest entry when over 100
-        if (_summaryCache.size > 100) _summaryCache.delete(_summaryCache.keys().next().value);
-      }
-      return result;
-    } catch (e) {
-      _warn('fetchSummary failed:', e.message);
-      return null;
-    }
-  }
-
+  // fetchSummary (item 30a) now lives in host.js — reached here as
+  // hostApi.fetchSummary, destructured above as `fetchSummary`.
 
   // ── Simulated states (testing only) ────────────────────────────────────
   // The panel and these shortcuts speak the engine's vocabulary — on_pace,
@@ -552,15 +330,16 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
     showSimulateToast(state);
     lastActionAt = 0;
-    lastCogState = state;
+    hostCallbacks.setCogState(state);
     try { chrome.storage.local.set({ sra_current_state: state }); } catch (e) {}
 
     if (action === 'explain' || action === 'simplify') {
-      const para = await findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
-      if (para) { currentParagraph = para; await triggerAIForParagraph(para, state); }
+      const para = await hostCallbacks.findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
+      if (para) { hostCallbacks.setCurrentParagraph(para); await triggerAIForParagraph(para, state); }
       else _warn('No paragraph found at viewport centre for simulate');
     } else if (action === 'nudge') {
-      const el = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
+      const cp = hostCallbacks.getCurrentParagraph();
+      const el = cp?.type === 'dom' ? cp.data : null;
       showNudge(el); if (el) highlightElement(el, 3000);
     }
     return state;
@@ -588,8 +367,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       // that reaches pdfHandler/pptxHandler via findParagraphAt() below
       if (e.key === 's' || e.key === 'S') {
         e.preventDefault();
-        const para = await findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
-        if (para) { currentParagraph = para; lastActionAt = 0; await triggerAIForParagraph(para, 'manual'); }
+        const para = await hostCallbacks.findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
+        if (para) { hostCallbacks.setCurrentParagraph(para); lastActionAt = 0; await triggerAIForParagraph(para, 'manual'); }
         return;
       }
 
@@ -650,122 +429,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   }
 
 
-  // ── Questions ──────────────────────────────────────────────────────────
-  // The primary intervention. Asking beats summarising because an answer is
-  // the only thing here that produces ground truth, and because summarising
-  // removes the difficulty that produces retention in the first place.
-  const questionsUrl = () => (backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/questions');
-
-  async function fetchQuestions(text, opts = {}) {
-    if (!text || text.trim().length < 120) return [];
-    const body = {
-      text: text.slice(0, 3500),
-      language: (document.documentElement.lang || '').slice(0, 5),
-      count: opts.count || 1,
-      kind: opts.kind || 'recall',
-    };
-    // Through the background worker, for the same CORS reason as fetchSummary:
-    // a content script's fetch carries the host page's origin and the server
-    // rejects it. A direct fetch here works only when the page happens to be
-    // same-origin with the server, which is true in tests and false in life.
-    const resp = await callBackend('apiPost', questionsUrl(), body);
-    if (!resp.ok) {
-      // 422 means nothing passed the server's citation check; 503 means no
-      // key; no_install_token means the token couldn't be resolved. All are
-      // ordinary failure outcomes and all degrade to silence — see
-      // handleAsk(), which treats an empty result as nothing to show rather
-      // than falling back to an explanation.
-      _log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
-      return [];
-    }
-    const j = resp.data;
-    if (!j) return [];
-    return Array.isArray(j.questions) ? j.questions : [];
-  }
-
-  /* Returns true only if a card reached the screen. */
-  async function handleAsk(decision, state, target) {
-    const el = target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
-    const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
-    if (!text) return false;
-
-    // Every way this can come back empty — network failure, a non-ok status
-    // (422 nothing passed the server's citation check, 503 no key), a
-    // malformed response, or a genuine empty result — collapses to the same
-    // outcome here: silence. This used to fall back to a comprehension-offer
-    // popup or a summary, which meant a failed *question* call quietly
-    // became a shown *explanation*, on a product whose whole premise is that
-    // asking beats summarising. A wrong intervention is worse than a missed
-    // one (invariant 9) — nothing reaches the screen and the caller does not
-    // spend the interruption budget on an offer that was never made.
-    const questions = await fetchQuestions(text);
-    if (!questions.length) return false;
-
-    let anchorRect = null;
-    try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
-    if (el) highlightElement(el, 4000);
-
-    return questionCard.show(questions[0], {
-      evidence: decision.evidence,
-      anchorRect,
-      paragraphKey: text.slice(0, 80).trim(),
-      wasExplorationSample: decision.wasExplorationSample === true,
-    });
-  }
-
-  // ── Session recall ─────────────────────────────────────────────────────
-  // Retrieval practice over what was actually read, weighted toward the
-  // paragraphs that gave the reader trouble. Reader-initiated only: this never
-  // fires on its own, and nothing about it is submitted anywhere.
-  let recallRunning = false;
-
-  async function runSessionRecall(count = 5) {
-    if (recallRunning) return;
-    const picked = sessionRecall.select(count);
-    if (!picked.length) {
-      showSimulateToast('Nothing read yet to review');
-      return;
-    }
-
-    recallRunning = true;
-    try {
-      const questions = [];
-      for (const entry of picked) {
-        const qs = await fetchQuestions(entry.text, { count: 1 });
-        if (qs.length) questions.push({ question: qs[0], paragraphKey: entry.text.slice(0, 80).trim() });
-        if (questions.length >= count) break;
-      }
-
-      if (!questions.length) {
-        showSimulateToast('Could not prepare a review right now');
-        return;
-      }
-
-      // One at a time. A wall of questions is a test; one question is a check.
-      for (const item of questions) {
-        const shown = questionCard.show(item.question, {
-          evidence: ['Reviewing what you read this session'],
-          paragraphKey: item.paragraphKey,
-        });
-        if (!shown) continue;
-        await waitForCardToClose();
-      }
-    } finally {
-      recallRunning = false;
-    }
-  }
-
-  function waitForCardToClose() {
-    return new Promise((resolve) => {
-      const started = Date.now();
-      const tick = setInterval(() => {
-        const open = document.querySelector('.sra-popup .sra-q-options');
-        // Resolve on close, or bail out after two minutes so a forgotten card
-        // cannot wedge the run forever.
-        if (!open || Date.now() - started > 120000) { clearInterval(tick); resolve(); }
-      }, 400);
-    });
-  }
+  // Item 30a: fetchQuestions, handleAsk, runSessionRecall and
+  // waitForCardToClose now live in host.js — see hostApi.fetchQuestions and
+  // hostApi.runSessionRecall (Alt+R / the message listener's 'sessionRecall'
+  // action both call the latter). handleAsk backs host.js's own
+  // onIntervention 'ask' branch and has no direct call site left here.
 
   // ── Text highlighting (Ctrl+drag to select) ────────────────────────────
   function showColorPicker(range, clientX, clientY) {
@@ -825,7 +493,70 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (p) p.remove();
   }
 
-  function applyTextHighlight(range, bgColor, colorKey) {
+  // Item 25: which block (by index among the same p/li/blockquote selector
+  // paragraph-tracker.js's own scan uses) a highlight's mark sits in. Cheap
+  // to compute, and used only as a *secondary* signal at restore time —
+  // never to pick a match on its own. Positions shift when ads or images
+  // load; the quoted text plus its context is what actually identifies the
+  // highlight, this is only a tie-breaker among candidates the text+context
+  // check already accepts.
+  const HIGHLIGHT_BLOCK_SELECTOR = 'p, li, blockquote';
+  function blockIndexOf(node) {
+    const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+    const block = el?.closest?.(HIGHLIGHT_BLOCK_SELECTOR);
+    if (!block) return -1;
+    return Array.prototype.indexOf.call(document.querySelectorAll(HIGHLIGHT_BLOCK_SELECTOR), block);
+  }
+
+  // Per-document highlight count, matching the existing sra_highlights cap.
+  const MAX_HIGHLIGHTS_PER_DOC = 100;
+  // Total documents tracked across the whole extension, mirroring
+  // coverage-gate.js's MAX_DOCS (150) and sra_last_visit's existing cap —
+  // the same shape used everywhere else this codebase keys data per
+  // document. Least-recently-touched document (by its highlights' own
+  // latest timestamp — the stored shape is { [urlKey]: [...entries] } with
+  // no separate per-document metadata, so the entries' own timestamps are
+  // the only signal of when a document was last touched) is evicted once
+  // this is exceeded.
+  const MAX_HIGHLIGHT_DOCS = 150;
+  // Item 36: the explanation persisted alongside a highlight. The highlight
+  // text itself is capped at 300 chars; the explanation gets a tighter
+  // budget — 200 chars, roughly 1-2 sentences, enough to be useful on the
+  // Highlights page without dominating storage. This is deliberately
+  // shorter than what the transient popup shows (the full fetched summary,
+  // unchanged) — the popup is the one-time read, the stored copy is a
+  // scannable reminder. Worst case: MAX_HIGHLIGHTS_PER_DOC (100) *
+  // MAX_HIGHLIGHT_DOCS (150) = 15,000 highlight entries, each with a
+  // 200-char explanation (~400 bytes as UTF-16) plus the ~150-200 bytes
+  // already budgeted for text/context/url/title/etc — call it ~550-600
+  // bytes/entry total, so roughly 8-9 MB in the pathological case where
+  // every single highlight slot in every tracked document has a real,
+  // maxed-out explanation. That is far outside any realistic reader's
+  // actual use (it requires manually Ctrl+drag-highlighting with this
+  // toggle on, one hundred times, on a hundred and fifty separate sites),
+  // but it is why the cap is 200 and not the 300 the highlight text gets:
+  // the quoted passage is the highlight; the AI's gloss on it is secondary
+  // and gets a smaller share of a shared, non-unlimited storage budget.
+  const HIGHLIGHT_EXPLANATION_MAX_CHARS = 200;
+
+  // Item 36: patches the explanation onto an already-saved highlight once
+  // its assist call resolves — the initial write above already happened by
+  // the time this runs (local storage read/write is microtask-fast; the
+  // network fetch it waits on is not). Matches by id and re-reads fresh so
+  // it is correct regardless of ordering. If the entry is gone by then
+  // (deleted by the reader, or evicted by one of the two caps above), this
+  // is a silent no-op — there is nothing left to attach the explanation to,
+  // and that is not a failure worth surfacing.
+  function saveHighlightExplanation(urlKey, hlId, explanation) {
+    chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: hl }) => {
+      const entry = (hl[urlKey] || []).find((e) => e.id === hlId);
+      if (!entry) return;
+      entry.explanation = explanation.slice(0, HIGHLIGHT_EXPLANATION_MAX_CHARS);
+      chrome.storage.local.set({ sra_text_highlights: hl });
+    });
+  }
+
+  async function applyTextHighlight(range, bgColor, colorKey) {
     if (!range || range.collapsed) return;
     const text = range.toString().trim();
     if (!text || text.length > 2000) return; // guard against Ctrl+A
@@ -848,23 +579,55 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
     mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
 
-    // Context for restoration
+    // Context for restoration — the W3C Web Annotation TextQuoteSelector
+    // shape: the exact text plus a short prefix and suffix of surrounding
+    // context. This, not position, is the primary anchor at restore time.
     const bodyText = document.body.innerText || '';
     const pos = bodyText.indexOf(text);
     const ctxBefore = pos > 0 ? bodyText.slice(Math.max(0, pos - 40), pos).trim() : '';
     const ctxAfter  = pos >= 0 ? bodyText.slice(pos + text.length, pos + text.length + 40).trim() : '';
+    const paragraphIndex = blockIndexOf(mark);
 
     const urlKey = window.location.hostname + window.location.pathname;
     chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: hl }) => {
       if (!hl[urlKey]) hl[urlKey] = [];
       hl[urlKey].push({
         id: hlId, text: text.slice(0, 300), color: bgColor, colorKey,
-        ctxBefore, ctxAfter,
+        ctxBefore, ctxAfter, paragraphIndex,
         url: window.location.href, title: document.title, timestamp: Date.now(),
       });
-      if (hl[urlKey].length > 100) hl[urlKey].shift();
+      if (hl[urlKey].length > MAX_HIGHLIGHTS_PER_DOC) hl[urlKey].shift();
+
+      const keys = Object.keys(hl);
+      if (keys.length > MAX_HIGHLIGHT_DOCS) {
+        const lastTouched = (k) => hl[k].reduce((max, e) => Math.max(max, e.timestamp || 0), 0);
+        const oldest = keys.reduce((a, b) => (lastTouched(a) <= lastTouched(b) ? a : b));
+        if (oldest !== urlKey) delete hl[oldest];
+      }
+
       chrome.storage.local.set({ sra_text_highlights: hl });
     });
+
+    // Item 26: the AI-calling half of "what a highlight does", off by
+    // default and independent of the colour toggle above — a reader can
+    // want the colour mark without spending an assist on every one of them.
+    // Read live at the point of action, not a captured copy, same as every
+    // other flag in this file.
+    if (highlightSummarizeEnabled) {
+      let anchorRect = null;
+      try { const r = mark.getBoundingClientRect(); if (r.width || r.height) anchorRect = r; } catch (e) {}
+      const mode = isLikelyCode(text) ? 'explain_code' : 'tldr';
+      const summary = await fetchSummary(text, mode);
+      if (summary) {
+        renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source: 'highlight', mode });
+        // Item 36: persisted alongside the highlight, not just shown once.
+        saveHighlightExplanation(urlKey, hlId, summary);
+      }
+      // A failed fetch degrades to silence here, same as every other AI call
+      // in this file (invariant 9) — the colour mark itself already landed
+      // and is not undone by a summary that could not be fetched. No retry:
+      // a silent retry would spend an assist the reader never asked for.
+    }
   }
 
   function deleteTextHighlight(hlId, markEl) {
@@ -891,37 +654,80 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     });
   }
 
-  function restoreSingleHighlight({ id: hlId, text, color, ctxBefore }) {
+  /* Quote-based anchoring (W3C TextQuoteSelector shape): find every place
+   * the exact highlighted text still occurs, score each by how well the
+   * stored prefix/suffix context matches around it, and only fall back to
+   * the stored paragraphIndex as a *tie-breaker* among candidates the
+   * context already accepts — never to pick a match on its own. If nothing
+   * has any context confirmation at all (a repeated short phrase with no
+   * matching surroundings anywhere), this refuses to guess and leaves the
+   * entry in storage untouched: attaching a reader's highlight to text they
+   * did not highlight is worse than not showing it. */
+  function restoreSingleHighlight({ id: hlId, text, color, ctxBefore, ctxAfter, paragraphIndex }) {
     if (!text || text.length < 2) return;
+
+    const candidates = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
       const tag = node.parentElement?.tagName?.toUpperCase?.();
-      if (['SCRIPT','STYLE','NOSCRIPT','MARK'].includes(tag)) continue;
-      const idx = node.textContent.indexOf(text);
-      if (idx === -1) continue;
-      // Light context check to avoid wrong match
-      const pre = node.textContent.slice(0, idx).trim().slice(-20);
-      if (ctxBefore && ctxBefore.length > 4 && !ctxBefore.endsWith(pre.slice(-4)) && !pre.endsWith(ctxBefore.slice(-8))) continue;
-
-      const range = document.createRange();
-      range.setStart(node, idx);
-      range.setEnd(node, Math.min(idx + text.length, node.textContent.length));
-
-      const mark = document.createElement('mark');
-      mark.dataset.sraHlId = hlId;
-      mark.style.cssText = `background:${color};border-radius:3px;padding:0 1px;mix-blend-mode:multiply;cursor:default;`;
-      mark.title = 'Double-click to remove highlight';
-      mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
-
-      try {
-        range.surroundContents(mark);
-      } catch (_) {
-        const frag = range.extractContents();
-        mark.appendChild(frag);
-        range.insertNode(mark);
+      if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'MARK'].includes(tag)) continue;
+      let from = 0, idx;
+      while ((idx = node.textContent.indexOf(text, from)) !== -1) {
+        candidates.push({ node, idx });
+        from = idx + 1;
       }
-      return;
+    }
+    if (!candidates.length) return; // text is gone — fail silently, stays in storage
+
+    const contextScore = ({ node, idx }) => {
+      const pre  = node.textContent.slice(0, idx).trim().slice(-40);
+      const post = node.textContent.slice(idx + text.length).trim().slice(0, 40);
+      let score = 0;
+      if (ctxBefore && ctxBefore.length > 4 && (pre.endsWith(ctxBefore.slice(-20)) || ctxBefore.endsWith(pre.slice(-8)))) score += 2;
+      if (ctxAfter && ctxAfter.length > 4 && (post.startsWith(ctxAfter.slice(0, 20)) || ctxAfter.startsWith(post.slice(0, 8)))) score += 2;
+      return score;
+    };
+
+    let winner = null;
+    if (candidates.length === 1) {
+      winner = candidates[0];
+    } else {
+      const scored = candidates
+        .map((c) => ({ ...c, score: contextScore(c) }))
+        .filter((c) => c.score > 0);
+      if (scored.length === 1) {
+        winner = scored[0];
+      } else if (scored.length > 1) {
+        // Position is only consulted among candidates context already
+        // confirmed, and only to break ties between equally-confirmed ones.
+        scored.sort((a, b) => (b.score - a.score)
+          || ((Number.isInteger(paragraphIndex) ? Math.abs(blockIndexOf(a.node) - paragraphIndex) : Infinity)
+            - (Number.isInteger(paragraphIndex) ? Math.abs(blockIndexOf(b.node) - paragraphIndex) : Infinity)));
+        winner = scored[0];
+      }
+      // scored.length === 0: multiple identical-text candidates, none with
+      // any matching context — genuinely ambiguous. Abstain.
+    }
+    if (!winner) return;
+
+    const { node: winnerNode, idx } = winner;
+    const range = document.createRange();
+    range.setStart(winnerNode, idx);
+    range.setEnd(winnerNode, Math.min(idx + text.length, winnerNode.textContent.length));
+
+    const mark = document.createElement('mark');
+    mark.dataset.sraHlId = hlId;
+    mark.style.cssText = `background:${color};border-radius:3px;padding:0 1px;mix-blend-mode:multiply;cursor:default;`;
+    mark.title = 'Double-click to remove highlight';
+    mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
+
+    try {
+      range.surroundContents(mark);
+    } catch (_) {
+      const frag = range.extractContents();
+      mark.appendChild(frag);
+      range.insertNode(mark);
     }
   }
 
@@ -1090,6 +896,43 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   // ── Selection alcoia (or Ctrl+drag → colour highlight) ──────────────────
   document.addEventListener('mouseup', async (ev) => {
     if (!assistantEnabled) return;
+
+    // Ctrl/Cmd + drag → colour highlight and/or an AI summary, per the two
+    // independent item-26 toggles (never the plain-selection summary toggle
+    // below — a reader can want either of these without the other):
+    //   colour on,  summarize on/off → the existing colour-picker flow;
+    //     applyTextHighlight() itself checks highlightSummarizeEnabled once
+    //     a swatch is actually picked.
+    //   colour off, summarize on     → no picker, no mark; summarise the
+    //     selection directly (the rejected four-way design's "summary only").
+    //   colour off, summarize off    → Ctrl+drag does nothing.
+    if (ev.ctrlKey || ev.metaKey) {
+      if (!highlightColorEnabled && !highlightSummarizeEnabled) return;
+      let selRange = null;
+      let selText  = '';
+      try {
+        const sel = window.getSelection();
+        selText = sel?.toString().trim() || '';
+        if (selText.length >= MIN_SELECTION_CHARS && sel.rangeCount > 0) {
+          selRange = sel.getRangeAt(0).cloneRange();
+        }
+      } catch (e) {}
+      if (!selRange) return;
+
+      if (highlightColorEnabled) {
+        removeColorPicker();
+        showColorPicker(selRange, ev.clientX, ev.clientY);
+      } else {
+        let anchorRect = null;
+        try { const r = selRange.getBoundingClientRect(); if (r.width || r.height) anchorRect = r; } catch (e) {}
+        if (!anchorRect) anchorRect = { left: ev.clientX, right: ev.clientX + 8, top: ev.clientY, bottom: ev.clientY + 8 };
+        const mode = isLikelyCode(selText) ? 'explain_code' : 'tldr';
+        const summary = await fetchSummary(selText, mode);
+        if (summary) renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text: selText, source: 'highlight', mode });
+      }
+      return;
+    }
+
     if (!selectionEnabled) return;
 
     let selected = '';
@@ -1100,13 +943,6 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       if (sel?.rangeCount > 0) selRange = sel.getRangeAt(0).cloneRange();
     } catch (e) {}
     if (!selected || selected.length < MIN_SELECTION_CHARS) return;
-
-    // Ctrl/Cmd + drag → colour highlight instead of AI summary
-    if (ev.ctrlKey || ev.metaKey) {
-      removeColorPicker();
-      if (selRange) showColorPicker(selRange, ev.clientX, ev.clientY);
-      return;
-    }
 
     // Highlight source element
     try {
@@ -1142,14 +978,10 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     readingMap.recordEvent('summarized', selected.slice(0, 40));
   });
 
-  // ── Paragraph finder ───────────────────────────────────────────────────
-  async function findParagraphAt(cx, cy) {
-    if (pdfHandler?.findParagraphAt)  { const p = await pdfHandler.findParagraphAt(cx,cy);  if(p) return {type:'pdf', data:p}; }
-    if (pptxHandler?.findParagraphAt) { const p = await pptxHandler.findParagraphAt(cx,cy); if(p) return {type:'pptx',data:p}; }
-    const el = document.elementFromPoint(cx, cy);
-    if (!el) return null;
-    return { type: 'dom', data: overlayUtils.getBlockAncestor(el) || el };
-  }
+  // Item 30a: findParagraphAt now lives in host.js — one of orchestrator.js's
+  // 12 callbacks — reached here as hostCallbacks.findParagraphAt(). It still
+  // checks pdfHandler/pptxHandler first, but only whichever host.js was
+  // handed via setPdfHandler()/setPptxHandler() below, in detectAndInitHandlers().
 
   // ── Summarise/explain a paragraph (simulate path, manual Alt+S) ────────
   async function triggerAIForParagraph(paraInfo, reason) {
@@ -1192,7 +1024,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (ttsEnabled) ttsHandler.speak(text, { el: el || null });
 
     try {
-      const summary = await fetchSummary(text, mode, prevParagraphText);
+      const summary = await fetchSummary(text, mode, getPrevParagraphText());
       if (!summary) return;
       renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source:'reading', trigger:reason, triggerLabel });
       saveHighlight(text, summary, reason);
@@ -1207,16 +1039,16 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   async function detectAndInitHandlers() {
     const url = window.location.href;
     if (/\.pdf($|[?#])/i.test(url) || document.querySelector('embed[type="application/pdf"]')) {
-      try { const m = await loadModule('src/content/pdf-handler.js'); pdfHandler = await m.initPDFHandler(); } catch(e) {_warn('PDF:',e);}
+      try { const m = await loadModule('src/content/pdf-handler.js'); pdfHandler = await m.initPDFHandler(); setPdfHandler(pdfHandler); } catch(e) {_warn('PDF:',e);}
     }
     if (/\.pptx($|[?#])/i.test(url) || document.querySelector('a[href$=".pptx"]')) {
-      try { const m = await loadModule('src/content/pptx-handler.js'); pptxHandler = await m.initPPTXHandler(); } catch(e) {_warn('PPTX:',e);}
+      try { const m = await loadModule('src/content/pptx-handler.js'); pptxHandler = await m.initPPTXHandler(); setPptxHandler(pptxHandler); } catch(e) {_warn('PPTX:',e);}
     }
   }
 
   // ── Public API ─────────────────────────────────────────────────────────
   window.sra = window.sra || {};
-  window.sra.getState = () => lastCogState;
+  window.sra.getState = () => getCogState();
 
   // ── Message listener ───────────────────────────────────────────────────
   // Deliberately NOT `async (msg, _, sendResponse) => {...}`. Chrome decides
@@ -1252,6 +1084,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (msg.type === 'settings') {
       if (msg.selection     !== undefined) selectionEnabled   = !!msg.selection;
       if (msg.highlightPara !== undefined) highlightEnabled   = !!msg.highlightPara;
+      if (msg.highlightColor     !== undefined) highlightColorEnabled     = !!msg.highlightColor;
+      if (msg.highlightSummarize !== undefined) highlightSummarizeEnabled = !!msg.highlightSummarize;
       if (msg.autohide      !== undefined) autohideEnabled    = !!msg.autohide;
       if (msg.autohideTimeout !== undefined) autohideTimeoutSec = Number(msg.autohideTimeout) || 12;
       if (msg.pinDefault    !== undefined) pinDefault         = !!msg.pinDefault;
@@ -1278,6 +1112,13 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     if (msg.type === 'debugToggle') {
       debugEnabled = !!msg.enabled;
       sendResponse({ status:'ok' }); return true;
+    }
+    // Item 27: background.js's webNavigation.onHistoryStateUpdated listener
+    // — the channel that actually reaches a real SPA's pushState-driven
+    // route change, unlike the isolated-world history patch below.
+    if (msg.type === 'spaRouteChanged') {
+      try { onSpaNavigate(); } catch (e) {}
+      sendResponse({ status: 'ok' }); return true;
     }
     if (msg.type === 'startReadingCalibration') {
       (async () => {
@@ -1371,7 +1212,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       // dismiss() path.
       (async () => {
         try {
-          const opt = snoozeModule.SNOOZE_OPTIONS.find((o) => o.id === msg.optionId);
+          const opt = SNOOZE_OPTIONS.find((o) => o.id === msg.optionId);
           if (!opt) { sendResponse({ status: 'error' }); return; }
           const until = await startSnooze(opt.durationMs(Date.now()), opt.label);
           try { orchestrator.interventionPolicy.recordDismissal(); } catch (e) {}
@@ -1398,7 +1239,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     }
 
     if (msg.type === 'getState') {
-      sendResponse({ state: lastCogState });
+      sendResponse({ state: getCogState() });
       return;
     }
 
@@ -1464,7 +1305,25 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   }
 
   // ── SPA navigation: close unpinned popups, badge pinned ones as stale ────
+  // Item 27: two independent channels can call this — the pushState/
+  // replaceState patch below (which only ever actually fires on a genuine
+  // popstate, since the patch itself never sees a page-context pushState
+  // call — see the header comment on the patch) and background.js's
+  // webNavigation-driven 'spaRouteChanged' message (the one that reaches
+  // real SPA route changes). Both are safe to call for the same navigation:
+  // lastSpaDocKey makes the second call a no-op on the route-change-reset
+  // front, since documentKey() will already match.
+  let lastSpaDocKey = null;
   function onSpaNavigate() {
+    // A query-string-only or hash-only change is the same document per
+    // coverage-gate.js's own documentKey() (hostname+pathname, no search, no
+    // hash) — only a pathname change is a genuine new document and should
+    // reset paragraph tracking. A same-document popup/highlight refresh
+    // still runs either way; it is cheap and was already unconditional.
+    const newKey = orchestrator ? orchestrator.documentKey() : null;
+    const isRouteChange = !!newKey && newKey !== lastSpaDocKey;
+    lastSpaDocKey = newKey;
+
     for (const [fp, { el }] of [...openPopups.entries()]) {
       if (!el || !document.contains(el)) { openPopups.delete(fp); continue; }
       if (el.dataset.pinned !== 'true') {
@@ -1481,6 +1340,26 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       }
     }
     inFlightFingerprints.clear();
+
+    // Item 27: paragraph tracking, the comprehension monitor's in-flight
+    // paragraph, and the paragraph-index-keyed signal detectors all
+    // belong to the DOM of the document that just disappeared. Only a real
+    // pathname change warrants this — see orchestrator.js's
+    // handleRouteChange() header for the full reasoning.
+    if (isRouteChange) {
+      try { orchestrator.handleRouteChange(); } catch (e) {}
+    }
+
+    // Item 25: colour highlights are keyed per document (hostname+pathname),
+    // and used to only ever restore once, at initial page load — so an SPA
+    // route change never brought back highlights for the new route without
+    // a full reload. restoreTextHighlights() re-reads window.location at
+    // call time, so it naturally picks up the new URL's key; the short
+    // delay gives the SPA framework a chance to actually render the new
+    // route's content first; restoreSingleHighlight() already fails silently
+    // on unmatched text, so a still-mid-transition DOM just yields no match
+    // rather than a wrong one.
+    setTimeout(restoreTextHighlights, 300);
   }
 
   if (!window.__sra_history_patched) {
@@ -1509,7 +1388,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       chrome.storage.local.get({ sra_last_visit: {} }, ({ sra_last_visit: lv }) => {
         lv[window.location.href] = {
           title: document.title, scrollPct,
-          lastCogState, timestamp: Date.now(),
+          lastCogState: getCogState(), timestamp: Date.now(),
         };
         const keys = Object.keys(lv);
         if (keys.length > 200) {
@@ -1569,7 +1448,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   /* Turning the switch off has to leave the page as if the extension were
    * not installed: no cards, no ruler, no sidebar, no speech, and no
-   * telemetry accruing in the background. Turning it back on resumes
+   * signals accruing in the background. Turning it back on resumes
    * whatever the reader's settings already said. */
   function setAssistantEnabled(on) {
     const was = assistantEnabled;
@@ -1603,6 +1482,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   orchestrator.installListeners();
   orchestrator.primeParagraph();
+  // Baseline for onSpaNavigate()'s route-change check — set once, here,
+  // rather than left at its `null` default, so the first real navigation is
+  // correctly compared against the page the content script actually loaded
+  // on rather than treated as a route change against nothing.
+  lastSpaDocKey = orchestrator.documentKey();
 
   restoreHighlightMarkers();
   restoreTextHighlights();

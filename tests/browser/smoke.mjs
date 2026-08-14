@@ -6,7 +6,7 @@
  * Checks: content script injects, no page errors, no getUserMedia call ever
  * (there is no camera path left to make one — see the project notes' migration
  * note on removing webcam gaze), no image/video data in any request, and
- * that telemetry-only detection reaches the reader.
+ * that reading-signal-only detection reaches the reader.
  *
  * Not part of `npm test` — it needs a real browser and takes ~20s. */
 import { chromium } from 'playwright';
@@ -78,8 +78,219 @@ const FAIL_QUESTIONS = process.env.FAIL === 'questions';
 // `page errors` (thrown exceptions) staying at 0 is the assertion that
 // actually matters here, and is checked below.
 const FAIL_TOKEN = process.env.FAIL === 'token';
+// Item 36: see the /api/summarize handler below for what this controls.
+let nextSummarizeBehavior = null;
+
+// Item 29: a minimal hand-built one-page PDF for the viewer escape-hatch
+// check — no external PDF-generation dependency, and small enough to keep
+// inline. Real syntax (a Type1 Helvetica font, one content stream, a proper
+// xref table), not a stub — pdf.js parses it exactly like a real document.
+function minimalPdfBytes() {
+  const esc = (s) => s.replace(/([\\()])/g, '\\$1');
+  const text = 'ITEM29-PDF-MARKER: a real one-page PDF for the escape-hatch check.';
+  const stream = `BT /F1 14 Tf 1 0 0 1 72 700 Tm (${esc(text)}) Tj ET`;
+  const objects = [
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Catalog /Pages 4 0 R >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 5 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+}
+const TEST_PDF_BYTES = minimalPdfBytes();
+
+// Item 30c: a real, multi-page PDF — one genuine, real, ≥20-word paragraph
+// of distinct text per page, so alcoia's own PDF viewer has real reading
+// material to track across a real scroll-and-dwell session, the same way
+// article.html gives the DOM path several real <p> elements to scroll
+// through. One .textLayer per rendered page (viewer.js's own renderPage())
+// means one paragraph-tracker candidate per page here, via
+// groupTextLayerParagraphs(). Each paragraph is wrapped across several real
+// Tj lines rather than one long line — a single 160+ character Tj line at
+// 12pt spills far past the page's own 612pt width, and (found while
+// building this check) something downstream truncates the extracted text
+// for the off-page portion, silently under-counting words. Real PDFs wrap;
+// this fixture now does too, which is both more realistic and what avoids
+// the truncation entirely.
+function wrapLines(text, maxChars = 70) {
+  const words = text.split(' ');
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (next.length > maxChars && cur) { lines.push(cur); cur = w; } else cur = next;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+function multiPagePdfBytes(pageTexts) {
+  const esc = (s) => s.replace(/([\\()])/g, '\\$1');
+  const N = pageTexts.length;
+  const objects = [];
+  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'); // 1
+  pageTexts.forEach((text) => {                                          // 2..N+1: content streams
+    const lines = wrapLines(text, 70);
+    const ops = lines.map((line, i) => `1 0 0 1 40 ${700 - i * 14} Tm (${esc(line)}) Tj`).join(' ');
+    const stream = `BT /F1 12 Tf ${ops} ET`;
+    objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  });
+  const pagesObjNum = 2 * N + 2;
+  for (let i = 0; i < N; i++) {                                          // N+2..2N+1: page objects
+    const contentObjNum = i + 2;
+    objects.push(`<< /Type /Page /Parent ${pagesObjNum} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents ${contentObjNum} 0 R >>`);
+  }
+  const kids = Array.from({ length: N }, (_, i) => `${N + 2 + i} 0 R`).join(' ');
+  objects.push(`<< /Type /Pages /Kids [${kids}] /Count ${N} >>`);        // pagesObjNum
+  objects.push(`<< /Type /Catalog /Pages ${pagesObjNum} 0 R >>`);        // catalog, == objects.length
+  const catalogObjNum = objects.length;
+
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogObjNum} 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+}
+// Comfortably past paragraph-tracker.js's 20-word floor (each is 25+ words
+// by real countWords() segmentation, not just a naive space-split count).
+const ITEM30C_PAGE_TEXTS = [
+  'This first page of the reading test document opens right here with a real paragraph long enough to clear the paragraph tracker word floor for genuine tracking today.',
+  'This second page continues the very same document with an entirely different paragraph of its own real text, also comfortably past the twenty word floor required here.',
+  'This third and final page closes the document with a third distinct real paragraph, again well past the minimum word count the paragraph tracker enforces here today.',
+];
+const ITEM30C_MULTI_PDF_BYTES = multiPagePdfBytes(ITEM30C_PAGE_TEXTS);
+const ITEM30C_PAGE_TEXTS_2 = [
+  'A second, entirely separate document opens right here with its own first page paragraph, unrelated to the first test document, still comfortably past the word floor today.',
+  'The second separate document continues here with its own second page paragraph, again real text distinct from every paragraph in the other test document above today.',
+];
+const ITEM30C_MULTI_PDF_BYTES_2 = multiPagePdfBytes(ITEM30C_PAGE_TEXTS_2);
+// A "scanned" PDF: one real page, but its content stream has no text-showing
+// operator at all — pdf.js's getTextContent() then returns zero items, so
+// groupTextLayerParagraphs() finds zero paragraphs, exactly reproducing an
+// image-only scanned document without needing to embed a real raster image.
+const ITEM30C_SCANNED_PDF_BYTES = (() => {
+  const objects = [
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Length 0 >>\nstream\n\nendstream',
+    '<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Catalog /Pages 4 0 R >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 5 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+})();
+
+// Item 30d: a real two-column PDF (hand-built, known text positions — left
+// column at x=72pt, right column at x=320pt on a 612x792pt page, same shape
+// item 20 already verified for text-layer alignment) — for confirming
+// rotate/fit-width/fit-page never break the correspondence between the
+// canvas and its text layer, which are always built from the same pdf.js
+// viewport object.
+const ITEM30D_TWO_COLUMN_PDF_BYTES = (() => {
+  const esc = (s) => s.replace(/([\\()])/g, '\\$1');
+  const ops = [
+    ...['Left column line one of real text here.', 'Left column line two continues the text.']
+      .map((line, i) => `1 0 0 1 72 ${700 - i * 16} Tm (${esc(line)}) Tj`),
+    ...['Right column line one of real text here.', 'Right column line two continues the text.']
+      .map((line, i) => `1 0 0 1 320 ${700 - i * 16} Tm (${esc(line)}) Tj`),
+  ];
+  const stream = `BT /F1 12 Tf ${ops.join(' ')} ET`;
+  const objects = [
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Catalog /Pages 4 0 R >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 5 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+})();
 
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/item30c-multi2.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30C_MULTI_PDF_BYTES_2);
+    return;
+  }
+  if (req.url.startsWith('/item30c-multi.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30C_MULTI_PDF_BYTES);
+    return;
+  }
+  if (req.url.startsWith('/item30c-scanned.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30C_SCANNED_PDF_BYTES);
+    return;
+  }
+  if (req.url.startsWith('/item30d-two-column.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30D_TWO_COLUMN_PDF_BYTES);
+    return;
+  }
+  if (req.url.startsWith('/item29-test.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(TEST_PDF_BYTES);
+    return;
+  }
+  // Item 31: a real, reachable PDF for the web-takeover redirect check —
+  // distinct from item29-test.pdf only so the two items' checks cannot be
+  // confused for one another in a failure report.
+  if (req.url.startsWith('/item31-test.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(TEST_PDF_BYTES);
+    return;
+  }
+  // A PDF-looking URL whose response is not a real PDF at all — proves the
+  // fail-open path (viewer.js bounces back to native handling rather than
+  // showing an alcoia error page) without needing an actual auth wall.
+  if (req.url.startsWith('/item31-broken.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end('not actually a pdf');
+    return;
+  }
+  // A normal page embedding item31-test.pdf in an iframe — proves
+  // tabs.onUpdated (tab-level only) never redirects an iframe's own
+  // navigation, since the TAB's own URL never changes when only the frame
+  // inside it loads a PDF.
+  if (req.url.startsWith('/item31-iframe.html')) {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><html><body><iframe src="/item31-test.pdf" width="600" height="400"></iframe></body></html>');
+    return;
+  }
   if (req.method === 'POST' && req.url.startsWith('/api/token')) {
     apiHits.token++;
     if (FAIL_TOKEN) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
@@ -99,6 +310,27 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: 'no_citable_question' }));
         return;
       }
+      // Item 36: a one-shot override for the next /api/summarize response
+      // only, set directly from the test flow below and self-clearing after
+      // one use — 'poison' fails the call (for the "explanation persistence
+      // degrades to silence on fetch failure" check), a string overrides the
+      // canned summary text (for the "the stored explanation is capped
+      // shorter than what the popup shows" check). Deliberately not a whole-
+      // process FAIL= mode like FAIL_QUESTIONS/FAIL_TOKEN: this only needs
+      // to affect one specific call inside an otherwise-normal run, not the
+      // whole suite.
+      if (!isQuestions && nextSummarizeBehavior !== null) {
+        const behavior = nextSummarizeBehavior;
+        nextSummarizeBehavior = null;
+        if (behavior === 'poison') {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'poisoned_for_test' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ summary: behavior }));
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       // A quiz (item 17) asks for count >= 5 in one call — the mock returns
       // that many so the happy path can be exercised for real, rather than
@@ -113,6 +345,76 @@ const server = http.createServer((req, res) => {
         ? { questions, cached: false }
         : { summary: 'A canned explanation for the smoke test.' }));
     });
+    return;
+  }
+  // Item 25: colour-highlight persistence fixture. Same pathname regardless
+  // of query string — content.js's urlKey (hostname+pathname) ignores the
+  // query — so ?insert=1 serving extra prepended content simulates the same
+  // document having changed between visits, without changing its storage
+  // key, which is exactly the "anchoring survives text shifting" case.
+  if (req.url.startsWith('/hl-fixture.html')) {
+    const insert = req.url.includes('insert=1');
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><body>
+      ${insert ? '<p>A new paragraph the page did not have on the first visit, pushing everything below it further down.</p>'.repeat(3) : ''}
+      <p id="hl-target">The relationship between where the eyes point and what the mind does is real but weak, and it becomes weaker as the measurement apparatus becomes cheaper and noisier than the laboratory equipment on which the original findings were established.</p>
+      <p>A second, unrelated paragraph so the page has more than one block of text.</p>
+    </body></html>`);
+    return;
+  }
+  // Item 27: a minimal but genuine SPA fixture — real client-side routing via
+  // history.pushState() called from the PAGE's own main-world script (not
+  // from anything the extension injects), swapping #app's content and the
+  // URL's pathname with no network request at all. Both "routes" below are
+  // client-side only; the server only ever serves the initial GET.
+  if (req.url.startsWith('/spa-fixture')) {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><body>
+      <div style="height:1400px"></div>
+      <div id="app">
+        <p class="spa-par">Article one opens with a long enough paragraph to be tracked by the paragraph tracker, which needs at least twenty words before it counts as prose worth measuring at all here.</p>
+        <p class="spa-par">Article one continues with a second paragraph, also long enough on its own to clear the same twenty word floor the tracker enforces before treating anything as real reading material.</p>
+      </div>
+      <button id="spa-nav-btn">Go to article two</button>
+      <button id="spa-back-btn" style="display:none">Back to article one</button>
+      <div style="height:1400px"></div>
+      <script>
+        var ARTICLE_ONE = document.getElementById('app').innerHTML;
+        var ARTICLE_TWO =
+          '<p class="spa-par">Article two opens with an entirely different long paragraph, unrelated to article one, still comfortably over the twenty word floor the paragraph tracker requires before counting it.</p>' +
+          '<p class="spa-par">Article two continues with a second paragraph of its own, again well past the word floor, so the tracker has real prose to measure on the freshly swapped in route content.</p>';
+        document.getElementById('spa-nav-btn').addEventListener('click', function () {
+          document.getElementById('app').innerHTML = ARTICLE_TWO;
+          document.getElementById('spa-nav-btn').style.display = 'none';
+          document.getElementById('spa-back-btn').style.display = '';
+          history.pushState({}, '', '/spa-fixture/article-two');
+        });
+        document.getElementById('spa-back-btn').addEventListener('click', function () {
+          document.getElementById('app').innerHTML = ARTICLE_ONE;
+          document.getElementById('spa-back-btn').style.display = 'none';
+          document.getElementById('spa-nav-btn').style.display = '';
+          history.pushState({}, '', '/spa-fixture.html');
+        });
+      </script>
+    </body></html>`);
+    return;
+  }
+  // Item 38: eight distinct, real, individually-tall paragraphs to build a
+  // real session-recall pool via genuine scroll-and-dwell — the questions-
+  // path rate-limit check needs several distinct real reading candidates,
+  // not a synthetic one, since fetchQuestions() has no cache to short-cut
+  // through and session-recall.js's pool is in-memory (built only by real
+  // reading, not seedable via storage the way sra_text_highlights is).
+  // Each block is tall enough that a scrollTo() by its own height reliably
+  // advances exactly one paragraph regardless of the real viewport height.
+  if (req.url.startsWith('/rate-limit-fixture.html')) {
+    const paras = Array.from({ length: 8 }, (_, i) => `Paragraph number ${i + 1} of this rate limiting fixture ` +
+      `covers an entirely distinct filler topic so that session recall treats each block as its own genuine ` +
+      `reading candidate, comfortably past the forty word floor session-recall.js enforces before anything ` +
+      `counts as read material worth asking a retrieval question about later on.`);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><body>${paras.map((t) =>
+      `<div style="min-height:900px;padding-top:40px;box-sizing:border-box;"><p>${t}</p></div>`).join('')}</body></html>`);
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -298,7 +600,7 @@ async function alt(key) {
   await page.waitForTimeout(350);
 }
 
-await alt('Digit1');   // simulate confused
+await alt('Digit1');   // simulate struggling
 shortcuts.results.altDigit1_toast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
 await alt('KeyT');     // toggle TTS
 shortcuts.results.altT_toast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
@@ -668,7 +970,1244 @@ const diagSafety = {
 await diagPage.evaluate(() => document.getElementById('deleteTokenBtn')?.click());
 await diagPage.waitForTimeout(100);
 const afterDelete = await diagPage.evaluate(() => document.getElementById('val-tokenStatus')?.textContent || null);
+
+// Item 33: the developer tools moved here from the main popup, gated on
+// sra_debug (already on globally in this harness — see the cfg block at the
+// top of this file). Confirms the card is genuinely visible under a real
+// debug-on setting, not just present-but-hidden in the DOM, and that its
+// simulate button reaches the real page through the same message path the
+// keyboard shortcut uses — clicking it should produce the same
+// #sra-sim-toast the Alt+1 check below looks for.
+const devToolsResult = await diagPage.evaluate(() => ({
+  devCardVisible: !document.getElementById('devCard')?.hidden,
+  backendUrlFieldPresent: !!document.getElementById('devBackendUrl'),
+  backendUrlFieldValue: document.getElementById('devBackendUrl')?.value || null,
+}));
 await diagPage.close();
+// chrome.tabs.query({active:true, currentWindow:true}) inside diagnostics.js
+// resolves to whichever tab Chrome itself considers active — the article
+// page must be that tab for the click below to reach it, so bring it to
+// front first. Playwright can still click a background (diagnostics) tab's
+// DOM directly via CDP without needing that tab focused.
+await page.bringToFront();
+const diagPage2 = await ctx.newPage();
+await diagPage2.goto(`chrome-extension://${extId}/src/popup/diagnostics.html`);
+await diagPage2.waitForTimeout(400);
+await page.bringToFront();
+await diagPage2.evaluate(() => document.getElementById('simStrugglingBtn')?.click());
+await diagPage2.waitForTimeout(500);
+devToolsResult.simulateButtonProducedToast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
+await diagPage2.close();
+
+// ── Colour highlight persistence (item 25) ───────────────────────────────
+// This predates the sequenced items (a pre-existing, undocumented feature —
+// see the project notes' item-25 note), verified end to end here rather than
+// assumed: real creation via a real Ctrl+drag-shaped gesture, reload
+// survival, deletion actually removing the storage entry (not just the
+// DOM), anchoring surviving content shifting around the highlighted text,
+// anchoring failing silently (no misattached mark) when the text is truly
+// gone, and both the per-document and cross-document storage caps.
+async function readHighlightStore() {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const store = await helper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_text_highlights: {} }, (res) => r(res.sra_text_highlights))));
+  await helper.close();
+  return store;
+}
+async function writeHighlightStore(store) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((s) => new Promise((r) => chrome.storage.local.set({ sra_text_highlights: s }, r)), store);
+  await helper.close();
+}
+
+const HL_URL_KEY = 'localhost/hl-fixture.html';
+const HL_PHRASE  = 'real but weak, and it becomes';
+
+// Real Ctrl+drag needs a real MouseEvent dispatched on the element under
+// the selection, not on `document` — dispatching on document left the
+// content script's mouseup listener seeing an empty window.getSelection()
+// in earlier attempts to write this check, so it never fired at all.
+async function selectAndCtrlDrag(hlPage, phrase) {
+  const pt = await hlPage.evaluate((ph) => {
+    // Search every text node under <body>, not just #hl-target — item 26's
+    // second-phrase check lives in the fixture's second paragraph.
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let textNode = null;
+    let start = -1;
+    let n;
+    while ((n = walker.nextNode())) {
+      const i = n.textContent.indexOf(ph);
+      if (i !== -1) { textNode = n; start = i; break; }
+    }
+    if (!textNode) throw new Error(`selectAndCtrlDrag: phrase not found on page: ${ph}`);
+    const range = document.createRange();
+    range.setStart(textNode, start);
+    range.setEnd(textNode, start + ph.length);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const r = range.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, phrase);
+  await hlPage.evaluate((p) => {
+    const el = document.elementFromPoint(p.x, p.y);
+    (el || document).dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true, cancelable: true, ctrlKey: true, clientX: p.x, clientY: p.y, view: window,
+    }));
+  }, pt);
+  await hlPage.waitForTimeout(400);
+}
+
+let highlightResult;
+try {
+  await writeHighlightStore({}); // start clean
+
+  // Round trip: real creation via the real UI, then survives a reload.
+  const hlPage = await ctx.newPage();
+  await hlPage.goto('http://localhost:8731/hl-fixture.html');
+  await hlPage.waitForTimeout(600);
+  await selectAndCtrlDrag(hlPage, HL_PHRASE);
+  const pickerVisible = await hlPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (pickerVisible) {
+    await hlPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await hlPage.waitForTimeout(400);
+  }
+  const afterCreate = await hlPage.evaluate(() => ({
+    markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+    text: document.querySelector('mark[data-sra-hl-id]')?.textContent,
+  }));
+
+  await hlPage.reload();
+  await hlPage.waitForTimeout(800);
+  const afterReload = await hlPage.evaluate(() => ({
+    markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+    text: document.querySelector('mark[data-sra-hl-id]')?.textContent,
+  }));
+
+  // Deletion: double-click removes the DOM mark and the storage entry, and
+  // both stay gone after a further reload.
+  await hlPage.evaluate(() => document.querySelector('mark[data-sra-hl-id]')
+    ?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+  await hlPage.waitForTimeout(400);
+  const afterDeleteDom = await hlPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+  const storeAfterDelete = await readHighlightStore();
+  await hlPage.reload();
+  await hlPage.waitForTimeout(800);
+  const afterDeleteReload = await hlPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+  await hlPage.close();
+
+  // Anchoring survives content shifting: seed a highlight for this document,
+  // then load a version with three new paragraphs inserted before the
+  // target — same urlKey (the query string is not part of it), but the
+  // highlighted text now sits at a completely different absolute position.
+  await writeHighlightStore({
+    [HL_URL_KEY]: [{
+      id: 'sra-hl-shift-test', text: HL_PHRASE, color: '#FFF59D', colorKey: 'yellow',
+      ctxBefore: 'he eyes point and what the mind does is',
+      ctxAfter: 'weaker as the measurement apparatus bec',
+      paragraphIndex: 0,
+      url: 'http://localhost:8731/hl-fixture.html', title: 'test', timestamp: Date.now(),
+    }],
+  });
+  const shiftPage = await ctx.newPage();
+  await shiftPage.goto('http://localhost:8731/hl-fixture.html?insert=1');
+  await shiftPage.waitForTimeout(800);
+  const survivesShift = await shiftPage.evaluate(() => ({
+    markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+    text: document.querySelector('mark[data-sra-hl-id]')?.textContent,
+  }));
+  await shiftPage.close();
+
+  // Restores after SPA navigation, not just full page load. Found while
+  // building this: content.js's history.pushState/replaceState monkey-patch
+  // runs in the content script's isolated world, which does not propagate
+  // to the page's own main-world `history` object — confirmed directly by
+  // reading history.pushState.toString() from a page.evaluate() call (main
+  // world) after the patch runs, and it is still `[native code]`. A real
+  // SPA framework's own routing code calls pushState from the main world
+  // too, so onSpaNavigate() never actually fires from a real route change
+  // via pushState — only popstate (browser back/forward) does, since that
+  // is a genuine DOM event delivered to both worlds. This test exercises
+  // the one path that is actually reachable (popstate via history.back())
+  // rather than pushState, which would silently prove nothing.
+  await writeHighlightStore({}); // clean — the seed below must land after page load, not before
+  const spaPage = await ctx.newPage();
+  await spaPage.goto('http://localhost:8731/'); // hostname+pathname 'localhost/' — the base article page
+  await spaPage.waitForTimeout(600);
+  const beforeSeed = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+
+  // Seed only now, simulating a highlight that exists in storage (made in
+  // another tab, say) but that this already-open, already-restored tab has
+  // not rendered — nothing should pick it up until something re-triggers
+  // restoration.
+  await writeHighlightStore({
+    'localhost/': [{
+      id: 'sra-hl-spa-test', text: HL_PHRASE, color: '#FFF59D', colorKey: 'yellow',
+      ctxBefore: 'he eyes point and what the mind does is',
+      ctxAfter: 'weaker as the measurement apparatus bec',
+      paragraphIndex: 0, url: 'http://localhost:8731/', title: 'test', timestamp: Date.now(),
+    }],
+  });
+  const beforeSpaNav = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+  await spaPage.evaluate(() => { history.pushState({}, '', '/#/route-a'); history.back(); });
+  await spaPage.waitForTimeout(700); // restoreTextHighlights() fires via a 300ms setTimeout in onSpaNavigate()
+  const afterSpaNav = await spaPage.evaluate(() => ({
+    markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+    text: document.querySelector('mark[data-sra-hl-id]')?.textContent,
+  }));
+  await spaPage.close();
+
+  // Fails silently when the text is genuinely gone — no misattached mark,
+  // no thrown error, and the entry stays in storage rather than being
+  // deleted on a failed match (a later visit might succeed).
+  await writeHighlightStore({
+    [HL_URL_KEY]: [{
+      id: 'sra-hl-miss-test', text: 'this exact phrase does not exist anywhere on this fixture page',
+      color: '#FFF59D', colorKey: 'yellow', ctxBefore: '', ctxAfter: '', paragraphIndex: 0,
+      url: 'http://localhost:8731/hl-fixture.html', title: 'test', timestamp: Date.now(),
+    }],
+  });
+  const missPage = await ctx.newPage();
+  const missPageErrors = [];
+  missPage.on('pageerror', (e) => missPageErrors.push(e.message));
+  await missPage.goto('http://localhost:8731/hl-fixture.html');
+  await missPage.waitForTimeout(800);
+  const missMarkCount = await missPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+  const storeAfterMiss = await readHighlightStore();
+  await missPage.close();
+
+  // Caps: a document already at the per-document cap drops its oldest entry
+  // when one more is added; a store already at the document cap drops the
+  // least-recently-touched *document* when a highlight lands on a new one.
+  const manyEntries = Array.from({ length: 100 }, (_, i) => ({
+    id: `sra-hl-cap-${i}`, text: `filler text number ${i} padded out`, color: '#FFF59D', colorKey: 'yellow',
+    ctxBefore: '', ctxAfter: '', paragraphIndex: 0,
+    url: 'http://localhost:8731/hl-fixture.html', title: 'test', timestamp: 1000 + i,
+  }));
+  const manyDocs = {};
+  for (let i = 0; i < 150; i++) {
+    manyDocs[`example${i}.test/`] = [{
+      id: `sra-hl-doc-${i}`, text: 'irrelevant', color: '#FFF59D', colorKey: 'yellow',
+      ctxBefore: '', ctxAfter: '', paragraphIndex: 0, url: `http://example${i}.test/`, title: '', timestamp: i,
+    }];
+  }
+  await writeHighlightStore({ ...manyDocs, [HL_URL_KEY]: manyEntries });
+
+  const capPage = await ctx.newPage();
+  await capPage.goto('http://localhost:8731/hl-fixture.html');
+  await capPage.waitForTimeout(600);
+  await selectAndCtrlDrag(capPage, HL_PHRASE);
+  const capPickerVisible = await capPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (capPickerVisible) {
+    await capPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await capPage.waitForTimeout(400);
+  }
+  await capPage.close();
+  const storeAfterCapWrite = await readHighlightStore();
+
+  highlightResult = {
+    attempted: true,
+    pickerVisible,
+    roundTrip: { afterCreate, afterReload },
+    deletion: {
+      domClearedImmediately: afterDeleteDom === 0,
+      removedFromStorage: (storeAfterDelete[HL_URL_KEY]?.length ?? 0) === 0,
+      staysGoneAfterReload: afterDeleteReload === 0,
+    },
+    survivesContentShift: survivesShift,
+    restoresAfterSpaNavigation: { beforeSeed, beforeSpaNav, afterSpaNav },
+    failsSilentlyWhenTextGone: {
+      markCount: missMarkCount,
+      pageErrors: missPageErrors.length,
+      entryKeptInStorageForRetry: (storeAfterMiss[HL_URL_KEY]?.length ?? 0) > 0,
+    },
+    caps: {
+      perDocCapHeld: (storeAfterCapWrite[HL_URL_KEY]?.length ?? 0) <= 100,
+      globalDocCapHeld: Object.keys(storeAfterCapWrite).length <= 150,
+      evictedTheActualOldestDoc: !('example0.test/' in storeAfterCapWrite),
+    },
+  };
+} catch (e) {
+  highlightResult = { attempted: true, error: String((e && e.message) || e) };
+}
+// Clean the highlight store so it doesn't bleed into a re-run.
+await writeHighlightStore({});
+
+// ── Two highlight toggles (item 26) ──────────────────────────────────────
+// Highlight colour (free, client-only) and summarise-on-highlight (spends
+// an assist) are independent settings — this exercises all four
+// combinations for real, plus that a setting change reaches an
+// already-open tab without a reload.
+async function setHighlightToggles(colorOn, summarizeOn) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((s) => new Promise((r) => chrome.storage.local.set({
+    sra_highlight_color: s.colorOn, sra_highlight_summarize: s.summarizeOn,
+    sra_text_highlights: {}, // clear so item 25's restore never masks this run's fresh phrase
+  }, r)), { colorOn, summarizeOn });
+  await helper.close();
+}
+
+let toggleResult;
+try {
+  const combos = [
+    { colorOn: true,  summarizeOn: false, label: 'colour ON, summarize OFF (default)' },
+    { colorOn: true,  summarizeOn: true,  label: 'colour ON, summarize ON' },
+    { colorOn: false, summarizeOn: true,  label: 'colour OFF, summarize ON (summary only)' },
+    { colorOn: false, summarizeOn: false, label: 'colour OFF, summarize OFF' },
+  ];
+  const combosResult = [];
+  for (const { colorOn, summarizeOn, label } of combos) {
+    await setHighlightToggles(colorOn, summarizeOn);
+    const before = apiHits.summarize;
+    const tPage = await ctx.newPage();
+    await tPage.goto('http://localhost:8731/hl-fixture.html');
+    await tPage.waitForTimeout(600);
+    await selectAndCtrlDrag(tPage, HL_PHRASE);
+    if (colorOn) {
+      const pv = await tPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+      if (pv) {
+        await tPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+        await tPage.waitForTimeout(500);
+      }
+    }
+    const outcome = await tPage.evaluate(() => ({
+      markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
+      popupShown: !!document.querySelector('.sra-popup.show'),
+    }));
+    await tPage.close();
+    combosResult.push({
+      label,
+      markCreated: outcome.markCount > 0,
+      popupShown: outcome.popupShown,
+      serverCallMade: apiHits.summarize > before,
+    });
+  }
+
+  // Settings change reaching an already-open tab without a reload: start on
+  // colour-only (no summarize), confirm no server call, then broadcast a
+  // live settings change to the SAME tab and confirm the very next
+  // highlight (a different phrase, so it cannot collide with the first)
+  // now triggers a summary — with no navigation in between.
+  await setHighlightToggles(true, false);
+  const livePage = await ctx.newPage();
+  await livePage.goto('http://localhost:8731/hl-fixture.html');
+  await livePage.waitForTimeout(600);
+  await selectAndCtrlDrag(livePage, HL_PHRASE);
+  const firstPickerVisible = await livePage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (firstPickerVisible) {
+    await livePage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await livePage.waitForTimeout(500);
+  }
+  const beforeLiveChange = apiHits.summarize;
+
+  await sendToArticleTab({ type: 'settings', highlightSummarize: true }, 'http://localhost:8731/hl-fixture.html');
+  // Snapshot right after the broadcast, before the second highlight fires —
+  // proves the settings message itself makes no server call on its own.
+  const afterBroadcastBeforeSecondHighlight = apiHits.summarize;
+  const SECOND_PHRASE = 'unrelated paragraph so the page';
+  await selectAndCtrlDrag(livePage, SECOND_PHRASE);
+  const secondPickerVisible = await livePage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (secondPickerVisible) {
+    await livePage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await livePage.waitForTimeout(500);
+  }
+  const liveUpdateResult = {
+    noServerCallBeforeChange: beforeLiveChange === afterBroadcastBeforeSecondHighlight, // sanity: broadcast alone made no call
+    serverCallAfterLiveChange: apiHits.summarize > afterBroadcastBeforeSecondHighlight,
+  };
+  await livePage.close();
+
+  toggleResult = { attempted: true, combos: combosResult, liveSettingsUpdate: liveUpdateResult };
+} catch (e) {
+  toggleResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeHighlightStore({});
+
+// ── Persisted highlight explanations (item 36) ────────────────────────────
+// Item 34 left "Save an explanation with each highlight" as a pure,
+// honestly-worded rename because the underlying explanation was never
+// actually kept — only shown once in a transient popup (see the project notes'
+// item-34 finding). This item makes the label true: the fetched
+// explanation is now patched back onto the same sra_text_highlights entry
+// (matched by id) and rendered, collapsed by default, on the Highlights
+// page. Separate from — and untouched by this item — sra_highlights, the
+// unrelated selection-summary path's own storage key.
+let explanationResult;
+try {
+  // (a) Toggle on: the highlight stores an explanation, and it renders on
+  // the Highlights page, collapsed (a <details> with no `open` attribute)
+  // until expanded.
+  await setHighlightToggles(true, true); // also clears sra_text_highlights
+  const beforeOn = apiHits.summarize;
+  const onPage = await ctx.newPage();
+  await onPage.goto('http://localhost:8731/hl-fixture.html');
+  await onPage.waitForTimeout(600);
+  await selectAndCtrlDrag(onPage, HL_PHRASE);
+  if (await onPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
+    await onPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await onPage.waitForTimeout(600); // fetchSummary() + the storage patch after it
+  }
+  await onPage.close();
+  const storeAfterOn = await readHighlightStore();
+  const onEntry = (storeAfterOn[HL_URL_KEY] || [])[0];
+
+  const listPage = await ctx.newPage();
+  await listPage.goto(`chrome-extension://${extId}/src/popup/highlights.html`);
+  await listPage.waitForTimeout(400);
+  const renderedOn = await listPage.evaluate(() => {
+    const d = document.querySelector('.hl-explanation');
+    return {
+      exists: !!d,
+      collapsedByDefault: d ? !d.open : null,
+      shownText: d?.querySelector('.hl-explanation-text')?.textContent || null,
+    };
+  });
+  await listPage.close();
+
+  // (b) Toggle off: no explanation stored, and no server call made at all —
+  // not even one that got discarded.
+  await setHighlightToggles(true, false); // also clears sra_text_highlights
+  const beforeOff = apiHits.summarize;
+  const offPage = await ctx.newPage();
+  await offPage.goto('http://localhost:8731/hl-fixture.html');
+  await offPage.waitForTimeout(600);
+  await selectAndCtrlDrag(offPage, HL_PHRASE);
+  if (await offPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
+    await offPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await offPage.waitForTimeout(400);
+  }
+  await offPage.close();
+  const storeAfterOff = await readHighlightStore();
+  // Snapshotted here, not re-read later — (c) and (e) below make their own
+  // real calls, and a live re-read at the end would wrongly count those
+  // against this step's "no call" assertion.
+  const noServerCallInToggleOff = apiHits.summarize === beforeOff;
+
+  // (c) Fetch failure: the colour mark and its storage entry still land
+  // (invariant 9 — the mark that already succeeded is not undone by an AI
+  // call that failed), but with no explanation, and — since
+  // nextSummarizeBehavior self-clears after exactly one response — no
+  // retry spending a second assist the reader never asked for.
+  await setHighlightToggles(true, true); // also clears sra_text_highlights
+  nextSummarizeBehavior = 'poison';
+  const beforeFail = apiHits.summarize;
+  const failPage = await ctx.newPage();
+  const failPageErrors = [];
+  failPage.on('pageerror', (e) => failPageErrors.push(e.message));
+  await failPage.goto('http://localhost:8731/hl-fixture.html');
+  await failPage.waitForTimeout(600);
+  await selectAndCtrlDrag(failPage, HL_PHRASE);
+  if (await failPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
+    await failPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await failPage.waitForTimeout(600);
+  }
+  await failPage.close();
+  const storeAfterFail = await readHighlightStore();
+  const failEntry = (storeAfterFail[HL_URL_KEY] || [])[0];
+  // Snapshotted here for the same reason as noServerCallInToggleOff above —
+  // (e) below makes its own real call, and a live re-read at the end would
+  // wrongly count it against this step's "exactly one attempt" assertion.
+  const exactlyOneAttemptInFailStep = apiHits.summarize === beforeFail + 1;
+
+  // (d) A pre-existing highlight with no `explanation` field at all — made
+  // before this shipped, or with the toggle off — renders without error and
+  // without an empty explanation slot standing in for one.
+  await writeHighlightStore({
+    [HL_URL_KEY]: [{
+      id: 'sra-hl-no-explanation', text: HL_PHRASE, color: '#FFF59D', colorKey: 'yellow',
+      ctxBefore: '', ctxAfter: '', paragraphIndex: 0,
+      url: 'http://localhost:8731/hl-fixture.html', title: 'test', timestamp: Date.now(),
+    }],
+  });
+  const legacyPage = await ctx.newPage();
+  const legacyPageErrors = [];
+  legacyPage.on('pageerror', (e) => legacyPageErrors.push(e.message));
+  await legacyPage.goto(`chrome-extension://${extId}/src/popup/highlights.html`);
+  await legacyPage.waitForTimeout(400);
+  const legacyRendered = await legacyPage.evaluate(() => ({
+    cardCount: document.querySelectorAll('.hl-card').length,
+    explanationBlockCount: document.querySelectorAll('.hl-explanation').length,
+    textShown: document.querySelector('.hl-text')?.textContent || null,
+  }));
+  await legacyPage.close();
+
+  // (e) The cap holds: a long fetched explanation is truncated to 200 chars
+  // before it is stored, while the popup shown at the moment of highlighting
+  // still gets the full, uncapped text — the persisted copy is deliberately
+  // the shorter form.
+  await setHighlightToggles(true, true); // also clears sra_text_highlights
+  const LONG_EXPLANATION = 'A'.repeat(500);
+  nextSummarizeBehavior = LONG_EXPLANATION;
+  const capPage = await ctx.newPage();
+  await capPage.goto('http://localhost:8731/hl-fixture.html');
+  await capPage.waitForTimeout(600);
+  await selectAndCtrlDrag(capPage, HL_PHRASE);
+  if (await capPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
+    await capPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await capPage.waitForTimeout(600);
+  }
+  const capPopupText = await capPage.evaluate(() =>
+    document.querySelector('.sra-popup.show .sra-popup-body')?.textContent || null);
+  await capPage.close();
+  const storeAfterCap = await readHighlightStore();
+  const capEntry = (storeAfterCap[HL_URL_KEY] || [])[0];
+
+  explanationResult = {
+    attempted: true,
+    toggleOn: {
+      storedExplanation: onEntry?.explanation || null,
+      serverCallMade: apiHits.summarize > beforeOn,
+      rendered: renderedOn,
+    },
+    toggleOff: {
+      storedExplanationAbsent: !(storeAfterOff[HL_URL_KEY] || [])[0]?.explanation,
+      noServerCallMade: noServerCallInToggleOff,
+    },
+    fetchFailure: {
+      highlightStillSaved: !!failEntry,
+      noExplanationStored: !failEntry?.explanation,
+      exactlyOneAttemptNoRetry: exactlyOneAttemptInFailStep,
+      noPageErrors: failPageErrors.length === 0,
+    },
+    legacyHighlightNoExplanationField: {
+      pageErrors: legacyPageErrors.length,
+      cardRendered: legacyRendered.cardCount > 0,
+      noExplanationBlockShown: legacyRendered.explanationBlockCount === 0,
+      quotedTextStillShown: !!legacyRendered.textShown,
+    },
+    explanationCap: {
+      popupShowedFullUncappedText: capPopupText === LONG_EXPLANATION,
+      storedLength: capEntry?.explanation?.length ?? null,
+      storedAtOrUnderCap: (capEntry?.explanation?.length ?? 0) <= 200,
+    },
+  };
+} catch (e) {
+  explanationResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeHighlightStore({});
+
+// ── SPA route-change detection (item 27) ───────────────────────────────────
+// The isolated-world history.pushState/replaceState patch never sees a real
+// page's own pushState call (see the project notes' item-25 finding, and
+// background.js's header comment on the fix) — a popstate-only test proves
+// nothing about this bug. /spa-fixture.html's script calls history
+// .pushState() directly from the page's own MAIN-world context, exactly
+// like a real SPA router, so this is the only kind of test that actually
+// exercises the fix.
+async function readCoverageStore() {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const store = await helper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_doc_coverage: {} }, (res) => r(res.sra_doc_coverage))));
+  await helper.close();
+  return store;
+}
+async function writeCoverageStore(store) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((s) => new Promise((r) => chrome.storage.local.set({ sra_doc_coverage: s }, r)), store);
+  await helper.close();
+}
+
+const SPA_KEY_A = 'localhost/spa-fixture.html';
+const SPA_KEY_B = 'localhost/spa-fixture/article-two';
+
+// Both fixture articles sit between two 1400px spacers so the page is tall
+// enough to need real scrolling — paragraph-tracker's reading-line heuristic
+// only fires a transition on an actual 'scroll' event, and a page short
+// enough to fit one viewport never dispatches one. Steps through the whole
+// document in viewport-sized increments so a real "enter paragraph, dwell,
+// leave paragraph" sequence happens regardless of exactly where the two
+// paragraphs land for a given article.
+async function scrollThroughDocument(pg) {
+  const docHeight = await pg.evaluate(() => document.documentElement.scrollHeight);
+  const viewportH = await pg.evaluate(() => window.innerHeight);
+  const step = Math.max(250, Math.floor(viewportH * 0.6));
+  for (let y = 0; y <= docHeight; y += step) {
+    await pg.evaluate((yy) => window.scrollTo(0, yy), y);
+    await pg.waitForTimeout(400);
+  }
+  await pg.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await pg.waitForTimeout(400);
+}
+
+let spaResult;
+try {
+  await writeCoverageStore({});
+  await writeHighlightStore({});
+  await setHighlightToggles(true, false); // colour on, summarise off — isolate this block from item 26's leftover settings
+
+  const spaPage = await ctx.newPage();
+  const spaLogs = [];
+  spaPage.on('console', (m) => spaLogs.push(m.text()));
+  await spaPage.goto('http://localhost:8731/spa-fixture.html');
+  await spaPage.waitForTimeout(700);
+
+  // A real colour highlight on article one, to prove restoration also
+  // reaches a genuine pushState-driven route change and back, not just the
+  // popstate path item 25 was limited to testing.
+  await selectAndCtrlDrag(spaPage, 'long enough paragraph to be tracked by the paragraph tracker');
+  const pickerVisible = await spaPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (pickerVisible) {
+    await spaPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await spaPage.waitForTimeout(500);
+  }
+  const markCountBeforeNav = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+
+  // Read article one for real: scroll through paragraph one (a genuine
+  // "left" transition registers its coverage), then stop centered on
+  // paragraph two rather than scrolling on past it — paragraph two is still
+  // the ACTIVE paragraph, mid-read, at the exact moment navigation happens.
+  // This is the scenario paragraphTracker.reset() specifically guards:
+  // without it, the reader's in-flight OLD-document paragraph would surface
+  // as a "left" transition on the NEW document, carrying article one's own
+  // text and stale dwell time into article two's coverage record.
+  await spaPage.evaluate(() => window.scrollTo(0, 0));
+  await spaPage.waitForTimeout(300);
+  const p1Top = await spaPage.evaluate(() =>
+    document.querySelectorAll('.spa-par')[0].getBoundingClientRect().top + window.scrollY);
+  await spaPage.evaluate((y) => window.scrollTo(0, Math.max(0, y - 200)), p1Top);
+  await spaPage.waitForTimeout(1200); // real dwell entering paragraph one
+  await spaPage.evaluate(() => document.querySelectorAll('.spa-par')[1].scrollIntoView({ block: 'center' }));
+  await spaPage.waitForTimeout(1800); // real dwell on paragraph two, still active at nav time
+
+  const coverageBeforeNav = await readCoverageStore();
+
+  // The real pushState-driven route change: a genuine click on the page's
+  // own button, which calls history.pushState() directly from the page's
+  // own script — NOT popstate, and NOT anything the extension triggers.
+  await spaPage.click('#spa-nav-btn');
+  await spaPage.waitForTimeout(700); // background webNavigation round trip + debounced highlight restore
+
+  const pathAfterNav = await spaPage.evaluate(() => location.pathname);
+  const markCountAfterNav = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+
+  // Read article two the same way. Reset to the top first — the browser
+  // does not auto-scroll back on a pushState-only navigation, and starting
+  // from wherever article one left the scroll position would skip straight
+  // past article two's paragraphs without ever crossing the reading line.
+  await spaPage.evaluate(() => window.scrollTo(0, 0));
+  await spaPage.waitForTimeout(300);
+  await scrollThroughDocument(spaPage);
+
+  const coverageAfterArticleTwo = await readCoverageStore();
+
+  // A query-string-only change on the SAME route must NOT be treated as a
+  // new document — coverage-gate.js's documentKey() is hostname+pathname
+  // only, and this fix must respect that rather than resetting on every
+  // pushState call regardless of what actually changed.
+  await spaPage.evaluate(() => history.pushState({}, '', location.pathname + '?utm_source=test'));
+  await spaPage.waitForTimeout(500);
+  const coverageAfterQueryOnlyChange = await readCoverageStore();
+
+  // Real pushState back to article one's original pathname. The DOM is
+  // restored by the page's own script as a fresh element (not the same
+  // node), so a mark reappearing here can only come from a genuine
+  // restoreTextHighlights() re-anchor, not from the original DOM surviving.
+  await spaPage.click('#spa-back-btn');
+  await spaPage.waitForTimeout(700);
+  const pathAfterBack = await spaPage.evaluate(() => location.pathname);
+  const markCountAfterBack = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+
+  const routeChangeLogged = spaLogs.some((l) => l.includes('SPA route change'));
+
+  // The sharpest check in this block: paragraph two of article one was
+  // still ACTIVE (mid-read, not yet "left") at the exact moment navigation
+  // happened. Without paragraphTracker.reset(), that stale in-flight
+  // paragraph surfaces as a "left" transition on the new document —
+  // carrying its own (article-one) text as the fingerprint into article
+  // two's coverage record, since documentKey() is read live at record time.
+  // A fingerprint is the first 80 characters of the paragraph text
+  // (fingerprint() in coverage-gate.js), so any article-one-authored
+  // fingerprint appearing under keyB is direct proof of the misattribution
+  // this item exists to prevent.
+  const keyBFingerprints = coverageAfterArticleTwo[SPA_KEY_B]?.fingerprints || [];
+  const noArticleOneTextLeakedIntoArticleTwoCoverage =
+    keyBFingerprints.length > 0 && keyBFingerprints.every((fp) => !fp.startsWith('Article one'));
+
+  spaResult = {
+    realPushStateChangedUrl: pathAfterNav === '/spa-fixture/article-two',
+    highlightCreatedOnArticleOne: markCountBeforeNav === 1,
+    highlightGoneWhenArticleTwoSwappedIn: markCountAfterNav === 0,
+    coverageAccruedForArticleOneBeforeNav: !!(coverageBeforeNav[SPA_KEY_A]?.fingerprints?.length),
+    coverageAccruedForArticleTwoAfterNav: !!(coverageAfterArticleTwo[SPA_KEY_B]?.fingerprints?.length),
+    articleTwoTotalParagraphsCorrect: coverageAfterArticleTwo[SPA_KEY_B]?.totalParagraphs === 2,
+    noArticleOneTextLeakedIntoArticleTwoCoverage,
+    articleOneCoverageUntouchedByArticleTwoReading:
+      JSON.stringify(coverageAfterArticleTwo[SPA_KEY_A]) === JSON.stringify(coverageBeforeNav[SPA_KEY_A]),
+    queryStringChangeKeptSameKey:
+      Object.prototype.hasOwnProperty.call(coverageAfterQueryOnlyChange, SPA_KEY_B)
+      && Object.keys(coverageAfterQueryOnlyChange).every((k) => k === SPA_KEY_A || k === SPA_KEY_B),
+    realPushStateBackRestoredUrl: pathAfterBack === '/spa-fixture.html',
+    highlightReanchoredAfterRealPushStateBack: markCountAfterBack === 1,
+    routeChangeResetLoggedForDebug: routeChangeLogged,
+  };
+  await spaPage.close();
+} catch (e) {
+  spaResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeCoverageStore({});
+await writeHighlightStore({});
+
+// ── PDF/PPTX viewer escape hatch (item 29) ─────────────────────────────────
+// The setting itself (sra_pdf_takeover) is read by background.js's
+// tabs.onUpdated redirect listener, which only fires on a real file://
+// navigation — out of reach here the same way item 20 documented (needs
+// "Allow access to file URLs", not scriptable from an automated headless
+// run). What IS directly testable, and is exactly the part this item
+// actually built: the popup toggle persists to storage correctly, and the
+// viewer page's own escape-hatch button and print control exist and work.
+let pdfViewerResult;
+try {
+  const settingsHelper = await ctx.newPage();
+  await settingsHelper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const defaultValue = await settingsHelper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_pdf_takeover: true }, (res) => r(res.sra_pdf_takeover))));
+  await settingsHelper.evaluate(() => document.getElementById('pdfTakeoverToggle').click());
+  const afterToggleOff = await settingsHelper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_pdf_takeover: true }, (res) => r(res.sra_pdf_takeover))));
+  await settingsHelper.evaluate(() => document.getElementById('pdfTakeoverToggle').click());
+  const afterToggleBackOn = await settingsHelper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_pdf_takeover: true }, (res) => r(res.sra_pdf_takeover))));
+  await settingsHelper.close();
+
+  const pdfPage = await ctx.newPage();
+  const pdfPageErrors = [];
+  pdfPage.on('pageerror', (e) => pdfPageErrors.push(String(e)));
+  await pdfPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent('http://localhost:8731/item29-test.pdf')}`);
+  await pdfPage.waitForTimeout(1500);
+
+  const rendered = await pdfPage.evaluate(() => ({
+    pageCount: document.querySelectorAll('.page-wrap').length,
+    hasMarkerText: [...document.querySelectorAll('.textLayer span')]
+      .some((s) => s.textContent.includes('ITEM29-PDF-MARKER')),
+    hasOpenNativeBtn: !!document.getElementById('openNativeBtn'),
+    hasPrintBtn: !!document.getElementById('printBtn'),
+    nativeSearchFindsText: window.find ? window.find('ITEM29-PDF-MARKER') : null,
+  }));
+
+  await pdfPage.click('#openNativeBtn');
+  await pdfPage.waitForTimeout(500);
+  const urlAfterEscape = pdfPage.url();
+
+  pdfViewerResult = {
+    takeoverDefaultsOn: defaultValue === true,
+    toggleOffPersisted: afterToggleOff === false,
+    toggleBackOnPersisted: afterToggleBackOn === true,
+    pdfRendered: rendered.pageCount === 1,
+    textLayerHasRealText: rendered.hasMarkerText,
+    nativeFindInPageWorks: rendered.nativeSearchFindsText === true,
+    hasEscapeHatchButton: rendered.hasOpenNativeBtn,
+    hasPrintButton: rendered.hasPrintBtn,
+    escapeHatchNavigatedWithBypassFragment:
+      urlAfterEscape.includes('item29-test.pdf') && urlAfterEscape.includes('#alcoia-open-native'),
+    newPageErrors: pdfPageErrors.length,
+  };
+  await pdfPage.close();
+} catch (e) {
+  pdfViewerResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
+// ── Web PDF takeover (item 31) ──────────────────────────────────────────────
+async function setWebPdfTakeover(on) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((v) => new Promise((r) => chrome.storage.local.set({ sra_web_pdf_takeover: v }, r)), on);
+  await helper.close();
+}
+
+let webPdfResult;
+try {
+  const defaultOn = await (async () => {
+    const helper = await ctx.newPage();
+    await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+    const v = await helper.evaluate(() => new Promise((r) =>
+      chrome.storage.local.get({ sra_web_pdf_takeover: false }, (res) => r(res.sra_web_pdf_takeover))));
+    await helper.close();
+    return v;
+  })();
+
+  // Off (default): a top-level web PDF must NOT redirect.
+  await setWebPdfTakeover(false);
+  const offPage = await ctx.newPage();
+  await offPage.goto('http://localhost:8731/item31-test.pdf', { waitUntil: 'domcontentloaded' });
+  await offPage.waitForTimeout(700);
+  const urlWhenOff = offPage.url();
+  await offPage.close();
+
+  // On: the same top-level web PDF must redirect to alcoia's viewer.
+  await setWebPdfTakeover(true);
+  const onPage = await ctx.newPage();
+  await onPage.goto('http://localhost:8731/item31-test.pdf', { waitUntil: 'domcontentloaded' });
+  await onPage.waitForTimeout(700);
+  const urlWhenOn = onPage.url();
+  await onPage.close();
+
+  // On, but the PDF is embedded in an iframe: the TAB's own URL must never
+  // change, since tabs.onUpdated only ever sees top-level navigation.
+  const iframePage = await ctx.newPage();
+  await iframePage.goto('http://localhost:8731/item31-iframe.html', { waitUntil: 'domcontentloaded' });
+  await iframePage.waitForTimeout(700);
+  const urlAfterIframeLoad = iframePage.url();
+  await iframePage.close();
+
+  // On, and the response is not a real PDF: viewer.js must fail OPEN —
+  // bounce back to the original URL with the bypass fragment — rather than
+  // show its own error box.
+  const brokenPage = await ctx.newPage();
+  const brokenPageErrors = [];
+  brokenPage.on('pageerror', (e) => brokenPageErrors.push(String(e)));
+  await brokenPage.goto('http://localhost:8731/item31-broken.pdf', { waitUntil: 'domcontentloaded' });
+  await brokenPage.waitForTimeout(1500);
+  const urlAfterBrokenLoad = brokenPage.url();
+  const errorBoxShown = await brokenPage.evaluate(() => {
+    const box = document.getElementById('error-box');
+    return !!box && box.style.display === 'block';
+  }).catch(() => null); // null if we already bounced away from the viewer page entirely
+  await brokenPage.close();
+
+  await setWebPdfTakeover(false); // restore default for anything after this block
+
+  webPdfResult = {
+    defaultsOff: defaultOn === false,
+    offKeepsOriginalUrl: urlWhenOff.includes('item31-test.pdf') && !urlWhenOff.startsWith('chrome-extension://'),
+    onRedirectsToAlcoiaViewer: urlWhenOn.startsWith('chrome-extension://') && urlWhenOn.includes('pdf-viewer/viewer.html'),
+    iframedPdfNeverRedirectsTab: urlAfterIframeLoad.includes('item31-iframe.html') && !urlAfterIframeLoad.startsWith('chrome-extension://'),
+    brokenPdfFailsOpenNotError: urlAfterBrokenLoad.includes('item31-broken.pdf') && urlAfterBrokenLoad.includes('#alcoia-open-native'),
+    brokenPdfNoErrorBoxShown: errorBoxShown !== true,
+    newPageErrors: brokenPageErrors.length,
+  };
+} catch (e) {
+  webPdfResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
+// ── PDF reading detection (item 30c) ────────────────────────────────────────
+// alcoia's own detection pipeline — orchestrator.js, host.js, the signal
+// detectors, coverage-gate.js — now runs inside alcoia's own PDF viewer, fed
+// from paragraph-tracker.js's injected block source (item 30b) via
+// pdf-handler.js's groupTextLayerParagraphs() (item 30c). This drives the
+// real thing end to end: real .textLayer text extracted from a real PDF,
+// real paragraph transitions from genuine scroll-and-dwell, real coverage
+// recorded under the PDF's own source URL — not the shared viewer page URL
+// every PDF opened here would otherwise collide on (orchestrator.js's new
+// `documentKey` override option exists specifically to prevent that).
+async function scrollPdfPageTextToReadingLine(pg, pageNum) {
+  const target = await pg.evaluate((n) => {
+    const wrap = document.querySelector(`[data-page="${n}"]`);
+    const span = wrap && wrap.querySelector('.textLayer span');
+    if (!span) return null;
+    const r = span.getBoundingClientRect();
+    const mid = (r.top + window.scrollY) + r.height / 2;
+    return mid - window.innerHeight * 0.4;
+  }, pageNum);
+  if (target == null) return false;
+  await pg.evaluate((y) => window.scrollTo(0, Math.max(0, y)), target);
+  return true;
+}
+
+let pdfDetectionResult;
+try {
+  await writeCoverageStore({});
+
+  const multiUrl   = 'http://localhost:8731/item30c-multi.pdf';
+  const multi2Url  = 'http://localhost:8731/item30c-multi2.pdf';
+  const scannedUrl = 'http://localhost:8731/item30c-scanned.pdf';
+  const docKey1 = `pdf:${multiUrl}`;
+  const docKey2 = `pdf:${multi2Url}`;
+
+  // ── A real multi-page text PDF: real reading, real paragraphs ──────────
+  const readPage = await ctx.newPage();
+  const readErrors = [];
+  readPage.on('pageerror', (e) => readErrors.push(String(e)));
+  await readPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(multiUrl)}`);
+  await readPage.waitForTimeout(1500);
+
+  const rendered = await readPage.evaluate(() => ({
+    pageCount: document.querySelectorAll('.page-wrap').length,
+    joinedText: [...document.querySelectorAll('.textLayer span')].map((s) => s.textContent).join(' '),
+  }));
+
+  for (let i = 1; i <= 3; i++) {
+    await scrollPdfPageTextToReadingLine(readPage, i);
+    await readPage.waitForTimeout(1800);
+  }
+  // Leave the last page too, so its own dwell is recorded on the way out.
+  await readPage.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await readPage.waitForTimeout(1800);
+  await readPage.close();
+
+  const coverageAfterFirst = await readCoverageStore();
+
+  // ── A second, distinct PDF must get its OWN coverage record ────────────
+  const read2Page = await ctx.newPage();
+  const read2Errors = [];
+  read2Page.on('pageerror', (e) => read2Errors.push(String(e)));
+  await read2Page.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(multi2Url)}`);
+  await read2Page.waitForTimeout(1500);
+  for (let i = 1; i <= 2; i++) {
+    await scrollPdfPageTextToReadingLine(read2Page, i);
+    await read2Page.waitForTimeout(1800);
+  }
+  await read2Page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await read2Page.waitForTimeout(1800);
+  await read2Page.close();
+
+  const coverageAfterSecond = await readCoverageStore();
+
+  // ── A scanned (image-only) PDF: real pages, empty text layer — must
+  // degrade to silence, not error (invariants 5/9). ──────────────────────
+  const scannedPage = await ctx.newPage();
+  const scannedErrors = [];
+  scannedPage.on('pageerror', (e) => scannedErrors.push(String(e)));
+  await scannedPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(scannedUrl)}`);
+  await scannedPage.waitForTimeout(1500);
+  const scannedRendered = await scannedPage.evaluate(() => ({
+    pageCount: document.querySelectorAll('.page-wrap').length,
+    spanCount: document.querySelectorAll('.textLayer span').length,
+  }));
+  await scannedPage.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await scannedPage.waitForTimeout(2500);
+  await scannedPage.close();
+
+  const coverageAfterScanned = await readCoverageStore();
+
+  await writeCoverageStore({});
+
+  pdfDetectionResult = {
+    attempted: true,
+    rendering: {
+      pageCount: rendered.pageCount,
+      allThreePagesHaveRealText: ITEM30C_PAGE_TEXTS.every((t) =>
+        rendered.joinedText.includes(t.split(' ').slice(0, 5).join(' '))),
+    },
+    coverage: {
+      recordedUnderPdfSourceKey: !!coverageAfterFirst[docKey1],
+      totalParagraphsMatchesPageCount: coverageAfterFirst[docKey1]?.totalParagraphs === 3,
+      atLeastOneParagraphCovered: (coverageAfterFirst[docKey1]?.fingerprints?.length || 0) >= 1,
+      notKeyedUnderTheSharedViewerUrl: !Object.keys(coverageAfterFirst).some((k) => k.includes('pdf-viewer/viewer.html')),
+    },
+    secondPdfGetsItsOwnRecord: {
+      firstKeyUnchanged: JSON.stringify(coverageAfterSecond[docKey1]) === JSON.stringify(coverageAfterFirst[docKey1]),
+      secondKeyRecordedSeparately: !!coverageAfterSecond[docKey2],
+      secondKeyTotalParagraphsCorrect: coverageAfterSecond[docKey2]?.totalParagraphs === 2,
+      keysAreDifferent: docKey1 !== docKey2,
+    },
+    scannedPdfDegradesToSilence: {
+      pageRenderedButNoText: scannedRendered.pageCount === 1 && scannedRendered.spanCount === 0,
+      noCoverageRecordCreated: !Object.prototype.hasOwnProperty.call(coverageAfterScanned, `pdf:${scannedUrl}`),
+      noPageErrors: scannedErrors.length === 0,
+    },
+    newPageErrors: readErrors.length + read2Errors.length,
+  };
+} catch (e) {
+  pdfDetectionResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeCoverageStore({});
+
+// ── PDF viewer parity: fit width/page, rotate, download (item 30d) ─────────
+// Native-reader parity beyond item 29's escape hatch and print. Rotate and
+// the two fit modes all go through the same rebuildAllPages() → renderPage()
+// path, which builds the canvas and its text layer from the SAME pdf.js
+// viewport object — the real risk this item's own brief calls out is the
+// two drifting apart after a scale/rotation change, not either one simply
+// failing to render. Verified directly against a real two-column PDF (the
+// same shape item 20 already used for alignment), not asserted from the
+// outside.
+// canvas.width/.height are integer attributes (assignment truncates a float
+// viewport width); the text layer's CSS width/height carries the same
+// pdf.js viewport value at full float precision — so a sub-pixel difference
+// between them is expected and not a sign the two have drifted apart. Real
+// drift would be off by many pixels (a stale scale, a stale rotation), not
+// a fraction of one.
+const closeEnough = (a, b) => Math.abs(a - b) < 1;
+
+let pdfParityResult;
+try {
+  const twoColUrl = 'http://localhost:8731/item30d-two-column.pdf';
+  const pPage = await ctx.newPage();
+  const pErrors = [];
+  pPage.on('pageerror', (e) => pErrors.push(String(e)));
+  await pPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(twoColUrl)}`);
+  await pPage.waitForTimeout(1500);
+
+  // pdf.js's own renderTextLayer() sets the container's width/height as a
+  // CSS calc()/round() expression driven by a --scale-factor custom
+  // property, not a plain px string — parseFloat(el.style.width) reads NaN
+  // against that, regardless of whether canvas and text layer actually
+  // agree. getBoundingClientRect() reads the real, laid-out, CSS-resolved
+  // size for both, which is what "does the text layer still line up with
+  // the canvas" actually means, independent of how either internally
+  // expresses its own CSS.
+  const readViewerState = () => {
+    const canvas = document.querySelector('.page-wrap canvas');
+    const tl = document.querySelector('.textLayer');
+    const cr = canvas ? canvas.getBoundingClientRect() : { width: 0, height: 0 };
+    const tr = tl ? tl.getBoundingClientRect() : { width: 0, height: 0 };
+    return {
+      canvasW: canvas?.width || 0,
+      canvasH: canvas?.height || 0,
+      canvasRectW: cr.width, canvasRectH: cr.height,
+      textLayerRectW: tr.width, textLayerRectH: tr.height,
+      spanCount: document.querySelectorAll('.textLayer span').length,
+      hasLeftColumnText: [...document.querySelectorAll('.textLayer span')].some((s) => s.textContent.includes('Left column')),
+    };
+  };
+
+  const before = await pPage.evaluate(() => {
+    const canvas = document.querySelector('.page-wrap canvas');
+    const tl = document.querySelector('.textLayer');
+    const cr = canvas.getBoundingClientRect();
+    const tr = tl.getBoundingClientRect();
+    const spans = [...document.querySelectorAll('.textLayer span')];
+    const left  = spans.find((s) => s.textContent.includes('Left column'));
+    const right = spans.find((s) => s.textContent.includes('Right column'));
+    return {
+      canvasW: canvas.width, canvasH: canvas.height,
+      canvasRectW: cr.width, canvasRectH: cr.height,
+      textLayerRectW: tr.width, textLayerRectH: tr.height,
+      hasBothColumns: !!left && !!right,
+      leftX: left ? left.getBoundingClientRect().left : null,
+      rightX: right ? right.getBoundingClientRect().left : null,
+    };
+  });
+
+  await pPage.click('#fitWidthBtn');
+  await pPage.waitForTimeout(700);
+  const afterFitWidth = await pPage.evaluate(readViewerState);
+
+  await pPage.click('#fitPageBtn');
+  await pPage.waitForTimeout(700);
+  const beforeRotate = await pPage.evaluate(readViewerState);
+
+  await pPage.click('#rotateRightBtn');
+  await pPage.waitForTimeout(700);
+  const afterRotate = await pPage.evaluate(readViewerState);
+
+  await pPage.click('#rotateLeftBtn');
+  await pPage.waitForTimeout(700);
+  const afterRotateBack = await pPage.evaluate(readViewerState);
+
+  const [download] = await Promise.all([
+    pPage.waitForEvent('download'),
+    pPage.click('#downloadBtn'),
+  ]);
+  const downloadFilename = download.suggestedFilename();
+
+  const escapeHatchStillPresent = await pPage.evaluate(() => !!document.getElementById('openNativeBtn'));
+
+  await pPage.close();
+
+  pdfParityResult = {
+    attempted: true,
+    twoColumnBaseline: {
+      hasBothColumns: before.hasBothColumns,
+      columnsSeparatedHorizontally: before.leftX != null && before.rightX != null && before.rightX > before.leftX + 50,
+      textLayerMatchesCanvas: closeEnough(before.textLayerRectW, before.canvasRectW) && closeEnough(before.textLayerRectH, before.canvasRectH),
+    },
+    fitWidth: {
+      changedScale: afterFitWidth.canvasW !== before.canvasW,
+      textLayerMatchesCanvas: closeEnough(afterFitWidth.textLayerRectW, afterFitWidth.canvasRectW) && closeEnough(afterFitWidth.textLayerRectH, afterFitWidth.canvasRectH),
+      stillHasRealText: afterFitWidth.hasLeftColumnText,
+    },
+    fitPage: {
+      rendered: beforeRotate.canvasW > 0 && beforeRotate.canvasH > 0,
+      textLayerMatchesCanvas: closeEnough(beforeRotate.textLayerRectW, beforeRotate.canvasRectW) && closeEnough(beforeRotate.textLayerRectH, beforeRotate.canvasRectH),
+    },
+    rotate: {
+      // A 90° rotation at the same scale swaps width and height — checked
+      // against the state captured immediately before rotating, not the
+      // very first baseline, since fit-width/fit-page already changed scale.
+      dimensionsSwapped: afterRotate.canvasW === beforeRotate.canvasH && afterRotate.canvasH === beforeRotate.canvasW,
+      textLayerStillMatchesCanvas: closeEnough(afterRotate.textLayerRectW, afterRotate.canvasRectW) && closeEnough(afterRotate.textLayerRectH, afterRotate.canvasRectH),
+      stillHasRealText: afterRotate.hasLeftColumnText,
+      spanCountUnchanged: afterRotate.spanCount === beforeRotate.spanCount,
+    },
+    rotateReversible: {
+      backToPreRotationDimensions: afterRotateBack.canvasW === beforeRotate.canvasW && afterRotateBack.canvasH === beforeRotate.canvasH,
+      textLayerStillMatchesCanvas: closeEnough(afterRotateBack.textLayerRectW, afterRotateBack.canvasRectW) && closeEnough(afterRotateBack.textLayerRectH, afterRotateBack.canvasRectH),
+    },
+    download: {
+      triggered: !!downloadFilename,
+      filename: downloadFilename,
+    },
+    escapeHatchStillPresent,
+    newPageErrors: pErrors.length,
+  };
+} catch (e) {
+  pdfParityResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
+// ── Pin / auto-dismiss exclusivity (item 34) ────────────────────────────────
+// A real popup.html load, checking the UI itself rather than just the
+// source text: clicking "Keep cards until I close them" must force "Clear
+// cards automatically" off and disable it, and clicking it off again must
+// re-enable the other control.
+let pinAutohideResult;
+try {
+  const popupPage = await ctx.newPage();
+  await popupPage.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await popupPage.waitForTimeout(300);
+
+  await popupPage.evaluate(() => new Promise((r) => chrome.storage.local.set(
+    { sra_autohide: true, sra_pin_default: false }, r)));
+  await popupPage.reload();
+  await popupPage.waitForTimeout(300);
+  const beforePin = await popupPage.evaluate(() => ({
+    autohideChecked: document.getElementById('autohideToggle').checked,
+    autohideDisabled: document.getElementById('autohideToggle').disabled,
+  }));
+
+  await popupPage.evaluate(() => document.getElementById('pinDefaultToggle').click());
+  await popupPage.waitForTimeout(150);
+  const afterPinOn = await popupPage.evaluate(() => ({
+    autohideChecked: document.getElementById('autohideToggle').checked,
+    autohideDisabled: document.getElementById('autohideToggle').disabled,
+  }));
+  const storedAfterPinOn = await popupPage.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_autohide: null, sra_pin_default: null }, r)));
+
+  await popupPage.evaluate(() => document.getElementById('pinDefaultToggle').click());
+  await popupPage.waitForTimeout(150);
+  const afterPinOff = await popupPage.evaluate(() => ({
+    autohideDisabled: document.getElementById('autohideToggle').disabled,
+  }));
+  await popupPage.close();
+
+  pinAutohideResult = {
+    startedWithAutohideOnPinOff: beforePin.autohideChecked === true && beforePin.autohideDisabled === false,
+    turningPinOnUnchecksAutohide: afterPinOn.autohideChecked === false,
+    turningPinOnDisablesAutohide: afterPinOn.autohideDisabled === true,
+    contradictionNeverPersisted: storedAfterPinOn.sra_pin_default === true && storedAfterPinOn.sra_autohide === false,
+    turningPinOffReenablesAutohide: afterPinOff.autohideDisabled === false,
+  };
+} catch (e) {
+  pinAutohideResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
+// ── Client-side AI-call rate limiting (item 38) ────────────────────────────
+// A bug backstop, not entitlement enforcement — see checkAiCallBudget()'s
+// own header in content.js. Two independent budgets (fetchSummary's
+// 'summarize' path, fetchQuestions' 'questions' path), each with a 6-call/
+// 10s burst limit. Both paths are exercised for real, not synthetically:
+// the summarize burst reuses item 26's "colour off, summarize on" direct-
+// summarise flow across 8 distinct phrases on /rate-limit-fixture.html; the
+// questions burst builds a real 8-paragraph session-recall pool via genuine
+// scroll-and-dwell (session-recall.js's pool is in-memory only — unlike
+// sra_text_highlights, there is no storage key to seed directly) and then
+// triggers one real recall asking for more candidates than the burst limit.
+async function readDiagLog() {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const entries = await helper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_diag_log: [] }, (res) => r(res.sra_diag_log))));
+  await helper.close();
+  return entries;
+}
+async function clearDiagLog() {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate(() => new Promise((r) => chrome.storage.local.set({ sra_diag_log: [] }, r)));
+  await helper.close();
+}
+
+let rateLimitResult;
+try {
+  await clearDiagLog();
+
+  // (a) Summarize-path burst: 8 distinct real Ctrl+drag selections, colour
+  // off / summarize on (item 26's direct-summarise flow — no picker click
+  // needed), each a genuinely different phrase so none is a cache hit.
+  await setHighlightToggles(false, true); // also clears sra_text_highlights
+  const beforeSumBurst = apiHits.summarize;
+  const sumBurstPage = await ctx.newPage();
+  await sumBurstPage.goto('http://localhost:8731/rate-limit-fixture.html');
+  await sumBurstPage.waitForTimeout(400);
+  for (let i = 1; i <= 8; i++) {
+    await selectAndCtrlDrag(sumBurstPage, `Paragraph number ${i} of this rate`);
+  }
+  await sumBurstPage.waitForTimeout(600);
+  await sumBurstPage.close();
+  const summarizeCallsMade = apiHits.summarize - beforeSumBurst;
+
+  // (b) The cache still serves an identical repeat without ever reaching
+  // checkAiCallBudget() at all — it sits after fetchSummary()'s existing
+  // cache-hit early return, not before it.
+  const cachePage = await ctx.newPage();
+  await cachePage.goto('http://localhost:8731/rate-limit-fixture.html');
+  await cachePage.waitForTimeout(400);
+  const beforeCacheFirst = apiHits.summarize;
+  await selectAndCtrlDrag(cachePage, 'Paragraph number 1 of this rate');
+  const afterCacheFirst = apiHits.summarize;
+  await selectAndCtrlDrag(cachePage, 'Paragraph number 1 of this rate'); // identical text+mode
+  const afterCacheSecond = apiHits.summarize;
+  await cachePage.close();
+
+  // (c) Questions-path burst, independent from (a): a real reading session
+  // over all 8 paragraphs (each div is 900px tall and holds one paragraph,
+  // so scrolling by its own height reliably advances exactly one paragraph
+  // regardless of the real viewport height; the reading-line target is
+  // computed from the actual viewport height rather than assumed).
+  const qBurstPage = await ctx.newPage();
+  await qBurstPage.goto('http://localhost:8731/rate-limit-fixture.html');
+  await qBurstPage.waitForTimeout(400);
+  const viewportH = await qBurstPage.evaluate(() => window.innerHeight);
+  for (let i = 0; i < 8; i++) {
+    const y = Math.max(0, Math.round(i * 900 + 40 - viewportH * 0.4));
+    await qBurstPage.evaluate((yy) => window.scrollTo(0, yy), y);
+    await qBurstPage.waitForTimeout(300);  // let the engine sync on the new position
+    await qBurstPage.waitForTimeout(4200); // clear session-recall's MIN_DWELL_MS (4000ms)
+  }
+  // One more scroll to leave paragraph 8, finalising its dwell record.
+  await qBurstPage.evaluate((yy) => window.scrollTo(0, yy), 8 * 900);
+  await qBurstPage.waitForTimeout(400);
+
+  const beforeQBurst = apiHits.questions;
+  await sendToArticleTab({ action: 'sessionRecall', count: 8 }, 'http://localhost:8731/rate-limit-fixture.html');
+  // sessionRecall's message handler responds immediately, before the async
+  // fetch loop inside runSessionRecall() actually runs — wait for it here.
+  await qBurstPage.waitForTimeout(4000);
+  const questionsCallsMade = apiHits.questions - beforeQBurst;
+  await qBurstPage.close();
+
+  const diagAfter = await readDiagLog();
+  const rateLimitEntries = diagAfter.filter((e) => /rate_limited/.test(e.message || ''));
+
+  rateLimitResult = {
+    attempted: true,
+    summarizeBurst: {
+      attempts: 8,
+      callsMade: summarizeCallsMade,
+      stoppedAtLimit: summarizeCallsMade === 6,
+    },
+    cacheStillServesRepeats: {
+      firstCallHitNetwork: afterCacheFirst > beforeCacheFirst,
+      secondCallServedFromCache: afterCacheSecond === afterCacheFirst,
+    },
+    questionsBurst: {
+      requestedCount: 8,
+      callsMade: questionsCallsMade,
+      stoppedAtLimit: questionsCallsMade === 6,
+      independentFromSummarizeBudget: questionsCallsMade > 0, // its own budget wasn't pre-exhausted by (a)
+    },
+    diagnosticsLogging: {
+      totalRateLimitEntries: rateLimitEntries.length,
+      // Expect at least one entry per path, and none carrying a URL or
+      // passage text — diag-log.js sanitises URLs and this item must never
+      // hand it either.
+      hasSummarizePathEntry: rateLimitEntries.some((e) => e.context === 'summarize'),
+      hasQuestionsPathEntry: rateLimitEntries.some((e) => e.context === 'questions'),
+      noUrlsInMessages: rateLimitEntries.every((e) => !/https?:\/\//.test(e.message || '')),
+      sampleMessage: rateLimitEntries[0]?.message || null,
+    },
+  };
+} catch (e) {
+  rateLimitResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await setHighlightToggles(true, false); // restore the default combo for anything after this block
+await writeHighlightStore({});
 
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
@@ -702,7 +2241,18 @@ console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
 console.log('  new page errors       :', shortcuts.newPageErrors);
 console.log('diagnostics page        :', JSON.stringify(diagnostics));
 console.log('diagnostics safety      :', JSON.stringify(diagSafety), '(expect all true)');
+console.log('dev tools (item 33)     :', JSON.stringify(devToolsResult));
 console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")');
+console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2));
+console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
+console.log('highlight explanations (36):', JSON.stringify(explanationResult, null, 2));
+console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
+console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
+console.log('PDF reading detection (30c):', JSON.stringify(pdfDetectionResult, null, 2));
+console.log('PDF viewer parity (30d)  :', JSON.stringify(pdfParityResult, null, 2));
+console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));
+console.log('pin/auto-dismiss (34)   :', JSON.stringify(pinAutohideResult, null, 2));
+console.log('AI-call rate limit (38) :', JSON.stringify(rateLimitResult, null, 2));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));

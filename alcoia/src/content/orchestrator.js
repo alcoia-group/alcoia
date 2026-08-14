@@ -1,9 +1,9 @@
 /* orchestrator.js — the detection pipeline, wired together
  *
  * Owns everything between "a reader did something" and "the policy says this
- * earns an interruption". It creates the telemetry detectors, the state engine
- * and the interruption budget, and subscribes the one handler that can reach
- * the reader.
+ * earns an interruption". It creates the reading-signal detectors, the state
+ * engine and the interruption budget, and subscribes the one handler that can
+ * reach the reader.
  *
  * It does not render. When an interruption is allowed it calls
  * `host.onIntervention()` and takes a boolean back saying whether anything
@@ -25,6 +25,18 @@ export async function createOrchestrator(deps) {
     comprehensionMonitor,
     settings,        // () => { comprehensionCheckEnabled, ... }
     host,            // see the destructure below
+    // Item 30c: the PDF viewer is its own chrome-extension:// page, so
+    // coverage-gate.js's default hostname+pathname key (window.location of
+    // *this* page) would be identical for every distinct PDF ever opened —
+    // all coalescing onto one shared, meaningless coverage record. An
+    // optional override lets a non-DOM host supply the real underlying
+    // document's identity instead. Omitted, behaviour is unchanged: the
+    // default is still coverage-gate.js's own documentKey().
+    documentKey: documentKeyOverride,
+    // Item 30c: paragraph-tracker.js's own injectable block source (item
+    // 30b), passed straight through. Omitted, behaviour is unchanged: the
+    // DOM scan stays the default, exactly as before this option existed.
+    paragraphTrackerOpts,
   } = deps;
 
   const s = () => settings() || {};
@@ -36,26 +48,27 @@ export async function createOrchestrator(deps) {
   const stateEngine  = engineModule.createReadingStateEngine();
   const interventionPolicy = policyModule.createInterventionPolicy();
   const coverageGate = coverageModule.createCoverageGate();
+  const resolveDocumentKey = documentKeyOverride || coverageModule.documentKey;
   // Reader-initiated — never touches interventionPolicy, spends no budget.
   const quizOffer = offerModule.createQuizOfferChecker({
-    coverageGate, documentKey: coverageModule.documentKey,
+    coverageGate, documentKey: resolveDocumentKey,
     onEligible: (result) => { try { host.onQuizOfferEligible?.(result); } catch (e) {} },
   });
 
-  // Telemetry detectors. These need no permission and work on any device —
+  // Signal detectors. These need no permission and work on any device —
   // paragraph tracking in particular used to hang off a webcam gaze point,
   // so none of this fired unless a camera was running. It no longer does.
   const [paraTrackModule, regressionModule, interactionModule,
          dynamicsModule, cursorModule, entropyModule] = await Promise.all([
-    loadModule('src/content/telemetry/paragraph-tracker.js'),
-    loadModule('src/content/telemetry/scroll-regression.js'),
-    loadModule('src/content/telemetry/interaction-signals.js'),
-    loadModule('src/content/telemetry/scroll-dynamics.js'),
-    loadModule('src/content/telemetry/cursor-tracking.js'),
-    loadModule('src/content/telemetry/progression-entropy.js'),
+    loadModule('src/content/signals/paragraph-tracker.js'),
+    loadModule('src/content/signals/scroll-regression.js'),
+    loadModule('src/content/signals/interaction-signals.js'),
+    loadModule('src/content/signals/scroll-dynamics.js'),
+    loadModule('src/content/signals/cursor-tracking.js'),
+    loadModule('src/content/signals/progression-entropy.js'),
   ]);
 
-  const paragraphTracker   = paraTrackModule.createParagraphTracker({ minWords: 20 });
+  const paragraphTracker   = paraTrackModule.createParagraphTracker({ minWords: 20, ...(paragraphTrackerOpts || {}) });
   const scrollRegression   = regressionModule.createScrollRegressionDetector();
   const interactionSignals = interactionModule.createInteractionSignals();
   const scrollDynamics     = dynamicsModule.createScrollDynamics();
@@ -67,7 +80,7 @@ export async function createOrchestrator(deps) {
 
   /* Drains every detector and hands the batch over in one go, so the engine
    * sees a whole moment rather than a sequence of unrelated nudges. */
-  function pumpTelemetry(extra) {
+  function pumpSignals(extra) {
     // The master switch. Nothing accrues while the assistant is off.
     if (s().assistantEnabled === false) return;
     const batch = [];
@@ -78,7 +91,7 @@ export async function createOrchestrator(deps) {
     if (interactions) batch.push(...interactions);
     if (extra) batch.push(extra);
     if (!batch.length) return;
-    stateEngine.update({ telemetry: batch });
+    stateEngine.update({ reading: batch });
   }
 
   /* Viewport-driven paragraph tracking. Feeds the comprehension monitor's
@@ -117,7 +130,7 @@ export async function createOrchestrator(deps) {
       }
       // Feeds coverage-gate.js — "read enough to offer the quiz on".
       try {
-        const key = coverageModule.documentKey();
+        const key = resolveDocumentKey();
         if (key) {
           coverageGate.recordProgress(key, {
             text: leftText, words: transition.left.words, dwellMs: transition.left.dwellMs,
@@ -141,7 +154,7 @@ export async function createOrchestrator(deps) {
 
     try { scrollRegression.update(transition); } catch (e) {}
     try { progressionEntropy.update(transition); } catch (e) {}
-    pumpTelemetry(speedSignal);
+    pumpSignals(speedSignal);
   }
 
   // ── The one path to the reader ───────────────────────────────────────────
@@ -212,7 +225,7 @@ export async function createOrchestrator(deps) {
         scrollDynamics.update(window.scrollY);
         syncParagraph();
         const signal = comprehensionMonitor.onScroll();
-        if (signal) pumpTelemetry(signal);
+        if (signal) pumpSignals(signal);
       } catch (e) {}
     }, { passive: true });
 
@@ -249,7 +262,7 @@ export async function createOrchestrator(deps) {
       try {
         syncParagraph();
         interactionSignals.update({ kind: 'focus', paragraphIndex: activeParagraphIndex() });
-        pumpTelemetry();
+        pumpSignals();
       } catch (e) {}
     });
 
@@ -257,7 +270,7 @@ export async function createOrchestrator(deps) {
     // dwelling on one paragraph produces no events at all.
     idleTimer = setInterval(() => {
       if (!s().comprehensionCheckEnabled) return;
-      try { syncParagraph(); pumpTelemetry(); } catch (e) {}
+      try { syncParagraph(); pumpSignals(); } catch (e) {}
     }, IDLE_TICK_MS);
   }
 
@@ -265,6 +278,40 @@ export async function createOrchestrator(deps) {
    * scrolls — which loses the opening of every article. */
   function primeParagraph() {
     try { paragraphTracker.rescan(); syncParagraph(); } catch (e) {}
+  }
+
+  /* Item 27: a genuine SPA route change (new pathname, per
+   * coverage-gate.js's documentKey()) swaps the DOM out from under every
+   * paragraph-index-keyed piece of state below. Without this, the next
+   * transition would report the OLD document's paragraph as "left" — full
+   * stale dwell time and all — and syncParagraph() would attribute that
+   * dwell to the NEW document's coverage-gate key, since documentKey() is
+   * read live at the point of recording, not captured. scrollRegression,
+   * progressionEntropy, interactionSignals, cursorTracker and scrollDynamics
+   * all already exported a reset() for exactly this purpose — none of them
+   * had ever been called from anywhere in the shipped tree, because nothing
+   * before this item ever detected a route change to call them from. Found
+   * incidentally while wiring this: the same "dead code that reads as
+   * wired" shape the project notes already tracks for cursor_reading, five more
+   * instances of it, all closed by this one call site rather than by
+   * inventing new reset logic.
+   *
+   * interventionPolicy is deliberately NOT touched here — its session cap
+   * is a session-scoped budget by design (the project notes: "cap scales with
+   * content read, not with 'session'... absolute per-session ceiling"), and
+   * resetting it per SPA route would let a reader bypass the ceiling simply
+   * by clicking through many short pages. */
+  function handleRouteChange() {
+    try { paragraphTracker.reset(); } catch (e) {}
+    try { comprehensionMonitor.resetParagraph(); } catch (e) {}
+    try { scrollRegression.reset(); } catch (e) {}
+    try { progressionEntropy.reset(); } catch (e) {}
+    try { interactionSignals.reset(); } catch (e) {}
+    try { cursorTracker.reset(); } catch (e) {}
+    try { scrollDynamics.reset(); } catch (e) {}
+    try { host.setCurrentParagraph(null); } catch (e) {}
+    if (s().debugEnabled) { try { host.log('SPA route change — paragraph tracking reset'); } catch (e) {} }
+    primeParagraph();
   }
 
   /* Tear everything down. Not called in the extension today — the content
@@ -278,8 +325,9 @@ export async function createOrchestrator(deps) {
   return {
     installListeners,
     primeParagraph,
+    handleRouteChange,
     syncParagraph,
-    pumpTelemetry,
+    pumpSignals,
     stop,
     getState: () => stateEngine.getState(),
     // Aggregates for the receipt. Aggregates only — there is deliberately no
@@ -294,6 +342,6 @@ export async function createOrchestrator(deps) {
     paragraphTracker,
     // "Read enough to test" — the popup's quiz button reads this directly.
     coverageGate,
-    documentKey: coverageModule.documentKey,
+    documentKey: resolveDocumentKey,
   };
 }
