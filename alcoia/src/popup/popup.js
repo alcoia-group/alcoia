@@ -112,6 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
     autohideTimeout.value       = res.sra_autohide_timeout;
     timeoutRow.style.display    = res.sra_autohide ? 'flex' : 'none';
     pinDefaultToggle.checked    = !!res.sra_pin_default;
+    syncPinAutohideExclusivity();
     debugTogglePopup.checked    = !!res.sra_debug;
     comprehensionToggle.checked = res.sra_comprehension !== false;
     assistantToggle.checked     = res.sra_enabled !== false;
@@ -141,7 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Status ──────────────────────────────────────────────────────────────
   function setSignalChip(on) {
     signalChip.className = 'src-chip' + (on ? ' on' : '');
-    signalStatus.textContent = on ? 'Reading signals' : 'Reading signals off';
+    signalStatus.textContent = on ? 'Noticing' : 'Not noticing';
   }
 
   /* Paint the fused estimate. An unrecognised label is shown as unknown
@@ -249,12 +250,31 @@ document.addEventListener('DOMContentLoaded', () => {
     timeoutRow.style.display = autohideToggle.checked ? 'flex' : 'none';
     saveAndBroadcast();
   });
+  // Item 34: "keep cards until I close them" and "clear cards automatically"
+  // are opposite intentions. Both could previously be turned on at once,
+  // which was meaningless — ui-controller.js's resetAutohide() already
+  // checked `root.dataset.pinned === 'true'` before arming a timeout, so
+  // pin already won structurally in code; the popup just never showed that.
+  // Made explicit here: turning "keep" on forces "clear automatically" off
+  // and disables it, rather than leaving a reader looking at two switches
+  // that silently disagree.
+  function syncPinAutohideExclusivity() {
+    autohideToggle.disabled = pinDefaultToggle.checked;
+    if (pinDefaultToggle.checked && autohideToggle.checked) {
+      autohideToggle.checked = false;
+      timeoutRow.style.display = 'none';
+    }
+  }
+  pinDefaultToggle.addEventListener('change', () => {
+    syncPinAutohideExclusivity();
+    saveAndBroadcast();
+  });
   dyslexiaToggle.addEventListener('change', () => {
     dyslexiaOptions.style.display = dyslexiaToggle.checked ? 'block' : 'none';
     saveAndBroadcast();
   });
   [selToggle, highlightToggle, highlightColorToggle, highlightSummarizeToggle,
-   pinDefaultToggle, debugTogglePopup,
+   debugTogglePopup,
    comprehensionToggle, ttsToggle, focusRulerToggle,
    bionicToggle, darkModeToggle]
     .forEach((el) => el.addEventListener('change', saveAndBroadcast));
@@ -461,6 +481,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ttsToggle.checked           = !!p.sra_tts;
     if (p.sra_autohide_timeout) autohideTimeout.value = p.sra_autohide_timeout;
     timeoutRow.style.display = p.sra_autohide ? 'flex' : 'none';
+    syncPinAutohideExclusivity();
 
     document.querySelectorAll('.mode-btn').forEach((b) =>
       b.classList.toggle('active', b.dataset.persona === key));
