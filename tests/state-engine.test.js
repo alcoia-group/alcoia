@@ -25,26 +25,26 @@ describe('default behaviour', () => {
     expect(s.evidence).toEqual([]);
   });
 
-  /* An unregistered telemetry type is silently ignored — see Conventions in
+  /* An unregistered signal type is silently ignored — see Conventions in
    * the project notes, and how cursor_reading died: listed in CORROBORATING_TYPES
    * with no matching CORROBORATION entry, so it was excluded from asserting
    * but never actually applied either. Registering a type is a deliberate
-   * two-place decision (fromTelemetry() for assertable types, or both
+   * two-place decision (fromSignal() for assertable types, or both
    * CORROBORATING_TYPES and CORROBORATION for corroboration-only ones), not
    * something that happens by adding it to one list. */
-  it('ignores a telemetry type nothing has registered', () => {
+  it('ignores a signal type nothing has registered', () => {
     const e = engineAt(fixedClock());
-    const s = e.update({ telemetry: { type: 'cursor_reading', tracking: true } });
+    const s = e.update({ reading: { type: 'cursor_reading', tracking: true } });
     expect(s.label).toBe(STATES.UNKNOWN);
     expect(s.evidence).toEqual([]);
   });
 });
 
-describe('telemetry drives the state', () => {
+describe('a reading signal drives the state', () => {
   it('too_slow becomes struggling and says why in the reader\'s terms', () => {
     const e = engineAt(fixedClock());
     const s = e.update({
-      telemetry: {
+      reading: {
         type: 'speed_mismatch', subtype: 'too_slow',
         actualWpm: 90, baselineWpm: 225, readability: { grade: 'standard' },
       },
@@ -57,7 +57,7 @@ describe('telemetry drives the state', () => {
   it('too_fast becomes skimming', () => {
     const e = engineAt(fixedClock());
     const s = e.update({
-      telemetry: {
+      reading: {
         type: 'speed_mismatch', subtype: 'too_fast',
         readability: { grade: 'difficult' },
       },
@@ -68,19 +68,19 @@ describe('telemetry drives the state', () => {
 
   it('backtrack becomes struggling and reports the distance', () => {
     const e = engineAt(fixedClock());
-    const s = e.update({ telemetry: { type: 'backtrack', backtrackPx: 240 } });
+    const s = e.update({ reading: { type: 'backtrack', backtrackPx: 240 } });
     expect(s.label).toBe(STATES.STRUGGLING);
     expect(s.evidence[0]).toMatch(/scrolled back 240px/);
   });
 });
 
-describe('P2 telemetry signals', () => {
+describe('P2 reading signals', () => {
   it('a fast return is struggling and outranks an ordinary one', () => {
     const fast = engineAt(fixedClock()).update({
-      telemetry: { type: 'regression', subtype: 'fast_return', distance: 2, latencyMs: 1200 },
+      reading: { type: 'regression', subtype: 'fast_return', distance: 2, latencyMs: 1200 },
     });
     const ordinary = engineAt(fixedClock()).update({
-      telemetry: { type: 'regression', subtype: 'return', distance: 2, latencyMs: 5000 },
+      reading: { type: 'regression', subtype: 'return', distance: 2, latencyMs: 5000 },
     });
     expect(fast.label).toBe(STATES.STRUGGLING);
     expect(ordinary.label).toBe(STATES.STRUGGLING);
@@ -90,7 +90,7 @@ describe('P2 telemetry signals', () => {
 
   it('a slow return is competent reading, not struggling', () => {
     const s = engineAt(fixedClock()).update({
-      telemetry: { type: 'regression', subtype: 'slow_return', distance: 1, latencyMs: 25000 },
+      reading: { type: 'regression', subtype: 'slow_return', distance: 1, latencyMs: 25000 },
     });
     expect(s.label).toBe(STATES.ON_PACE);
     expect(s.evidence[0]).toMatch(/went back a paragraph to review/);
@@ -98,7 +98,7 @@ describe('P2 telemetry signals', () => {
 
   it('returning to the same paragraph after a long absence is struggling', () => {
     const s = engineAt(fixedClock()).update({
-      telemetry: { type: 'blur_return', subtype: 'resumed_same', blurMs: 180_000, paragraphIndex: 3 },
+      reading: { type: 'blur_return', subtype: 'resumed_same', blurMs: 180_000, paragraphIndex: 3 },
     });
     expect(s.label).toBe(STATES.STRUGGLING);
     expect(s.evidence[0]).toMatch(/after 3 minutes away/);
@@ -106,7 +106,7 @@ describe('P2 telemetry signals', () => {
 
   it('takes the strongest assertion when several arrive together', () => {
     const s = engineAt(fixedClock()).update({
-      telemetry: [
+      reading: [
         { type: 'regression', subtype: 'return', distance: 1, latencyMs: 5000 },
         { type: 'speed_mismatch', subtype: 'too_slow', actualWpm: 90, baselineWpm: 225 },
       ],
@@ -122,15 +122,15 @@ describe('corroborating signals raise confidence but never assert', () => {
     ['copy', { type: 'copy', assertable: false, subtype: 'term', length: 18 }],
     ['scroll_jerk', { type: 'scroll_jerk', assertable: false, subtype: 'hunting', jerk: 0.05 }],
   ])('%s alone produces nothing', (_name, sig) => {
-    const s = engineAt(fixedClock()).update({ telemetry: sig });
+    const s = engineAt(fixedClock()).update({ reading: sig });
     expect(s.label).toBe(STATES.UNKNOWN);
   });
 
   it('a copy alongside a struggling signal raises confidence and is reported', () => {
     const clock = fixedClock();
-    const alone = engineAt(clock).update({ telemetry: { type: 'backtrack', backtrackPx: 200 } });
+    const alone = engineAt(clock).update({ reading: { type: 'backtrack', backtrackPx: 200 } });
     const withCopy = engineAt(clock).update({
-      telemetry: [
+      reading: [
         { type: 'backtrack', backtrackPx: 200 },
         { type: 'copy', assertable: false, subtype: 'term', length: 18 },
       ],
@@ -141,9 +141,9 @@ describe('corroborating signals raise confidence but never assert', () => {
 
   it('smooth scrolling does not corroborate anything', () => {
     const clock = fixedClock();
-    const alone = engineAt(clock).update({ telemetry: { type: 'backtrack', backtrackPx: 200 } });
+    const alone = engineAt(clock).update({ reading: { type: 'backtrack', backtrackPx: 200 } });
     const withSmooth = engineAt(clock).update({
-      telemetry: [
+      reading: [
         { type: 'backtrack', backtrackPx: 200 },
         { type: 'scroll_jerk', assertable: false, subtype: 'smooth', jerk: 0.001 },
       ],
@@ -154,10 +154,10 @@ describe('corroborating signals raise confidence but never assert', () => {
   it('does not corroborate a state the signal says nothing about', () => {
     const clock = fixedClock();
     const alone = engineAt(clock).update({
-      telemetry: { type: 'regression', subtype: 'slow_return', distance: 1, latencyMs: 25000 },
+      reading: { type: 'regression', subtype: 'slow_return', distance: 1, latencyMs: 25000 },
     });
     const withCopy = engineAt(clock).update({
-      telemetry: [
+      reading: [
         { type: 'regression', subtype: 'slow_return', distance: 1, latencyMs: 25000 },
         { type: 'copy', assertable: false, subtype: 'term', length: 18 },
       ],
@@ -173,8 +173,8 @@ describe('subscribers', () => {
     const seen = vi.fn();
     e.subscribe(seen);
     const t = { type: 'backtrack', backtrackPx: 200 };
-    e.update({ telemetry: t });
-    e.update({ telemetry: t });
+    e.update({ reading: t });
+    e.update({ reading: t });
     expect(seen).toHaveBeenCalledTimes(1);
     e.update({});
     expect(seen).toHaveBeenCalledTimes(2);
@@ -186,7 +186,7 @@ describe('subscribers', () => {
     const good = vi.fn();
     e.subscribe(() => { throw new Error('bad subscriber'); });
     e.subscribe(good);
-    expect(() => e.update({ telemetry: { type: 'backtrack', backtrackPx: 200 } })).not.toThrow();
+    expect(() => e.update({ reading: { type: 'backtrack', backtrackPx: 200 } })).not.toThrow();
     expect(good).toHaveBeenCalled();
   });
 
@@ -195,7 +195,7 @@ describe('subscribers', () => {
     const seen = vi.fn();
     const off = e.subscribe(seen);
     off();
-    e.update({ telemetry: { type: 'backtrack', backtrackPx: 200 } });
+    e.update({ reading: { type: 'backtrack', backtrackPx: 200 } });
     expect(seen).not.toHaveBeenCalled();
   });
 });

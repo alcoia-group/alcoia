@@ -1,9 +1,9 @@
 /* orchestrator.js — the detection pipeline, wired together
  *
  * Owns everything between "a reader did something" and "the policy says this
- * earns an interruption". It creates the telemetry detectors, the state engine
- * and the interruption budget, and subscribes the one handler that can reach
- * the reader.
+ * earns an interruption". It creates the reading-signal detectors, the state
+ * engine and the interruption budget, and subscribes the one handler that can
+ * reach the reader.
  *
  * It does not render. When an interruption is allowed it calls
  * `host.onIntervention()` and takes a boolean back saying whether anything
@@ -42,17 +42,17 @@ export async function createOrchestrator(deps) {
     onEligible: (result) => { try { host.onQuizOfferEligible?.(result); } catch (e) {} },
   });
 
-  // Telemetry detectors. These need no permission and work on any device —
+  // Signal detectors. These need no permission and work on any device —
   // paragraph tracking in particular used to hang off a webcam gaze point,
   // so none of this fired unless a camera was running. It no longer does.
   const [paraTrackModule, regressionModule, interactionModule,
          dynamicsModule, cursorModule, entropyModule] = await Promise.all([
-    loadModule('src/content/telemetry/paragraph-tracker.js'),
-    loadModule('src/content/telemetry/scroll-regression.js'),
-    loadModule('src/content/telemetry/interaction-signals.js'),
-    loadModule('src/content/telemetry/scroll-dynamics.js'),
-    loadModule('src/content/telemetry/cursor-tracking.js'),
-    loadModule('src/content/telemetry/progression-entropy.js'),
+    loadModule('src/content/signals/paragraph-tracker.js'),
+    loadModule('src/content/signals/scroll-regression.js'),
+    loadModule('src/content/signals/interaction-signals.js'),
+    loadModule('src/content/signals/scroll-dynamics.js'),
+    loadModule('src/content/signals/cursor-tracking.js'),
+    loadModule('src/content/signals/progression-entropy.js'),
   ]);
 
   const paragraphTracker   = paraTrackModule.createParagraphTracker({ minWords: 20 });
@@ -67,7 +67,7 @@ export async function createOrchestrator(deps) {
 
   /* Drains every detector and hands the batch over in one go, so the engine
    * sees a whole moment rather than a sequence of unrelated nudges. */
-  function pumpTelemetry(extra) {
+  function pumpSignals(extra) {
     // The master switch. Nothing accrues while the assistant is off.
     if (s().assistantEnabled === false) return;
     const batch = [];
@@ -78,7 +78,7 @@ export async function createOrchestrator(deps) {
     if (interactions) batch.push(...interactions);
     if (extra) batch.push(extra);
     if (!batch.length) return;
-    stateEngine.update({ telemetry: batch });
+    stateEngine.update({ reading: batch });
   }
 
   /* Viewport-driven paragraph tracking. Feeds the comprehension monitor's
@@ -141,7 +141,7 @@ export async function createOrchestrator(deps) {
 
     try { scrollRegression.update(transition); } catch (e) {}
     try { progressionEntropy.update(transition); } catch (e) {}
-    pumpTelemetry(speedSignal);
+    pumpSignals(speedSignal);
   }
 
   // ── The one path to the reader ───────────────────────────────────────────
@@ -212,7 +212,7 @@ export async function createOrchestrator(deps) {
         scrollDynamics.update(window.scrollY);
         syncParagraph();
         const signal = comprehensionMonitor.onScroll();
-        if (signal) pumpTelemetry(signal);
+        if (signal) pumpSignals(signal);
       } catch (e) {}
     }, { passive: true });
 
@@ -249,7 +249,7 @@ export async function createOrchestrator(deps) {
       try {
         syncParagraph();
         interactionSignals.update({ kind: 'focus', paragraphIndex: activeParagraphIndex() });
-        pumpTelemetry();
+        pumpSignals();
       } catch (e) {}
     });
 
@@ -257,7 +257,7 @@ export async function createOrchestrator(deps) {
     // dwelling on one paragraph produces no events at all.
     idleTimer = setInterval(() => {
       if (!s().comprehensionCheckEnabled) return;
-      try { syncParagraph(); pumpTelemetry(); } catch (e) {}
+      try { syncParagraph(); pumpSignals(); } catch (e) {}
     }, IDLE_TICK_MS);
   }
 
@@ -314,7 +314,7 @@ export async function createOrchestrator(deps) {
     primeParagraph,
     handleRouteChange,
     syncParagraph,
-    pumpTelemetry,
+    pumpSignals,
     stop,
     getState: () => stateEngine.getState(),
     // Aggregates for the receipt. Aggregates only — there is deliberately no
