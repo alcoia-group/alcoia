@@ -779,7 +779,34 @@ const diagSafety = {
 await diagPage.evaluate(() => document.getElementById('deleteTokenBtn')?.click());
 await diagPage.waitForTimeout(100);
 const afterDelete = await diagPage.evaluate(() => document.getElementById('val-tokenStatus')?.textContent || null);
+
+// Item 33: the developer tools moved here from the main popup, gated on
+// sra_debug (already on globally in this harness — see the cfg block at the
+// top of this file). Confirms the card is genuinely visible under a real
+// debug-on setting, not just present-but-hidden in the DOM, and that its
+// simulate button reaches the real page through the same message path the
+// keyboard shortcut uses — clicking it should produce the same
+// #sra-sim-toast the Alt+1 check below looks for.
+const devToolsResult = await diagPage.evaluate(() => ({
+  devCardVisible: !document.getElementById('devCard')?.hidden,
+  backendUrlFieldPresent: !!document.getElementById('devBackendUrl'),
+  backendUrlFieldValue: document.getElementById('devBackendUrl')?.value || null,
+}));
 await diagPage.close();
+// chrome.tabs.query({active:true, currentWindow:true}) inside diagnostics.js
+// resolves to whichever tab Chrome itself considers active — the article
+// page must be that tab for the click below to reach it, so bring it to
+// front first. Playwright can still click a background (diagnostics) tab's
+// DOM directly via CDP without needing that tab focused.
+await page.bringToFront();
+const diagPage2 = await ctx.newPage();
+await diagPage2.goto(`chrome-extension://${extId}/src/popup/diagnostics.html`);
+await diagPage2.waitForTimeout(400);
+await page.bringToFront();
+await diagPage2.evaluate(() => document.getElementById('simStrugglingBtn')?.click());
+await diagPage2.waitForTimeout(500);
+devToolsResult.simulateButtonProducedToast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
+await diagPage2.close();
 
 // ── Colour highlight persistence (item 25) ───────────────────────────────
 // This predates the sequenced items (a pre-existing, undocumented feature —
@@ -1435,6 +1462,7 @@ console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
 console.log('  new page errors       :', shortcuts.newPageErrors);
 console.log('diagnostics page        :', JSON.stringify(diagnostics));
 console.log('diagnostics safety      :', JSON.stringify(diagSafety), '(expect all true)');
+console.log('dev tools (item 33)     :', JSON.stringify(devToolsResult));
 console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")');
 console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2));
 console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
