@@ -110,7 +110,117 @@ function minimalPdfBytes() {
 }
 const TEST_PDF_BYTES = minimalPdfBytes();
 
+// Item 30c: a real, multi-page PDF — one genuine, real, ≥20-word paragraph
+// of distinct text per page, so alcoia's own PDF viewer has real reading
+// material to track across a real scroll-and-dwell session, the same way
+// article.html gives the DOM path several real <p> elements to scroll
+// through. One .textLayer per rendered page (viewer.js's own renderPage())
+// means one paragraph-tracker candidate per page here, via
+// groupTextLayerParagraphs(). Each paragraph is wrapped across several real
+// Tj lines rather than one long line — a single 160+ character Tj line at
+// 12pt spills far past the page's own 612pt width, and (found while
+// building this check) something downstream truncates the extracted text
+// for the off-page portion, silently under-counting words. Real PDFs wrap;
+// this fixture now does too, which is both more realistic and what avoids
+// the truncation entirely.
+function wrapLines(text, maxChars = 70) {
+  const words = text.split(' ');
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (next.length > maxChars && cur) { lines.push(cur); cur = w; } else cur = next;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+function multiPagePdfBytes(pageTexts) {
+  const esc = (s) => s.replace(/([\\()])/g, '\\$1');
+  const N = pageTexts.length;
+  const objects = [];
+  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'); // 1
+  pageTexts.forEach((text) => {                                          // 2..N+1: content streams
+    const lines = wrapLines(text, 70);
+    const ops = lines.map((line, i) => `1 0 0 1 40 ${700 - i * 14} Tm (${esc(line)}) Tj`).join(' ');
+    const stream = `BT /F1 12 Tf ${ops} ET`;
+    objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  });
+  const pagesObjNum = 2 * N + 2;
+  for (let i = 0; i < N; i++) {                                          // N+2..2N+1: page objects
+    const contentObjNum = i + 2;
+    objects.push(`<< /Type /Page /Parent ${pagesObjNum} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents ${contentObjNum} 0 R >>`);
+  }
+  const kids = Array.from({ length: N }, (_, i) => `${N + 2 + i} 0 R`).join(' ');
+  objects.push(`<< /Type /Pages /Kids [${kids}] /Count ${N} >>`);        // pagesObjNum
+  objects.push(`<< /Type /Catalog /Pages ${pagesObjNum} 0 R >>`);        // catalog, == objects.length
+  const catalogObjNum = objects.length;
+
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogObjNum} 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+}
+// Comfortably past paragraph-tracker.js's 20-word floor (each is 25+ words
+// by real countWords() segmentation, not just a naive space-split count).
+const ITEM30C_PAGE_TEXTS = [
+  'This first page of the reading test document opens right here with a real paragraph long enough to clear the paragraph tracker word floor for genuine tracking today.',
+  'This second page continues the very same document with an entirely different paragraph of its own real text, also comfortably past the twenty word floor required here.',
+  'This third and final page closes the document with a third distinct real paragraph, again well past the minimum word count the paragraph tracker enforces here today.',
+];
+const ITEM30C_MULTI_PDF_BYTES = multiPagePdfBytes(ITEM30C_PAGE_TEXTS);
+const ITEM30C_PAGE_TEXTS_2 = [
+  'A second, entirely separate document opens right here with its own first page paragraph, unrelated to the first test document, still comfortably past the word floor today.',
+  'The second separate document continues here with its own second page paragraph, again real text distinct from every paragraph in the other test document above today.',
+];
+const ITEM30C_MULTI_PDF_BYTES_2 = multiPagePdfBytes(ITEM30C_PAGE_TEXTS_2);
+// A "scanned" PDF: one real page, but its content stream has no text-showing
+// operator at all — pdf.js's getTextContent() then returns zero items, so
+// groupTextLayerParagraphs() finds zero paragraphs, exactly reproducing an
+// image-only scanned document without needing to embed a real raster image.
+const ITEM30C_SCANNED_PDF_BYTES = (() => {
+  const objects = [
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Length 0 >>\nstream\n\nendstream',
+    '<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Catalog /Pages 4 0 R >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 5 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+})();
+
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/item30c-multi2.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30C_MULTI_PDF_BYTES_2);
+    return;
+  }
+  if (req.url.startsWith('/item30c-multi.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30C_MULTI_PDF_BYTES);
+    return;
+  }
+  if (req.url.startsWith('/item30c-scanned.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30C_SCANNED_PDF_BYTES);
+    return;
+  }
   if (req.url.startsWith('/item29-test.pdf')) {
     res.writeHead(200, { 'Content-Type': 'application/pdf' });
     res.end(TEST_PDF_BYTES);
@@ -1634,6 +1744,129 @@ try {
   webPdfResult = { attempted: true, error: String((e && e.message) || e) };
 }
 
+// ── PDF reading detection (item 30c) ────────────────────────────────────────
+// alcoia's own detection pipeline — orchestrator.js, host.js, the signal
+// detectors, coverage-gate.js — now runs inside alcoia's own PDF viewer, fed
+// from paragraph-tracker.js's injected block source (item 30b) via
+// pdf-handler.js's groupTextLayerParagraphs() (item 30c). This drives the
+// real thing end to end: real .textLayer text extracted from a real PDF,
+// real paragraph transitions from genuine scroll-and-dwell, real coverage
+// recorded under the PDF's own source URL — not the shared viewer page URL
+// every PDF opened here would otherwise collide on (orchestrator.js's new
+// `documentKey` override option exists specifically to prevent that).
+async function scrollPdfPageTextToReadingLine(pg, pageNum) {
+  const target = await pg.evaluate((n) => {
+    const wrap = document.querySelector(`[data-page="${n}"]`);
+    const span = wrap && wrap.querySelector('.textLayer span');
+    if (!span) return null;
+    const r = span.getBoundingClientRect();
+    const mid = (r.top + window.scrollY) + r.height / 2;
+    return mid - window.innerHeight * 0.4;
+  }, pageNum);
+  if (target == null) return false;
+  await pg.evaluate((y) => window.scrollTo(0, Math.max(0, y)), target);
+  return true;
+}
+
+let pdfDetectionResult;
+try {
+  await writeCoverageStore({});
+
+  const multiUrl   = 'http://localhost:8731/item30c-multi.pdf';
+  const multi2Url  = 'http://localhost:8731/item30c-multi2.pdf';
+  const scannedUrl = 'http://localhost:8731/item30c-scanned.pdf';
+  const docKey1 = `pdf:${multiUrl}`;
+  const docKey2 = `pdf:${multi2Url}`;
+
+  // ── A real multi-page text PDF: real reading, real paragraphs ──────────
+  const readPage = await ctx.newPage();
+  const readErrors = [];
+  readPage.on('pageerror', (e) => readErrors.push(String(e)));
+  await readPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(multiUrl)}`);
+  await readPage.waitForTimeout(1500);
+
+  const rendered = await readPage.evaluate(() => ({
+    pageCount: document.querySelectorAll('.page-wrap').length,
+    joinedText: [...document.querySelectorAll('.textLayer span')].map((s) => s.textContent).join(' '),
+  }));
+
+  for (let i = 1; i <= 3; i++) {
+    await scrollPdfPageTextToReadingLine(readPage, i);
+    await readPage.waitForTimeout(1800);
+  }
+  // Leave the last page too, so its own dwell is recorded on the way out.
+  await readPage.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await readPage.waitForTimeout(1800);
+  await readPage.close();
+
+  const coverageAfterFirst = await readCoverageStore();
+
+  // ── A second, distinct PDF must get its OWN coverage record ────────────
+  const read2Page = await ctx.newPage();
+  const read2Errors = [];
+  read2Page.on('pageerror', (e) => read2Errors.push(String(e)));
+  await read2Page.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(multi2Url)}`);
+  await read2Page.waitForTimeout(1500);
+  for (let i = 1; i <= 2; i++) {
+    await scrollPdfPageTextToReadingLine(read2Page, i);
+    await read2Page.waitForTimeout(1800);
+  }
+  await read2Page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await read2Page.waitForTimeout(1800);
+  await read2Page.close();
+
+  const coverageAfterSecond = await readCoverageStore();
+
+  // ── A scanned (image-only) PDF: real pages, empty text layer — must
+  // degrade to silence, not error (invariants 5/9). ──────────────────────
+  const scannedPage = await ctx.newPage();
+  const scannedErrors = [];
+  scannedPage.on('pageerror', (e) => scannedErrors.push(String(e)));
+  await scannedPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(scannedUrl)}`);
+  await scannedPage.waitForTimeout(1500);
+  const scannedRendered = await scannedPage.evaluate(() => ({
+    pageCount: document.querySelectorAll('.page-wrap').length,
+    spanCount: document.querySelectorAll('.textLayer span').length,
+  }));
+  await scannedPage.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await scannedPage.waitForTimeout(2500);
+  await scannedPage.close();
+
+  const coverageAfterScanned = await readCoverageStore();
+
+  await writeCoverageStore({});
+
+  pdfDetectionResult = {
+    attempted: true,
+    rendering: {
+      pageCount: rendered.pageCount,
+      allThreePagesHaveRealText: ITEM30C_PAGE_TEXTS.every((t) =>
+        rendered.joinedText.includes(t.split(' ').slice(0, 5).join(' '))),
+    },
+    coverage: {
+      recordedUnderPdfSourceKey: !!coverageAfterFirst[docKey1],
+      totalParagraphsMatchesPageCount: coverageAfterFirst[docKey1]?.totalParagraphs === 3,
+      atLeastOneParagraphCovered: (coverageAfterFirst[docKey1]?.fingerprints?.length || 0) >= 1,
+      notKeyedUnderTheSharedViewerUrl: !Object.keys(coverageAfterFirst).some((k) => k.includes('pdf-viewer/viewer.html')),
+    },
+    secondPdfGetsItsOwnRecord: {
+      firstKeyUnchanged: JSON.stringify(coverageAfterSecond[docKey1]) === JSON.stringify(coverageAfterFirst[docKey1]),
+      secondKeyRecordedSeparately: !!coverageAfterSecond[docKey2],
+      secondKeyTotalParagraphsCorrect: coverageAfterSecond[docKey2]?.totalParagraphs === 2,
+      keysAreDifferent: docKey1 !== docKey2,
+    },
+    scannedPdfDegradesToSilence: {
+      pageRenderedButNoText: scannedRendered.pageCount === 1 && scannedRendered.spanCount === 0,
+      noCoverageRecordCreated: !Object.prototype.hasOwnProperty.call(coverageAfterScanned, `pdf:${scannedUrl}`),
+      noPageErrors: scannedErrors.length === 0,
+    },
+    newPageErrors: readErrors.length + read2Errors.length,
+  };
+} catch (e) {
+  pdfDetectionResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeCoverageStore({});
+
 // ── Pin / auto-dismiss exclusivity (item 34) ────────────────────────────────
 // A real popup.html load, checking the UI itself rather than just the
 // source text: clicking "Keep cards until I close them" must force "Clear
@@ -1842,6 +2075,7 @@ console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
 console.log('highlight explanations (36):', JSON.stringify(explanationResult, null, 2));
 console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
+console.log('PDF reading detection (30c):', JSON.stringify(pdfDetectionResult, null, 2));
 console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));
 console.log('pin/auto-dismiss (34)   :', JSON.stringify(pinAutohideResult, null, 2));
 console.log('AI-call rate limit (38) :', JSON.stringify(rateLimitResult, null, 2));
