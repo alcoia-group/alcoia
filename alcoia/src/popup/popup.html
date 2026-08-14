@@ -306,7 +306,7 @@
     </div>
     <div class="state-why" id="stateWhy">Open an article and start reading — the estimate appears here.</div>
     <div class="state-sources">
-      <span class="src-chip on" id="signalChip"><i></i><span id="signalStatus">Reading signals</span></span>
+      <span class="src-chip on" id="signalChip"><i></i><span id="signalStatus">Noticing</span></span>
     </div>
   </div>
 
@@ -350,7 +350,7 @@
 
         <label class="toggle-cell" for="comprehensionToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Reading signals</span>
+            <span class="toggle-cell-name">Notice when I'm struggling</span>
             <label class="pill"><input type="checkbox" id="comprehensionToggle" checked><span class="pill-track"></span></label>
           </div>
           <span class="toggle-cell-desc">Your pace against the difficulty of the text, re-reads, and where you stop. No permission needed.</span>
@@ -365,15 +365,15 @@
 
         <label class="toggle-cell" for="selToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Selection summaries</span>
+            <span class="toggle-cell-name">Explain text I select</span>
             <label class="pill"><input type="checkbox" id="selToggle" checked><span class="pill-track"></span></label>
           </div>
-          <span class="toggle-cell-desc">Explain any passage you highlight</span>
+          <span class="toggle-cell-desc">Look up a word, explain an image, or summarise a passage — on selection or Ctrl+hover. Nothing is kept; uses one assist each time.</span>
         </label>
 
         <label class="toggle-cell" for="highlightToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Show the passage</span>
+            <span class="toggle-cell-name">Outline the paragraph</span>
             <label class="pill"><input type="checkbox" id="highlightToggle" checked><span class="pill-track"></span></label>
           </div>
           <span class="toggle-cell-desc">Outline the paragraph a card refers to</span>
@@ -389,7 +389,7 @@
 
         <label class="toggle-cell" for="highlightSummarizeToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Summarise on highlight</span>
+            <span class="toggle-cell-name">Save an explanation with each highlight</span>
             <label class="pill"><input type="checkbox" id="highlightSummarizeToggle"><span class="pill-track"></span></label>
           </div>
           <span class="toggle-cell-desc">Also asks the AI to explain what you highlighted — uses one assist each time.</span>
@@ -405,7 +405,7 @@
 
         <label class="toggle-cell" for="focusRulerToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Focus ruler</span>
+            <span class="toggle-cell-name">Reading guide</span>
             <label class="pill"><input type="checkbox" id="focusRulerToggle"><span class="pill-track"></span></label>
           </div>
           <span class="toggle-cell-desc">Dim everything but the current line · <kbd>Alt+F</kbd></span>
@@ -420,18 +420,18 @@
 
         <label class="toggle-cell" for="autohideToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Auto-dismiss</span>
+            <span class="toggle-cell-name">Clear cards automatically</span>
             <label class="pill"><input type="checkbox" id="autohideToggle"><span class="pill-track"></span></label>
           </div>
-          <span class="toggle-cell-desc">Clear cards after a timeout</span>
+          <span class="toggle-cell-desc">Clear cards after a timeout. Off while "Keep cards until I close them" is on — the two contradict, and keeping wins.</span>
         </label>
 
         <label class="toggle-cell" for="pinDefaultToggle">
           <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Pin by default</span>
+            <span class="toggle-cell-name">Keep cards until I close them</span>
             <label class="pill"><input type="checkbox" id="pinDefaultToggle"><span class="pill-track"></span></label>
           </div>
-          <span class="toggle-cell-desc">Keep cards until you close them</span>
+          <span class="toggle-cell-desc">Cards stay open until you dismiss them. Turns off automatic clearing above.</span>
         </label>
 
         <label class="toggle-cell" for="darkModeToggle">

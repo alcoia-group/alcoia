@@ -37,16 +37,19 @@ $('deleteTokenBtn').addEventListener('click', () => {
 // Every sra_* preference content.js reads, with plain labels — this is
 // exactly what is already editable from the toolbar popup, just gathered
 // in one read-only place for support.
+// Item 34: labels here match the popup's own renamed toggles — this page
+// mirrors those settings and should never describe them under a different
+// name than the control the reader actually saw.
 const SETTINGS_FIELDS = [
   ['sra_enabled', 'Assistant on', (v) => (v !== false ? 'On' : 'Off')],
-  ['sra_comprehension', 'Reading signals', (v) => (v !== false ? 'On' : 'Off')],
-  ['sra_selection', 'Selection summaries', (v) => (v !== false ? 'On' : 'Off')],
-  ['sra_highlight_para', 'Show the passage', (v) => (v !== false ? 'On' : 'Off')],
+  ['sra_comprehension', "Notice when I'm struggling", (v) => (v !== false ? 'On' : 'Off')],
+  ['sra_selection', 'Explain text I select', (v) => (v !== false ? 'On' : 'Off')],
+  ['sra_highlight_para', 'Outline the paragraph', (v) => (v !== false ? 'On' : 'Off')],
   ['sra_tts', 'Read aloud', (v) => (v ? 'On' : 'Off')],
-  ['sra_focus_ruler', 'Focus ruler', (v) => (v ? 'On' : 'Off')],
+  ['sra_focus_ruler', 'Reading guide', (v) => (v ? 'On' : 'Off')],
   ['sra_dyslexia', 'Dyslexia mode', (v) => (v ? 'On' : 'Off')],
-  ['sra_autohide', 'Auto-dismiss cards', (v) => (v ? 'On' : 'Off')],
-  ['sra_pin_default', 'Pin by default', (v) => (v ? 'On' : 'Off')],
+  ['sra_autohide', 'Clear cards automatically', (v) => (v ? 'On' : 'Off')],
+  ['sra_pin_default', 'Keep cards until I close them', (v) => (v ? 'On' : 'Off')],
   ['sra_dark_mode', 'Dark mode', (v) => (v ? 'On' : 'Off')],
   ['sra_baseline_wpm', 'Reading-speed baseline', (v) => (v ? `${Math.round(v)} wpm` : null)],
   ['sra_backend_url', 'Backend URL', (v) => v || null],

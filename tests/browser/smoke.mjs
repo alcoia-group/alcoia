@@ -1430,6 +1430,53 @@ try {
   webPdfResult = { attempted: true, error: String((e && e.message) || e) };
 }
 
+// ── Pin / auto-dismiss exclusivity (item 34) ────────────────────────────────
+// A real popup.html load, checking the UI itself rather than just the
+// source text: clicking "Keep cards until I close them" must force "Clear
+// cards automatically" off and disable it, and clicking it off again must
+// re-enable the other control.
+let pinAutohideResult;
+try {
+  const popupPage = await ctx.newPage();
+  await popupPage.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await popupPage.waitForTimeout(300);
+
+  await popupPage.evaluate(() => new Promise((r) => chrome.storage.local.set(
+    { sra_autohide: true, sra_pin_default: false }, r)));
+  await popupPage.reload();
+  await popupPage.waitForTimeout(300);
+  const beforePin = await popupPage.evaluate(() => ({
+    autohideChecked: document.getElementById('autohideToggle').checked,
+    autohideDisabled: document.getElementById('autohideToggle').disabled,
+  }));
+
+  await popupPage.evaluate(() => document.getElementById('pinDefaultToggle').click());
+  await popupPage.waitForTimeout(150);
+  const afterPinOn = await popupPage.evaluate(() => ({
+    autohideChecked: document.getElementById('autohideToggle').checked,
+    autohideDisabled: document.getElementById('autohideToggle').disabled,
+  }));
+  const storedAfterPinOn = await popupPage.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_autohide: null, sra_pin_default: null }, r)));
+
+  await popupPage.evaluate(() => document.getElementById('pinDefaultToggle').click());
+  await popupPage.waitForTimeout(150);
+  const afterPinOff = await popupPage.evaluate(() => ({
+    autohideDisabled: document.getElementById('autohideToggle').disabled,
+  }));
+  await popupPage.close();
+
+  pinAutohideResult = {
+    startedWithAutohideOnPinOff: beforePin.autohideChecked === true && beforePin.autohideDisabled === false,
+    turningPinOnUnchecksAutohide: afterPinOn.autohideChecked === false,
+    turningPinOnDisablesAutohide: afterPinOn.autohideDisabled === true,
+    contradictionNeverPersisted: storedAfterPinOn.sra_pin_default === true && storedAfterPinOn.sra_autohide === false,
+    turningPinOffReenablesAutohide: afterPinOff.autohideDisabled === false,
+  };
+} catch (e) {
+  pinAutohideResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -1469,6 +1516,7 @@ console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
 console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
 console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));
+console.log('pin/auto-dismiss (34)   :', JSON.stringify(pinAutohideResult, null, 2));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));
