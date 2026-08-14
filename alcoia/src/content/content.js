@@ -1419,6 +1419,13 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       debugEnabled = !!msg.enabled;
       sendResponse({ status:'ok' }); return true;
     }
+    // Item 27: background.js's webNavigation.onHistoryStateUpdated listener
+    // — the channel that actually reaches a real SPA's pushState-driven
+    // route change, unlike the isolated-world history patch below.
+    if (msg.type === 'spaRouteChanged') {
+      try { onSpaNavigate(); } catch (e) {}
+      sendResponse({ status: 'ok' }); return true;
+    }
     if (msg.type === 'startReadingCalibration') {
       (async () => {
         try {
@@ -1604,7 +1611,25 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   }
 
   // ── SPA navigation: close unpinned popups, badge pinned ones as stale ────
+  // Item 27: two independent channels can call this — the pushState/
+  // replaceState patch below (which only ever actually fires on a genuine
+  // popstate, since the patch itself never sees a page-context pushState
+  // call — see the header comment on the patch) and background.js's
+  // webNavigation-driven 'spaRouteChanged' message (the one that reaches
+  // real SPA route changes). Both are safe to call for the same navigation:
+  // lastSpaDocKey makes the second call a no-op on the route-change-reset
+  // front, since documentKey() will already match.
+  let lastSpaDocKey = null;
   function onSpaNavigate() {
+    // A query-string-only or hash-only change is the same document per
+    // coverage-gate.js's own documentKey() (hostname+pathname, no search, no
+    // hash) — only a pathname change is a genuine new document and should
+    // reset paragraph tracking. A same-document popup/highlight refresh
+    // still runs either way; it is cheap and was already unconditional.
+    const newKey = orchestrator ? orchestrator.documentKey() : null;
+    const isRouteChange = !!newKey && newKey !== lastSpaDocKey;
+    lastSpaDocKey = newKey;
+
     for (const [fp, { el }] of [...openPopups.entries()]) {
       if (!el || !document.contains(el)) { openPopups.delete(fp); continue; }
       if (el.dataset.pinned !== 'true') {
@@ -1621,6 +1646,15 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       }
     }
     inFlightFingerprints.clear();
+
+    // Item 27: paragraph tracking, the comprehension monitor's in-flight
+    // paragraph, and the paragraph-index-keyed telemetry detectors all
+    // belong to the DOM of the document that just disappeared. Only a real
+    // pathname change warrants this — see orchestrator.js's
+    // handleRouteChange() header for the full reasoning.
+    if (isRouteChange) {
+      try { orchestrator.handleRouteChange(); } catch (e) {}
+    }
 
     // Item 25: colour highlights are keyed per document (hostname+pathname),
     // and used to only ever restore once, at initial page load — so an SPA
@@ -1754,6 +1788,11 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   orchestrator.installListeners();
   orchestrator.primeParagraph();
+  // Baseline for onSpaNavigate()'s route-change check — set once, here,
+  // rather than left at its `null` default, so the first real navigation is
+  // correctly compared against the page the content script actually loaded
+  // on rather than treated as a route change against nothing.
+  lastSpaDocKey = orchestrator.documentKey();
 
   restoreHighlightMarkers();
   restoreTextHighlights();

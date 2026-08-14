@@ -30,6 +30,35 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
+// ── SPA route-change detection (item 27) ────────────────────────────────
+// content.js's own history.pushState/replaceState monkey-patch runs in the
+// content script's ISOLATED world and never reaches the page's own
+// MAIN-world `history` object — confirmed by reading
+// `history.pushState.toString()` from the page's own context after the
+// patch runs; it still reports `[native code]`. A real single-page app's
+// route changes call pushState from the page's own script, which that
+// isolated-world patch can never see, so onSpaNavigate() effectively never
+// ran except on a genuine popstate (back/forward button).
+//
+// webNavigation.onHistoryStateUpdated fires from the browser itself,
+// independent of which JS world the history-API call originated in, so it
+// needs no page-context injection at all — no MAIN-world script, no bridge,
+// none of the machinery the gaze-removal item deleted for exactly that
+// reason. The permission was already declared in manifests/base.json
+// (previously unused — the README documented it as backing this file's
+// file:// redirect, but that redirect is actually built on tabs.onUpdated;
+// verified, not assumed, before relying on it here). No new permission was
+// added for this.
+chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
+  if (details.frameId !== 0) return; // top frame only — content scripts run there only too
+  chrome.tabs.sendMessage(details.tabId, { type: 'spaRouteChanged', url: details.url }, () => {
+    // No content script listening on this tab (e.g. a chrome:// page, or the
+    // extension's own pages) — nothing to do, and nothing to surface as an
+    // error either.
+    void chrome.runtime.lastError;
+  });
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.action) return;
 
