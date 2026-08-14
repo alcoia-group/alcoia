@@ -130,6 +130,43 @@ const server = http.createServer((req, res) => {
     </body></html>`);
     return;
   }
+  // Item 27: a minimal but genuine SPA fixture — real client-side routing via
+  // history.pushState() called from the PAGE's own main-world script (not
+  // from anything the extension injects), swapping #app's content and the
+  // URL's pathname with no network request at all. Both "routes" below are
+  // client-side only; the server only ever serves the initial GET.
+  if (req.url.startsWith('/spa-fixture')) {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><body>
+      <div style="height:1400px"></div>
+      <div id="app">
+        <p class="spa-par">Article one opens with a long enough paragraph to be tracked by the paragraph tracker, which needs at least twenty words before it counts as prose worth measuring at all here.</p>
+        <p class="spa-par">Article one continues with a second paragraph, also long enough on its own to clear the same twenty word floor the tracker enforces before treating anything as real reading material.</p>
+      </div>
+      <button id="spa-nav-btn">Go to article two</button>
+      <button id="spa-back-btn" style="display:none">Back to article one</button>
+      <div style="height:1400px"></div>
+      <script>
+        var ARTICLE_ONE = document.getElementById('app').innerHTML;
+        var ARTICLE_TWO =
+          '<p class="spa-par">Article two opens with an entirely different long paragraph, unrelated to article one, still comfortably over the twenty word floor the paragraph tracker requires before counting it.</p>' +
+          '<p class="spa-par">Article two continues with a second paragraph of its own, again well past the word floor, so the tracker has real prose to measure on the freshly swapped in route content.</p>';
+        document.getElementById('spa-nav-btn').addEventListener('click', function () {
+          document.getElementById('app').innerHTML = ARTICLE_TWO;
+          document.getElementById('spa-nav-btn').style.display = 'none';
+          document.getElementById('spa-back-btn').style.display = '';
+          history.pushState({}, '', '/spa-fixture/article-two');
+        });
+        document.getElementById('spa-back-btn').addEventListener('click', function () {
+          document.getElementById('app').innerHTML = ARTICLE_ONE;
+          document.getElementById('spa-back-btn').style.display = 'none';
+          document.getElementById('spa-nav-btn').style.display = '';
+          history.pushState({}, '', '/spa-fixture.html');
+        });
+      </script>
+    </body></html>`);
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(html);
 }).listen(8731);
@@ -1012,6 +1049,169 @@ try {
 }
 await writeHighlightStore({});
 
+// ── SPA route-change detection (item 27) ───────────────────────────────────
+// The isolated-world history.pushState/replaceState patch never sees a real
+// page's own pushState call (see the project notes' item-25 finding, and
+// background.js's header comment on the fix) — a popstate-only test proves
+// nothing about this bug. /spa-fixture.html's script calls history
+// .pushState() directly from the page's own MAIN-world context, exactly
+// like a real SPA router, so this is the only kind of test that actually
+// exercises the fix.
+async function readCoverageStore() {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const store = await helper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_doc_coverage: {} }, (res) => r(res.sra_doc_coverage))));
+  await helper.close();
+  return store;
+}
+async function writeCoverageStore(store) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((s) => new Promise((r) => chrome.storage.local.set({ sra_doc_coverage: s }, r)), store);
+  await helper.close();
+}
+
+const SPA_KEY_A = 'localhost/spa-fixture.html';
+const SPA_KEY_B = 'localhost/spa-fixture/article-two';
+
+// Both fixture articles sit between two 1400px spacers so the page is tall
+// enough to need real scrolling — paragraph-tracker's reading-line heuristic
+// only fires a transition on an actual 'scroll' event, and a page short
+// enough to fit one viewport never dispatches one. Steps through the whole
+// document in viewport-sized increments so a real "enter paragraph, dwell,
+// leave paragraph" sequence happens regardless of exactly where the two
+// paragraphs land for a given article.
+async function scrollThroughDocument(pg) {
+  const docHeight = await pg.evaluate(() => document.documentElement.scrollHeight);
+  const viewportH = await pg.evaluate(() => window.innerHeight);
+  const step = Math.max(250, Math.floor(viewportH * 0.6));
+  for (let y = 0; y <= docHeight; y += step) {
+    await pg.evaluate((yy) => window.scrollTo(0, yy), y);
+    await pg.waitForTimeout(400);
+  }
+  await pg.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await pg.waitForTimeout(400);
+}
+
+let spaResult;
+try {
+  await writeCoverageStore({});
+  await writeHighlightStore({});
+  await setHighlightToggles(true, false); // colour on, summarise off — isolate this block from item 26's leftover settings
+
+  const spaPage = await ctx.newPage();
+  const spaLogs = [];
+  spaPage.on('console', (m) => spaLogs.push(m.text()));
+  await spaPage.goto('http://localhost:8731/spa-fixture.html');
+  await spaPage.waitForTimeout(700);
+
+  // A real colour highlight on article one, to prove restoration also
+  // reaches a genuine pushState-driven route change and back, not just the
+  // popstate path item 25 was limited to testing.
+  await selectAndCtrlDrag(spaPage, 'long enough paragraph to be tracked by the paragraph tracker');
+  const pickerVisible = await spaPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (pickerVisible) {
+    await spaPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await spaPage.waitForTimeout(500);
+  }
+  const markCountBeforeNav = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+
+  // Read article one for real: scroll through paragraph one (a genuine
+  // "left" transition registers its coverage), then stop centered on
+  // paragraph two rather than scrolling on past it — paragraph two is still
+  // the ACTIVE paragraph, mid-read, at the exact moment navigation happens.
+  // This is the scenario paragraphTracker.reset() specifically guards:
+  // without it, the reader's in-flight OLD-document paragraph would surface
+  // as a "left" transition on the NEW document, carrying article one's own
+  // text and stale dwell time into article two's coverage record.
+  await spaPage.evaluate(() => window.scrollTo(0, 0));
+  await spaPage.waitForTimeout(300);
+  const p1Top = await spaPage.evaluate(() =>
+    document.querySelectorAll('.spa-par')[0].getBoundingClientRect().top + window.scrollY);
+  await spaPage.evaluate((y) => window.scrollTo(0, Math.max(0, y - 200)), p1Top);
+  await spaPage.waitForTimeout(1200); // real dwell entering paragraph one
+  await spaPage.evaluate(() => document.querySelectorAll('.spa-par')[1].scrollIntoView({ block: 'center' }));
+  await spaPage.waitForTimeout(1800); // real dwell on paragraph two, still active at nav time
+
+  const coverageBeforeNav = await readCoverageStore();
+
+  // The real pushState-driven route change: a genuine click on the page's
+  // own button, which calls history.pushState() directly from the page's
+  // own script — NOT popstate, and NOT anything the extension triggers.
+  await spaPage.click('#spa-nav-btn');
+  await spaPage.waitForTimeout(700); // background webNavigation round trip + debounced highlight restore
+
+  const pathAfterNav = await spaPage.evaluate(() => location.pathname);
+  const markCountAfterNav = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+
+  // Read article two the same way. Reset to the top first — the browser
+  // does not auto-scroll back on a pushState-only navigation, and starting
+  // from wherever article one left the scroll position would skip straight
+  // past article two's paragraphs without ever crossing the reading line.
+  await spaPage.evaluate(() => window.scrollTo(0, 0));
+  await spaPage.waitForTimeout(300);
+  await scrollThroughDocument(spaPage);
+
+  const coverageAfterArticleTwo = await readCoverageStore();
+
+  // A query-string-only change on the SAME route must NOT be treated as a
+  // new document — coverage-gate.js's documentKey() is hostname+pathname
+  // only, and this fix must respect that rather than resetting on every
+  // pushState call regardless of what actually changed.
+  await spaPage.evaluate(() => history.pushState({}, '', location.pathname + '?utm_source=test'));
+  await spaPage.waitForTimeout(500);
+  const coverageAfterQueryOnlyChange = await readCoverageStore();
+
+  // Real pushState back to article one's original pathname. The DOM is
+  // restored by the page's own script as a fresh element (not the same
+  // node), so a mark reappearing here can only come from a genuine
+  // restoreTextHighlights() re-anchor, not from the original DOM surviving.
+  await spaPage.click('#spa-back-btn');
+  await spaPage.waitForTimeout(700);
+  const pathAfterBack = await spaPage.evaluate(() => location.pathname);
+  const markCountAfterBack = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+
+  const routeChangeLogged = spaLogs.some((l) => l.includes('SPA route change'));
+
+  // The sharpest check in this block: paragraph two of article one was
+  // still ACTIVE (mid-read, not yet "left") at the exact moment navigation
+  // happened. Without paragraphTracker.reset(), that stale in-flight
+  // paragraph surfaces as a "left" transition on the new document —
+  // carrying its own (article-one) text as the fingerprint into article
+  // two's coverage record, since documentKey() is read live at record time.
+  // A fingerprint is the first 80 characters of the paragraph text
+  // (fingerprint() in coverage-gate.js), so any article-one-authored
+  // fingerprint appearing under keyB is direct proof of the misattribution
+  // this item exists to prevent.
+  const keyBFingerprints = coverageAfterArticleTwo[SPA_KEY_B]?.fingerprints || [];
+  const noArticleOneTextLeakedIntoArticleTwoCoverage =
+    keyBFingerprints.length > 0 && keyBFingerprints.every((fp) => !fp.startsWith('Article one'));
+
+  spaResult = {
+    realPushStateChangedUrl: pathAfterNav === '/spa-fixture/article-two',
+    highlightCreatedOnArticleOne: markCountBeforeNav === 1,
+    highlightGoneWhenArticleTwoSwappedIn: markCountAfterNav === 0,
+    coverageAccruedForArticleOneBeforeNav: !!(coverageBeforeNav[SPA_KEY_A]?.fingerprints?.length),
+    coverageAccruedForArticleTwoAfterNav: !!(coverageAfterArticleTwo[SPA_KEY_B]?.fingerprints?.length),
+    articleTwoTotalParagraphsCorrect: coverageAfterArticleTwo[SPA_KEY_B]?.totalParagraphs === 2,
+    noArticleOneTextLeakedIntoArticleTwoCoverage,
+    articleOneCoverageUntouchedByArticleTwoReading:
+      JSON.stringify(coverageAfterArticleTwo[SPA_KEY_A]) === JSON.stringify(coverageBeforeNav[SPA_KEY_A]),
+    queryStringChangeKeptSameKey:
+      Object.prototype.hasOwnProperty.call(coverageAfterQueryOnlyChange, SPA_KEY_B)
+      && Object.keys(coverageAfterQueryOnlyChange).every((k) => k === SPA_KEY_A || k === SPA_KEY_B),
+    realPushStateBackRestoredUrl: pathAfterBack === '/spa-fixture.html',
+    highlightReanchoredAfterRealPushStateBack: markCountAfterBack === 1,
+    routeChangeResetLoggedForDebug: routeChangeLogged,
+  };
+  await spaPage.close();
+} catch (e) {
+  spaResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeCoverageStore({});
+await writeHighlightStore({});
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -1047,6 +1247,7 @@ console.log('diagnostics safety      :', JSON.stringify(diagSafety), '(expect al
 console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")');
 console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2));
 console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
+console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));

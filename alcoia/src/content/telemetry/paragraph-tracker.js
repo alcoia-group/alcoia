@@ -147,10 +147,27 @@ export function createParagraphTracker(opts = {}) {
 
   function signal() { const s = pending; pending = null; return s; }
 
+  /* Discard in-flight tracking state without producing a transition — a
+   * genuine SPA route change swaps the DOM out from under `paragraphs`, and
+   * without this the next `update()` would report the OLD document's active
+   * paragraph as "left", carrying its full stale dwell time into a
+   * transition that syncParagraph() attributes to the NEW document's
+   * coverage-gate key (documentKey() is read live, at record time). Callers
+   * still need `rescan()` afterward to populate `paragraphs` from the new
+   * DOM; this only clears state that would otherwise misattribute. */
+  function reset() {
+    paragraphs = [];
+    indexOf = new WeakMap();
+    active = null;
+    pending = null;
+    lastScan = 0;
+  }
+
   return {
     update,
     signal,
     rescan: scan,
+    reset,
     getActive: () => (active ? { ...active } : null),
     getIndex: (el) => (el && indexOf.has(el) ? indexOf.get(el) : null),
     // Default keeps counting every tracked candidate, media included — the

@@ -290,6 +290,17 @@ export function createComprehensionMonitor(opts = {}) {
 
   function markOfferShown() { lastOfferAt = Date.now(); }
 
+  /* Discard the in-flight paragraph without scoring it as a departure — used
+   * on a genuine SPA route change. leaveParagraph() would otherwise compute
+   * elapsed time against `enteredAt` from a paragraph that no longer exists
+   * on screen; the WPM/residual samples that comes from would still be
+   * numerically real (the reader did spend that time reading), but the
+   * expected-time comparison it feeds is bound to text that is gone, so the
+   * safer choice is silence rather than a sample that cannot be reproduced
+   * or checked (invariant 5's instinct applied to a case its own text never
+   * anticipated). */
+  function resetParagraph() { paragraphEntry = null; }
+
   /* The calibration passages are English, so that is the language the measured
      figure belongs to. It still serves as the fallback everywhere else until
      each language earns its own samples. */
@@ -307,7 +318,7 @@ export function createComprehensionMonitor(opts = {}) {
   }
 
   return {
-    enterParagraph, leaveParagraph, onScroll, markOfferShown,
+    enterParagraph, leaveParagraph, onScroll, markOfferShown, resetParagraph,
     seedWpmFromCalibration, fleschKincaid, getCurrentExpectation,
     getBaselineWpm: () => wpmBaseline.get(),
     getResidualStats: () => residuals.stats(),
