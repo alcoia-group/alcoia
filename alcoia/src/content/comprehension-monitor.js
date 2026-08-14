@@ -28,9 +28,9 @@
 // ── Readability ────────────────────────────────────────────────────────────────
 // Flesch-Kincaid plus syntactic proxies. The syntactic half is what makes
 // non-English pages produce a difficulty signal at all — see text-difficulty.js.
-import { analyzeDifficulty, fleschKincaid } from './telemetry/text-difficulty.js';
-import { countWords, detectLanguage } from './telemetry/segmentation.js';
-import { ResidualDistribution } from './telemetry/residual-distribution.js';
+import { analyzeDifficulty, fleschKincaid } from './signals/text-difficulty.js';
+import { countWords, detectLanguage } from './signals/segmentation.js';
+import { ResidualDistribution } from './signals/residual-distribution.js';
 
 // Generic WPM for typical readers (used before personal baseline is established)
 const GENERIC_WPM = { easy: 260, standard: 220, difficult: 160, very_difficult: 110 };

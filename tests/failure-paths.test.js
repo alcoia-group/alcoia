@@ -4,7 +4,7 @@
  *
  * This file covers the failure paths that live in exported, importable
  * modules: question-card.js's defence against malformed question shapes,
- * and state-engine.js's resolution of unrecognised or absent telemetry to
+ * and state-engine.js's resolution of unrecognised or absent reading signals to
  * `unknown`. Two of the paths in this item's brief cannot be unit-tested
  * this way and are covered elsewhere instead:
  *
@@ -100,23 +100,23 @@ describe('question-card.js: malformed question shapes degrade to silence', () =>
   });
 });
 
-describe('state-engine.js: unrecognised or absent telemetry resolves to unknown', () => {
+describe('state-engine.js: unrecognised or absent reading signals resolve to unknown', () => {
   it('an unrecognised signal type asserts nothing', () => {
     const e = createReadingStateEngine({ now: fixedClock().now });
-    const s = e.update({ telemetry: { type: 'nonsense_from_a_future_detector', payload: '???' } });
+    const s = e.update({ reading: { type: 'nonsense_from_a_future_detector', payload: '???' } });
     expect(s.label).toBe(STATES.UNKNOWN);
     expect(s.confidence).toBe(0);
   });
 
-  it('a telemetry object with no type asserts nothing', () => {
+  it('a reading signal with no type asserts nothing', () => {
     const e = createReadingStateEngine({ now: fixedClock().now });
-    const s = e.update({ telemetry: { subtype: 'too_slow' } });
+    const s = e.update({ reading: { subtype: 'too_slow' } });
     expect(s.label).toBe(STATES.UNKNOWN);
   });
 
-  it('a null telemetry entry in a batch is ignored rather than throwing', () => {
+  it('a null reading-signal entry in a batch is ignored rather than throwing', () => {
     const e = createReadingStateEngine({ now: fixedClock().now });
-    expect(() => e.update({ telemetry: [null, undefined, { type: 'backtrack', backtrackPx: 200 }] }))
+    expect(() => e.update({ reading: [null, undefined, { type: 'backtrack', backtrackPx: 200 }] }))
       .not.toThrow();
     const s = e.getState();
     expect(s.label).toBe(STATES.STRUGGLING);
@@ -124,7 +124,7 @@ describe('state-engine.js: unrecognised or absent telemetry resolves to unknown'
 
   it('an empty update produces unknown, never a stale previous state read as fresh', () => {
     const e = createReadingStateEngine({ now: fixedClock().now });
-    e.update({ telemetry: { type: 'backtrack', backtrackPx: 200 } });
+    e.update({ reading: { type: 'backtrack', backtrackPx: 200 } });
     const s = e.update({});
     expect(s.label).toBe(STATES.UNKNOWN);
     expect(s.confidence).toBe(0);

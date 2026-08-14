@@ -6,7 +6,7 @@
  * Checks: content script injects, no page errors, no getUserMedia call ever
  * (there is no camera path left to make one — see the project notes' migration
  * note on removing webcam gaze), no image/video data in any request, and
- * that telemetry-only detection reaches the reader.
+ * that reading-signal-only detection reaches the reader.
  *
  * Not part of `npm test` — it needs a real browser and takes ~20s. */
 import { chromium } from 'playwright';
@@ -779,7 +779,34 @@ const diagSafety = {
 await diagPage.evaluate(() => document.getElementById('deleteTokenBtn')?.click());
 await diagPage.waitForTimeout(100);
 const afterDelete = await diagPage.evaluate(() => document.getElementById('val-tokenStatus')?.textContent || null);
+
+// Item 33: the developer tools moved here from the main popup, gated on
+// sra_debug (already on globally in this harness — see the cfg block at the
+// top of this file). Confirms the card is genuinely visible under a real
+// debug-on setting, not just present-but-hidden in the DOM, and that its
+// simulate button reaches the real page through the same message path the
+// keyboard shortcut uses — clicking it should produce the same
+// #sra-sim-toast the Alt+1 check below looks for.
+const devToolsResult = await diagPage.evaluate(() => ({
+  devCardVisible: !document.getElementById('devCard')?.hidden,
+  backendUrlFieldPresent: !!document.getElementById('devBackendUrl'),
+  backendUrlFieldValue: document.getElementById('devBackendUrl')?.value || null,
+}));
 await diagPage.close();
+// chrome.tabs.query({active:true, currentWindow:true}) inside diagnostics.js
+// resolves to whichever tab Chrome itself considers active — the article
+// page must be that tab for the click below to reach it, so bring it to
+// front first. Playwright can still click a background (diagnostics) tab's
+// DOM directly via CDP without needing that tab focused.
+await page.bringToFront();
+const diagPage2 = await ctx.newPage();
+await diagPage2.goto(`chrome-extension://${extId}/src/popup/diagnostics.html`);
+await diagPage2.waitForTimeout(400);
+await page.bringToFront();
+await diagPage2.evaluate(() => document.getElementById('simStrugglingBtn')?.click());
+await diagPage2.waitForTimeout(500);
+devToolsResult.simulateButtonProducedToast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
+await diagPage2.close();
 
 // ── Colour highlight persistence (item 25) ───────────────────────────────
 // This predates the sequenced items (a pre-existing, undocumented feature —
@@ -1403,6 +1430,53 @@ try {
   webPdfResult = { attempted: true, error: String((e && e.message) || e) };
 }
 
+// ── Pin / auto-dismiss exclusivity (item 34) ────────────────────────────────
+// A real popup.html load, checking the UI itself rather than just the
+// source text: clicking "Keep cards until I close them" must force "Clear
+// cards automatically" off and disable it, and clicking it off again must
+// re-enable the other control.
+let pinAutohideResult;
+try {
+  const popupPage = await ctx.newPage();
+  await popupPage.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await popupPage.waitForTimeout(300);
+
+  await popupPage.evaluate(() => new Promise((r) => chrome.storage.local.set(
+    { sra_autohide: true, sra_pin_default: false }, r)));
+  await popupPage.reload();
+  await popupPage.waitForTimeout(300);
+  const beforePin = await popupPage.evaluate(() => ({
+    autohideChecked: document.getElementById('autohideToggle').checked,
+    autohideDisabled: document.getElementById('autohideToggle').disabled,
+  }));
+
+  await popupPage.evaluate(() => document.getElementById('pinDefaultToggle').click());
+  await popupPage.waitForTimeout(150);
+  const afterPinOn = await popupPage.evaluate(() => ({
+    autohideChecked: document.getElementById('autohideToggle').checked,
+    autohideDisabled: document.getElementById('autohideToggle').disabled,
+  }));
+  const storedAfterPinOn = await popupPage.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_autohide: null, sra_pin_default: null }, r)));
+
+  await popupPage.evaluate(() => document.getElementById('pinDefaultToggle').click());
+  await popupPage.waitForTimeout(150);
+  const afterPinOff = await popupPage.evaluate(() => ({
+    autohideDisabled: document.getElementById('autohideToggle').disabled,
+  }));
+  await popupPage.close();
+
+  pinAutohideResult = {
+    startedWithAutohideOnPinOff: beforePin.autohideChecked === true && beforePin.autohideDisabled === false,
+    turningPinOnUnchecksAutohide: afterPinOn.autohideChecked === false,
+    turningPinOnDisablesAutohide: afterPinOn.autohideDisabled === true,
+    contradictionNeverPersisted: storedAfterPinOn.sra_pin_default === true && storedAfterPinOn.sra_autohide === false,
+    turningPinOffReenablesAutohide: afterPinOff.autohideDisabled === false,
+  };
+} catch (e) {
+  pinAutohideResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -1435,12 +1509,14 @@ console.log('keyboard shortcuts      :', JSON.stringify(shortcuts.results));
 console.log('  new page errors       :', shortcuts.newPageErrors);
 console.log('diagnostics page        :', JSON.stringify(diagnostics));
 console.log('diagnostics safety      :', JSON.stringify(diagSafety), '(expect all true)');
+console.log('dev tools (item 33)     :', JSON.stringify(devToolsResult));
 console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")');
 console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2));
 console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
 console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
 console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));
+console.log('pin/auto-dismiss (34)   :', JSON.stringify(pinAutohideResult, null, 2));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));

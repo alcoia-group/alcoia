@@ -7,7 +7,7 @@
 ---
 
 A browser extension that notices when reading slows down on a page and offers help with that
-passage. Detection runs on **browser telemetry**: pace against text difficulty and against your
+passage. Detection runs on **browser reading signals**: pace against text difficulty and against your
 own baseline, re-reading, selection, tab focus, which needs no permission and no camera. There is
 no webcam mode: it has been removed, not merely demoted, and no `getUserMedia` call exists anywhere
 in the shipped code.
@@ -49,7 +49,7 @@ covers the product pitch, privacy and licensing.
 ## Overview
 
 alcoia watches how you read (pace against text difficulty and your own baseline, re-reading,
-selection, tab focus) using only browser telemetry, no camera, and asks a retrieval question when
+selection, tab focus) using only browser reading signals, no camera, and asks a retrieval question when
 it detects struggling or dense-text skimming. A wrong answer gets an explanation with 2-4 key terms
 highlighted; a correct one gets confirmation and nothing else. It can also generate on-demand
 summaries, speak paragraphs aloud, and adapt its visual presentation.
@@ -59,7 +59,7 @@ The extension supports:
   the quiz, coverage tracking.
 - **Local PDF and PPTX files**, opened from your computer: text extraction and the manual `Alt+S`
   summary work. **Detection, retrieval questions, and the quiz do not reach these formats yet**;
-  they run on a separate paragraph model the telemetry pipeline can't see. See the project notes'
+  they run on a separate paragraph model the signal pipeline can't see. See the project notes'
   `pdf-handler.js` / `pptx-handler.js` entry for the verified detail.
 
 Passage text is sent to a backend server (a separate repository, not part of this one) to generate
@@ -71,7 +71,7 @@ reading history stored server-side. See [Privacy](#privacy).
 ## How It Works
 
 ```
-Telemetry detectors (scroll, pace, selection, copy, blur, cursor)
+Reading-signal detectors (scroll, pace, selection, copy, blur, cursor)
                     |
      comprehension-monitor.js (pace vs. difficulty vs. your baseline)
                     |
@@ -82,7 +82,7 @@ Telemetry detectors (scroll, pace, selection, copy, blur, cursor)
      Action: retrieval question, nudge, or nothing
 ```
 
-1. **Detectors** (`src/content/telemetry/`) watch scroll behaviour, reading pace, text selection,
+1. **Detectors** (`src/content/signals/`) watch scroll behaviour, reading pace, text selection,
    copy events, tab focus, and cursor position. No permission needed; nothing observes you doing
    anything other than using the page normally.
 2. **`comprehension-monitor.js`** compares reading pace against the text's measured difficulty and
@@ -203,8 +203,8 @@ now-removed gaze classifier's training bias, and left with it.
 
 See [`../the project notes`](../the project notes)'s "Actual repository state" section for the annotated,
 kept-current file tree and line counts. Duplicating it here is exactly how this file went stale
-last time. In short: `src/content/` holds the content-script modules (telemetry detectors under
-`telemetry/`, the state engine, the interruption policy, the question card, the quiz); `src/popup/`
+last time. In short: `src/content/` holds the content-script modules (reading-signal detectors
+under `signals/`, the state engine, the interruption policy, the question card, the quiz); `src/popup/`
 holds the toolbar panel and its pages; `src/shared/` holds the backend-origin config and the
 install-token client; `background.js` is a thin message relay and the local-file PDF/PPTX redirect.
 
@@ -261,7 +261,7 @@ See `../the project notes`'s Access control section for the full mechanism.
 ### First use
 
 1. Navigate to any page with text.
-2. That's it: telemetry detection starts immediately, no permission prompt and no setup step.
+2. That's it: reading-signal detection starts immediately, no permission prompt and no setup step.
 
 ### Optional: reading calibration
 
@@ -377,13 +377,13 @@ Full detail lives in the top-level [`../README.md`](../README.md#privacy) and
 ## Development Notes
 
 ### Adding a new reading state
-There is no classifier to edit. Register the type in `state-engine.js`'s `fromTelemetry()` with a
+There is no classifier to edit. Register the type in `state-engine.js`'s `fromSignal()` with a
 confidence and an evidence sentence (or as a corroboration-only type in `CORROBORATING_TYPES` /
 `CORROBORATION`); an unregistered type is silently ignored. See `../the project notes`'s Conventions
 section.
 
-### Adding a new telemetry detector
-Goes in `src/content/telemetry/`, exporting `{ update(), signal() }`.
+### Adding a new reading-signal detector
+Goes in `src/content/signals/`, exporting `{ update(), signal() }`.
 
 ### Changing the AI model
 Lives entirely in the separate backend repository. The extension is model-agnostic.
