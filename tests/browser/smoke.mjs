@@ -249,6 +249,24 @@ const server = http.createServer((req, res) => {
     </body></html>`);
     return;
   }
+  // Item 38: eight distinct, real, individually-tall paragraphs to build a
+  // real session-recall pool via genuine scroll-and-dwell — the questions-
+  // path rate-limit check needs several distinct real reading candidates,
+  // not a synthetic one, since fetchQuestions() has no cache to short-cut
+  // through and session-recall.js's pool is in-memory (built only by real
+  // reading, not seedable via storage the way sra_text_highlights is).
+  // Each block is tall enough that a scrollTo() by its own height reliably
+  // advances exactly one paragraph regardless of the real viewport height.
+  if (req.url.startsWith('/rate-limit-fixture.html')) {
+    const paras = Array.from({ length: 8 }, (_, i) => `Paragraph number ${i + 1} of this rate limiting fixture ` +
+      `covers an entirely distinct filler topic so that session recall treats each block as its own genuine ` +
+      `reading candidate, comfortably past the forty word floor session-recall.js enforces before anything ` +
+      `counts as read material worth asking a retrieval question about later on.`);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><body>${paras.map((t) =>
+      `<div style="min-height:900px;padding-top:40px;box-sizing:border-box;"><p>${t}</p></div>`).join('')}</body></html>`);
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(html);
 }).listen(8731);
@@ -1663,6 +1681,128 @@ try {
   pinAutohideResult = { attempted: true, error: String((e && e.message) || e) };
 }
 
+// ── Client-side AI-call rate limiting (item 38) ────────────────────────────
+// A bug backstop, not entitlement enforcement — see checkAiCallBudget()'s
+// own header in content.js. Two independent budgets (fetchSummary's
+// 'summarize' path, fetchQuestions' 'questions' path), each with a 6-call/
+// 10s burst limit. Both paths are exercised for real, not synthetically:
+// the summarize burst reuses item 26's "colour off, summarize on" direct-
+// summarise flow across 8 distinct phrases on /rate-limit-fixture.html; the
+// questions burst builds a real 8-paragraph session-recall pool via genuine
+// scroll-and-dwell (session-recall.js's pool is in-memory only — unlike
+// sra_text_highlights, there is no storage key to seed directly) and then
+// triggers one real recall asking for more candidates than the burst limit.
+async function readDiagLog() {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const entries = await helper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_diag_log: [] }, (res) => r(res.sra_diag_log))));
+  await helper.close();
+  return entries;
+}
+async function clearDiagLog() {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate(() => new Promise((r) => chrome.storage.local.set({ sra_diag_log: [] }, r)));
+  await helper.close();
+}
+
+let rateLimitResult;
+try {
+  await clearDiagLog();
+
+  // (a) Summarize-path burst: 8 distinct real Ctrl+drag selections, colour
+  // off / summarize on (item 26's direct-summarise flow — no picker click
+  // needed), each a genuinely different phrase so none is a cache hit.
+  await setHighlightToggles(false, true); // also clears sra_text_highlights
+  const beforeSumBurst = apiHits.summarize;
+  const sumBurstPage = await ctx.newPage();
+  await sumBurstPage.goto('http://localhost:8731/rate-limit-fixture.html');
+  await sumBurstPage.waitForTimeout(400);
+  for (let i = 1; i <= 8; i++) {
+    await selectAndCtrlDrag(sumBurstPage, `Paragraph number ${i} of this rate`);
+  }
+  await sumBurstPage.waitForTimeout(600);
+  await sumBurstPage.close();
+  const summarizeCallsMade = apiHits.summarize - beforeSumBurst;
+
+  // (b) The cache still serves an identical repeat without ever reaching
+  // checkAiCallBudget() at all — it sits after fetchSummary()'s existing
+  // cache-hit early return, not before it.
+  const cachePage = await ctx.newPage();
+  await cachePage.goto('http://localhost:8731/rate-limit-fixture.html');
+  await cachePage.waitForTimeout(400);
+  const beforeCacheFirst = apiHits.summarize;
+  await selectAndCtrlDrag(cachePage, 'Paragraph number 1 of this rate');
+  const afterCacheFirst = apiHits.summarize;
+  await selectAndCtrlDrag(cachePage, 'Paragraph number 1 of this rate'); // identical text+mode
+  const afterCacheSecond = apiHits.summarize;
+  await cachePage.close();
+
+  // (c) Questions-path burst, independent from (a): a real reading session
+  // over all 8 paragraphs (each div is 900px tall and holds one paragraph,
+  // so scrolling by its own height reliably advances exactly one paragraph
+  // regardless of the real viewport height; the reading-line target is
+  // computed from the actual viewport height rather than assumed).
+  const qBurstPage = await ctx.newPage();
+  await qBurstPage.goto('http://localhost:8731/rate-limit-fixture.html');
+  await qBurstPage.waitForTimeout(400);
+  const viewportH = await qBurstPage.evaluate(() => window.innerHeight);
+  for (let i = 0; i < 8; i++) {
+    const y = Math.max(0, Math.round(i * 900 + 40 - viewportH * 0.4));
+    await qBurstPage.evaluate((yy) => window.scrollTo(0, yy), y);
+    await qBurstPage.waitForTimeout(300);  // let the engine sync on the new position
+    await qBurstPage.waitForTimeout(4200); // clear session-recall's MIN_DWELL_MS (4000ms)
+  }
+  // One more scroll to leave paragraph 8, finalising its dwell record.
+  await qBurstPage.evaluate((yy) => window.scrollTo(0, yy), 8 * 900);
+  await qBurstPage.waitForTimeout(400);
+
+  const beforeQBurst = apiHits.questions;
+  await sendToArticleTab({ action: 'sessionRecall', count: 8 }, 'http://localhost:8731/rate-limit-fixture.html');
+  // sessionRecall's message handler responds immediately, before the async
+  // fetch loop inside runSessionRecall() actually runs — wait for it here.
+  await qBurstPage.waitForTimeout(4000);
+  const questionsCallsMade = apiHits.questions - beforeQBurst;
+  await qBurstPage.close();
+
+  const diagAfter = await readDiagLog();
+  const rateLimitEntries = diagAfter.filter((e) => /rate_limited/.test(e.message || ''));
+
+  rateLimitResult = {
+    attempted: true,
+    summarizeBurst: {
+      attempts: 8,
+      callsMade: summarizeCallsMade,
+      stoppedAtLimit: summarizeCallsMade === 6,
+    },
+    cacheStillServesRepeats: {
+      firstCallHitNetwork: afterCacheFirst > beforeCacheFirst,
+      secondCallServedFromCache: afterCacheSecond === afterCacheFirst,
+    },
+    questionsBurst: {
+      requestedCount: 8,
+      callsMade: questionsCallsMade,
+      stoppedAtLimit: questionsCallsMade === 6,
+      independentFromSummarizeBudget: questionsCallsMade > 0, // its own budget wasn't pre-exhausted by (a)
+    },
+    diagnosticsLogging: {
+      totalRateLimitEntries: rateLimitEntries.length,
+      // Expect at least one entry per path, and none carrying a URL or
+      // passage text — diag-log.js sanitises URLs and this item must never
+      // hand it either.
+      hasSummarizePathEntry: rateLimitEntries.some((e) => e.context === 'summarize'),
+      hasQuestionsPathEntry: rateLimitEntries.some((e) => e.context === 'questions'),
+      noUrlsInMessages: rateLimitEntries.every((e) => !/https?:\/\//.test(e.message || '')),
+      sampleMessage: rateLimitEntries[0]?.message || null,
+    },
+  };
+} catch (e) {
+  rateLimitResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await setHighlightToggles(true, false); // restore the default combo for anything after this block
+await writeHighlightStore({});
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -1704,6 +1844,7 @@ console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
 console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));
 console.log('pin/auto-dismiss (34)   :', JSON.stringify(pinAutohideResult, null, 2));
+console.log('AI-call rate limit (38) :', JSON.stringify(rateLimitResult, null, 2));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));
