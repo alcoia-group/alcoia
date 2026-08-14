@@ -13,21 +13,36 @@ if (typeof importScripts === 'function') importScripts('src/shared/config.js');
 // cannot inject into. When a local file:// PDF is opened, redirect it to the
 // extension's custom PDF viewer page, which has full alcoia integration.
 // Requires "Allow access to file URLs" to be enabled in chrome://extensions.
+//
+// Item 29: two escape hatches, both checked before redirecting.
+//   1. sra_pdf_takeover in storage — the popup's "Open local PDF/PPTX files
+//      in alcoia" toggle. Off means this listener never redirects anything;
+//      every local PDF/PPTX opens in the browser's own viewer, unconditionally.
+//   2. The #alcoia-open-native URL fragment — set by the viewer page's own
+//      "Open in browser viewer" button (src/pdf-viewer/viewer.js,
+//      src/pptx-viewer/viewer.js) when navigating BACK to the original
+//      file:// URL for a document already open in alcoia's viewer. Without
+//      this, that navigation would immediately be redirected right back to
+//      the alcoia viewer it was trying to leave. The fragment survives
+//      local file navigation (it has no effect on which file loads) and
+//      needs no persisted state that could outlive a service-worker
+//      restart, unlike an in-memory "ignore the next navigation" flag would.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'loading') return;
   const url = tab.url || '';
   if (!url) return;
+  if (url.includes('#alcoia-open-native')) return;
 
-  if (/^file:\/\/.+\.pdf(\?.*)?$/i.test(url)) {
-    const viewerUrl = chrome.runtime.getURL('src/pdf-viewer/viewer.html') + '?src=' + encodeURIComponent(url);
-    chrome.tabs.update(tabId, { url: viewerUrl });
-    return;
-  }
+  const isPdf  = /^file:\/\/.+\.pdf(\?.*)?(#.*)?$/i.test(url);
+  const isPptx = /^file:\/\/.+\.pptx(\?.*)?(#.*)?$/i.test(url);
+  if (!isPdf && !isPptx) return;
 
-  if (/^file:\/\/.+\.pptx(\?.*)?$/i.test(url)) {
-    const viewerUrl = chrome.runtime.getURL('src/pptx-viewer/viewer.html') + '?src=' + encodeURIComponent(url);
+  chrome.storage.local.get({ sra_pdf_takeover: true }, (res) => {
+    if (res.sra_pdf_takeover === false) return; // escape hatch 1: takeover disabled entirely
+    const target = isPdf ? 'src/pdf-viewer/viewer.html' : 'src/pptx-viewer/viewer.html';
+    const viewerUrl = chrome.runtime.getURL(target) + '?src=' + encodeURIComponent(url);
     chrome.tabs.update(tabId, { url: viewerUrl });
-  }
+  });
 });
 
 // ── SPA route-change detection (item 27) ────────────────────────────────

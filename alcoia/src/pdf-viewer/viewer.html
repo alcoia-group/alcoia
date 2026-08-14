@@ -66,6 +66,16 @@
       border-radius: 10px; padding: 18px 24px; color: #f88; font-size: 13px;
       max-width: 480px; text-align: center; margin: 80px auto;
     }
+
+    /* Print: the toolbar and its fixed positioning have no place on paper,
+       and each rendered page should start its own printed page rather than
+       splitting across one. */
+    @media print {
+      #toolbar, #status, #error-box { display: none !important; }
+      #viewer { padding-top: 0; }
+      .page-wrap { break-inside: avoid; break-after: page; box-shadow: none; }
+      .page-wrap:last-child { break-after: auto; }
+    }
   </style>
 </head>
 <body>
@@ -76,8 +86,10 @@
   <button id="nextBtn">Next &#8594;</button>
   <button id="zoomOutBtn">&#8722;</button>
   <button id="zoomInBtn">&#43;</button>
+  <button id="printBtn">Print</button>
   <span id="filename">loading…</span>
   <span id="page-info"></span>
+  <button id="openNativeBtn" title="Open this document in your browser's own PDF viewer — full search, print and every other browser feature, no alcoia detection">Open in browser viewer</button>
 </div>
 
 <div id="viewer"></div>

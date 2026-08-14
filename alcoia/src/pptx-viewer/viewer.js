@@ -13,6 +13,21 @@
   document.getElementById('filename').textContent =
     decodeURIComponent(fileUrl.split('/').pop() || fileUrl);
 
+  // Item 29: the escape hatch. See pdf-viewer/viewer.js's identical handler
+  // for the full reasoning on the #alcoia-open-native fragment. Chrome has
+  // no native PPTX renderer, so unlike the PDF viewer this typically hands
+  // the reader a download rather than an in-browser view — still a real way
+  // out, just not a browser-native viewer, which is why the button and its
+  // tooltip say "without alcoia" rather than "in your browser".
+  document.getElementById('openNativeBtn').onclick = () => {
+    const bypassUrl = fileUrl.includes('#') ? fileUrl : fileUrl + '#alcoia-open-native';
+    chrome.tabs.getCurrent((tab) => {
+      if (tab?.id != null) chrome.tabs.update(tab.id, { url: bypassUrl });
+      else location.href = bypassUrl;
+    });
+  };
+  document.getElementById('printBtn').onclick = () => window.print();
+
   // ── Load JSZip ────────────────────────────────────────────────────────
   const jszipUrl = chrome.runtime.getURL('src/libs/jszip.min.js');
   await new Promise((res, rej) => {

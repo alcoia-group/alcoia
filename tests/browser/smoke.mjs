@@ -79,7 +79,41 @@ const FAIL_QUESTIONS = process.env.FAIL === 'questions';
 // actually matters here, and is checked below.
 const FAIL_TOKEN = process.env.FAIL === 'token';
 
+// Item 29: a minimal hand-built one-page PDF for the viewer escape-hatch
+// check — no external PDF-generation dependency, and small enough to keep
+// inline. Real syntax (a Type1 Helvetica font, one content stream, a proper
+// xref table), not a stub — pdf.js parses it exactly like a real document.
+function minimalPdfBytes() {
+  const esc = (s) => s.replace(/([\\()])/g, '\\$1');
+  const text = 'ITEM29-PDF-MARKER: a real one-page PDF for the escape-hatch check.';
+  const stream = `BT /F1 14 Tf 1 0 0 1 72 700 Tm (${esc(text)}) Tj ET`;
+  const objects = [
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Catalog /Pages 4 0 R >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 5 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+}
+const TEST_PDF_BYTES = minimalPdfBytes();
+
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/item29-test.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(TEST_PDF_BYTES);
+    return;
+  }
   if (req.method === 'POST' && req.url.startsWith('/api/token')) {
     apiHits.token++;
     if (FAIL_TOKEN) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
@@ -1212,6 +1246,65 @@ try {
 await writeCoverageStore({});
 await writeHighlightStore({});
 
+// ── PDF/PPTX viewer escape hatch (item 29) ─────────────────────────────────
+// The setting itself (sra_pdf_takeover) is read by background.js's
+// tabs.onUpdated redirect listener, which only fires on a real file://
+// navigation — out of reach here the same way item 20 documented (needs
+// "Allow access to file URLs", not scriptable from an automated headless
+// run). What IS directly testable, and is exactly the part this item
+// actually built: the popup toggle persists to storage correctly, and the
+// viewer page's own escape-hatch button and print control exist and work.
+let pdfViewerResult;
+try {
+  const settingsHelper = await ctx.newPage();
+  await settingsHelper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const defaultValue = await settingsHelper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_pdf_takeover: true }, (res) => r(res.sra_pdf_takeover))));
+  await settingsHelper.evaluate(() => document.getElementById('pdfTakeoverToggle').click());
+  const afterToggleOff = await settingsHelper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_pdf_takeover: true }, (res) => r(res.sra_pdf_takeover))));
+  await settingsHelper.evaluate(() => document.getElementById('pdfTakeoverToggle').click());
+  const afterToggleBackOn = await settingsHelper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_pdf_takeover: true }, (res) => r(res.sra_pdf_takeover))));
+  await settingsHelper.close();
+
+  const pdfPage = await ctx.newPage();
+  const pdfPageErrors = [];
+  pdfPage.on('pageerror', (e) => pdfPageErrors.push(String(e)));
+  await pdfPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent('http://localhost:8731/item29-test.pdf')}`);
+  await pdfPage.waitForTimeout(1500);
+
+  const rendered = await pdfPage.evaluate(() => ({
+    pageCount: document.querySelectorAll('.page-wrap').length,
+    hasMarkerText: [...document.querySelectorAll('.textLayer span')]
+      .some((s) => s.textContent.includes('ITEM29-PDF-MARKER')),
+    hasOpenNativeBtn: !!document.getElementById('openNativeBtn'),
+    hasPrintBtn: !!document.getElementById('printBtn'),
+    nativeSearchFindsText: window.find ? window.find('ITEM29-PDF-MARKER') : null,
+  }));
+
+  await pdfPage.click('#openNativeBtn');
+  await pdfPage.waitForTimeout(500);
+  const urlAfterEscape = pdfPage.url();
+
+  pdfViewerResult = {
+    takeoverDefaultsOn: defaultValue === true,
+    toggleOffPersisted: afterToggleOff === false,
+    toggleBackOnPersisted: afterToggleBackOn === true,
+    pdfRendered: rendered.pageCount === 1,
+    textLayerHasRealText: rendered.hasMarkerText,
+    nativeFindInPageWorks: rendered.nativeSearchFindsText === true,
+    hasEscapeHatchButton: rendered.hasOpenNativeBtn,
+    hasPrintButton: rendered.hasPrintBtn,
+    escapeHatchNavigatedWithBypassFragment:
+      urlAfterEscape.includes('item29-test.pdf') && urlAfterEscape.includes('#alcoia-open-native'),
+    newPageErrors: pdfPageErrors.length,
+  };
+  await pdfPage.close();
+} catch (e) {
+  pdfViewerResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -1248,6 +1341,7 @@ console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")
 console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2));
 console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
 console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
+console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));
