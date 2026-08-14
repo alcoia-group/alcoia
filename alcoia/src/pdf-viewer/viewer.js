@@ -18,17 +18,18 @@
     decodeURIComponent(fileUrl.split('/').pop() || fileUrl);
 
   // Item 29: the escape hatch. Navigates the tab back to the ORIGINAL
-  // file:// URL — background.js's redirect listener would normally send
-  // that straight back here, so the #alcoia-open-native fragment tells it
-  // not to, this one time. The fragment has no effect on which local file
-  // loads.
-  document.getElementById('openNativeBtn').onclick = () => {
+  // file:// or http(s) URL — background.js's redirect listener would
+  // normally send that straight back here, so the #alcoia-open-native
+  // fragment tells it not to, this one time. The fragment has no effect on
+  // which document loads.
+  function openWithoutAlcoia() {
     const bypassUrl = fileUrl.includes('#') ? fileUrl : fileUrl + '#alcoia-open-native';
     chrome.tabs.getCurrent((tab) => {
       if (tab?.id != null) chrome.tabs.update(tab.id, { url: bypassUrl });
       else location.href = bypassUrl;
     });
-  };
+  }
+  document.getElementById('openNativeBtn').onclick = openWithoutAlcoia;
   document.getElementById('printBtn').onclick = () => window.print();
 
   // ── Load PDF.js ───────────────────────────────────────────────────────
@@ -48,6 +49,15 @@
   try {
     pdfDoc = await pdfjsLib.getDocument({ url: fileUrl }).promise;
   } catch (e) {
+    // Item 31: a web PDF's load failure — most often an authenticated
+    // document the extension page's fetch could not reach the same way the
+    // reader's own top-level navigation would have — fails OPEN rather than
+    // showing an alcoia error page. The reader always ends up looking at
+    // their document, one way or another. Local file:// failures keep the
+    // existing message, since bouncing back to the same file:// URL would
+    // not fix a permission or corruption problem the way it can for a
+    // fetch-layer failure on the web.
+    if (/^https?:\/\//i.test(fileUrl)) { openWithoutAlcoia(); return; }
     showError(`Could not load PDF: ${e.message}<br><br>
       Make sure "Allow access to file URLs" is enabled for alcoia in
       <code>chrome://extensions</code>.`);
