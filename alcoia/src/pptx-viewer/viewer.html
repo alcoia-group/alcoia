@@ -67,6 +67,13 @@
       border-radius: 10px; padding: 18px 24px; color: #f88; font-size: 13px;
       max-width: 480px; text-align: center; margin: 80px auto;
     }
+
+    @media print {
+      #toolbar, #status, #error-box { display: none !important; }
+      #viewer { padding-top: 0; }
+      .slide-wrap { break-inside: avoid; break-after: page; box-shadow: none; }
+      .slide-wrap:last-child { break-after: auto; }
+    }
   </style>
 </head>
 <body>
@@ -75,8 +82,10 @@
   <span class="brand">alcoia</span>
   <button id="prevBtn">&#8592; Prev</button>
   <button id="nextBtn">Next &#8594;</button>
+  <button id="printBtn">Print</button>
   <span id="filename">loading…</span>
   <span id="slide-info"></span>
+  <button id="openNativeBtn" title="Bypass alcoia's viewer for this file — Chrome has no built-in PPTX viewer, so this typically downloads the file for your system's own presentation software">Open without alcoia</button>
 </div>
 
 <div id="viewer"></div>

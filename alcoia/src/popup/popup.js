@@ -62,6 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // moment either changed independently — set it from the same config.
   backendUrlInput.placeholder = self.ALCOIA_CONFIG.SUMMARIZE_URL;
   const darkModeToggle      = $('darkModeToggle');
+  const pdfTakeoverToggle   = $('pdfTakeoverToggle');
 
   const stateDot     = $('stateDot');
   const stateName    = $('stateName');
@@ -87,6 +88,10 @@ document.addEventListener('DOMContentLoaded', () => {
     sra_tts: false, sra_focus_ruler: false,
     sra_dyslexia: false, sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
     sra_dark_mode: false, sra_active_persona: '',
+    // Item 29: the escape hatch. background.js reads this directly from
+    // storage at redirect time — it is not part of the content.js settings
+    // broadcast below, since content.js never touches PDF/PPTX redirection.
+    sra_pdf_takeover: true,
   };
 
   chrome.storage.local.get(DEFAULTS, (res) => {
@@ -112,6 +117,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     darkModeToggle.checked = !!res.sra_dark_mode;
     document.body.classList.toggle('dark-mode', !!res.sra_dark_mode);
+
+    pdfTakeoverToggle.checked = res.sra_pdf_takeover !== false;
 
     if (res.sra_active_persona) {
       document.querySelectorAll('.mode-btn').forEach((b) =>
@@ -215,6 +222,13 @@ document.addEventListener('DOMContentLoaded', () => {
   assistantToggle.addEventListener('change', () => {
     chrome.storage.local.set({ sra_enabled: assistantToggle.checked });
     document.body.classList.toggle('assistant-off', !assistantToggle.checked);
+  });
+  // Item 29: read directly by background.js's redirect listener, not by any
+  // content script — a plain storage write is enough, same as the master
+  // switch above. No broadcast to a content script is needed or possible:
+  // the effect is on the *next* navigation, not the current tab.
+  pdfTakeoverToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ sra_pdf_takeover: pdfTakeoverToggle.checked });
   });
   autohideToggle.addEventListener('change', () => {
     timeoutRow.style.display = autohideToggle.checked ? 'flex' : 'none';

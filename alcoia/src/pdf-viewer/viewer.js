@@ -17,6 +17,20 @@
   document.getElementById('filename').textContent =
     decodeURIComponent(fileUrl.split('/').pop() || fileUrl);
 
+  // Item 29: the escape hatch. Navigates the tab back to the ORIGINAL
+  // file:// URL — background.js's redirect listener would normally send
+  // that straight back here, so the #alcoia-open-native fragment tells it
+  // not to, this one time. The fragment has no effect on which local file
+  // loads.
+  document.getElementById('openNativeBtn').onclick = () => {
+    const bypassUrl = fileUrl.includes('#') ? fileUrl : fileUrl + '#alcoia-open-native';
+    chrome.tabs.getCurrent((tab) => {
+      if (tab?.id != null) chrome.tabs.update(tab.id, { url: bypassUrl });
+      else location.href = bypassUrl;
+    });
+  };
+  document.getElementById('printBtn').onclick = () => window.print();
+
   // ── Load PDF.js ───────────────────────────────────────────────────────
   const pdfJsUrl    = chrome.runtime.getURL('src/libs/pdfjs/pdf.min.js');
   const workerUrl   = chrome.runtime.getURL('src/libs/pdfjs/pdf.worker.min.js');
