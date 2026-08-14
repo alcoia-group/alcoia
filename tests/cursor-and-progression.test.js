@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createCursorTracker } from '../alcoia/src/content/telemetry/cursor-tracking.js';
-import { createProgressionEntropy } from '../alcoia/src/content/telemetry/progression-entropy.js';
+import { createCursorTracker } from '../alcoia/src/content/signals/cursor-tracking.js';
+import { createProgressionEntropy } from '../alcoia/src/content/signals/progression-entropy.js';
 
 function fixedClock(start = 1_000_000) {
   let t = start;

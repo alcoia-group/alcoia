@@ -37,16 +37,19 @@ $('deleteTokenBtn').addEventListener('click', () => {
 // Every sra_* preference content.js reads, with plain labels — this is
 // exactly what is already editable from the toolbar popup, just gathered
 // in one read-only place for support.
+// Item 34: labels here match the popup's own renamed toggles — this page
+// mirrors those settings and should never describe them under a different
+// name than the control the reader actually saw.
 const SETTINGS_FIELDS = [
   ['sra_enabled', 'Assistant on', (v) => (v !== false ? 'On' : 'Off')],
-  ['sra_comprehension', 'Reading signals', (v) => (v !== false ? 'On' : 'Off')],
-  ['sra_selection', 'Selection summaries', (v) => (v !== false ? 'On' : 'Off')],
-  ['sra_highlight_para', 'Show the passage', (v) => (v !== false ? 'On' : 'Off')],
+  ['sra_comprehension', "Notice when I'm struggling", (v) => (v !== false ? 'On' : 'Off')],
+  ['sra_selection', 'Explain text I select', (v) => (v !== false ? 'On' : 'Off')],
+  ['sra_highlight_para', 'Outline the paragraph', (v) => (v !== false ? 'On' : 'Off')],
   ['sra_tts', 'Read aloud', (v) => (v ? 'On' : 'Off')],
-  ['sra_focus_ruler', 'Focus ruler', (v) => (v ? 'On' : 'Off')],
+  ['sra_focus_ruler', 'Reading guide', (v) => (v ? 'On' : 'Off')],
   ['sra_dyslexia', 'Dyslexia mode', (v) => (v ? 'On' : 'Off')],
-  ['sra_autohide', 'Auto-dismiss cards', (v) => (v ? 'On' : 'Off')],
-  ['sra_pin_default', 'Pin by default', (v) => (v ? 'On' : 'Off')],
+  ['sra_autohide', 'Clear cards automatically', (v) => (v ? 'On' : 'Off')],
+  ['sra_pin_default', 'Keep cards until I close them', (v) => (v ? 'On' : 'Off')],
   ['sra_dark_mode', 'Dark mode', (v) => (v ? 'On' : 'Off')],
   ['sra_baseline_wpm', 'Reading-speed baseline', (v) => (v ? `${Math.round(v)} wpm` : null)],
   ['sra_backend_url', 'Backend URL', (v) => v || null],
@@ -97,3 +100,33 @@ $('clearLogBtn').addEventListener('click', async () => {
 });
 
 renderLog();
+
+// ── Developer tools (item 33) ──────────────────────────────────────────────
+// Shown only when sra_debug is on — moved here from the main popup, which a
+// casual reader could stumble into (a fake "struggling" state, or a broken
+// backend URL) with no idea either was a developer-only control. Gating on
+// the pre-existing sra_debug setting rather than a new hidden surface (a
+// query parameter, an undocumented key combo) means there is nothing to
+// discover by accident and nothing new to keep secret.
+$('devBackendUrl').placeholder = self.ALCOIA_CONFIG.SUMMARIZE_URL;
+chrome.storage.local.get({ sra_debug: false, sra_backend_url: self.ALCOIA_CONFIG.SUMMARIZE_URL }, (res) => {
+  $('devCard').hidden = !res.sra_debug;
+  $('devBackendUrl').value = res.sra_backend_url;
+});
+
+$('devBackendUrl').addEventListener('change', () => {
+  chrome.storage.local.set({ sra_backend_url: $('devBackendUrl').value.trim() });
+});
+
+function simulateState(state) {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs?.[0]) return;
+    chrome.tabs.sendMessage(tabs[0].id, { type: 'simulateState', state }, () => {
+      if (chrome.runtime.lastError) alert('No content script on this page. Open a page with text first.');
+    });
+  });
+}
+$('simStrugglingBtn').addEventListener('click', () => simulateState('struggling'));
+$('simDriftingBtn')  .addEventListener('click', () => simulateState('drifting'));
+$('simSkimmingBtn')  .addEventListener('click', () => simulateState('skimming'));
+$('simOnPaceBtn')    .addEventListener('click', () => simulateState('on_pace'));

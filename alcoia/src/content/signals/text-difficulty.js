@@ -59,7 +59,7 @@ export function countSyllables(word) {
 }
 
 /* Both of these used to be whitespace and ASCII-punctuation regexes. See
- * telemetry/segmentation.js for why that produced a word count of ~1 for an
+ * signals/segmentation.js for why that produced a word count of ~1 for an
  * entire Chinese paragraph, and no sentence boundaries at all in Arabic. */
 function splitSentences(text, lang) {
   return segSentences(text, lang);
