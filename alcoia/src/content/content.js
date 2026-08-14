@@ -32,6 +32,71 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   // Session-level cache: mode:fingerprint → summary text (cleared on page unload)
   const _summaryCache        = new Map();
 
+  // ── Item 38: client-side AI-call rate limiting ───────────────────────────
+  // NOT entitlement enforcement — the server holds the account, the
+  // entitlement and the counter (the project notes: "the client's count is a display
+  // convenience, the server is the gate"), and this extension is AGPL with
+  // public source, so a determined reader can strip this out in a minute.
+  // Against that reader it is worth nothing, and it is not trying to be.
+  // What it IS for: alcoia's OWN bugs — a stuck event handler, a render
+  // loop, an SPA route that re-fires the same trigger, a retry path that
+  // doesn't back off. Those calls all carry a valid install token and look
+  // legitimate to the server, because they are legitimate — they are just
+  // wrong, and that is where a surprise bill comes from. The server cannot
+  // tell a bug apart from real usage; the client can bound its own bug here.
+  // Two named, generous bug-backstop thresholds, not tuned quota numbers:
+  // a short-window burst (catches a handler firing every scroll/animation
+  // tick) and a longer-window ceiling (catches a slow-burning loop, e.g. an
+  // SPA route re-triggering the same cycle every navigation over several
+  // minutes). Both sit well above anything a reading session legitimately
+  // produces — intervention-policy.js's own automatic-path session cap tops
+  // out around 25 — so neither should ever be felt by a real reader.
+  const AI_CALL_BURST_LIMIT       = 6;        // calls
+  const AI_CALL_BURST_WINDOW_MS   = 10_000;   // per 10s
+  const AI_CALL_CEILING_LIMIT     = 30;       // calls
+  const AI_CALL_CEILING_WINDOW_MS = 600_000;  // per 10 minutes
+  // Keyed by path ('summarize' | 'questions') — a runaway loop on one path
+  // must not also block the other, unrelated one. ms-epoch timestamps,
+  // session-only, pruned on every check.
+  const aiCallTimestampsByPath = { summarize: [], questions: [] };
+
+  /* The one place both outbound AI-call paths — fetchSummary() and
+   * fetchQuestions() — check before doing any network work. Not inside
+   * callBackend(): callBackend() is also used by receipt signing, a
+   * reader-initiated cryptographic operation with no LLM call behind it,
+   * out of this item's "outbound AI calls" scope. fetchSummary() and
+   * fetchQuestions() are already themselves the single choke point every
+   * one of their own call sites funnels through, so gating here covers
+   * all of them without a third wrapper layer around either.
+   *
+   * A trip degrades to silence exactly like every other AI-call failure in
+   * this file (invariant 9) — the caller gets an empty/null result and
+   * shows nothing — so it composes for free with the existing "a decision
+   * that never reaches the screen doesn't spend the interruption budget"
+   * behaviour on the automatic path: handleAsk() already treats an empty
+   * fetchQuestions() result as nothing to show, and orchestrator.js already
+   * only calls interventionPolicy.record() when something actually
+   * rendered. No new wiring was needed to keep the two budgets independent
+   * — a rate-limited call simply looks like any other failed one to the
+   * intervention layer, which never sees why it was empty. */
+  function checkAiCallBudget(path, mode) {
+    const now = Date.now();
+    const list = (aiCallTimestampsByPath[path] || (aiCallTimestampsByPath[path] = []))
+      .filter((t) => now - t < AI_CALL_CEILING_WINDOW_MS);
+    aiCallTimestampsByPath[path] = list;
+    const burstCount = list.filter((t) => now - t < AI_CALL_BURST_WINDOW_MS).length;
+    if (burstCount >= AI_CALL_BURST_LIMIT) {
+      diagLog.log(path, `rate_limited_burst mode=${mode} count=${burstCount}`);
+      return false;
+    }
+    if (list.length >= AI_CALL_CEILING_LIMIT) {
+      diagLog.log(path, `rate_limited_ceiling mode=${mode} count=${list.length}`);
+      return false;
+    }
+    list.push(now);
+    return true;
+  }
+
   // ── Runtime state ──────────────────────────────────────────────────────
   /* The popup's master switch. It used to write `sra_enabled` to storage and
    * nothing anywhere read it, so turning the assistant "off" changed nothing
@@ -505,6 +570,9 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
         return _summaryCache.get(cacheKey);
       }
     }
+    // Item 38: a cache hit above never reaches here, so it is never counted
+    // or blocked — only a real outbound call is.
+    if (!checkAiCallBudget('summarize', mode)) return null;
     try {
       const url = backendUrl || BACKEND_DEFAULT;
       _log(`Fetching ${url} mode=${mode} len=${text.length}`);
@@ -667,6 +735,10 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   async function fetchQuestions(text, opts = {}) {
     if (!text || text.trim().length < 120) return [];
+    // Item 38: same budget as fetchSummary(), independent from
+    // intervention-policy.js's interruption cap — see checkAiCallBudget()'s
+    // own header for why the two never conflict.
+    if (!checkAiCallBudget('questions', opts.kind || 'recall')) return [];
     const body = {
       text: text.slice(0, 3500),
       language: (document.documentElement.lang || '').slice(0, 5),
