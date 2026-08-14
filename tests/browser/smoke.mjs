@@ -114,6 +114,31 @@ const server = http.createServer((req, res) => {
     res.end(TEST_PDF_BYTES);
     return;
   }
+  // Item 31: a real, reachable PDF for the web-takeover redirect check —
+  // distinct from item29-test.pdf only so the two items' checks cannot be
+  // confused for one another in a failure report.
+  if (req.url.startsWith('/item31-test.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(TEST_PDF_BYTES);
+    return;
+  }
+  // A PDF-looking URL whose response is not a real PDF at all — proves the
+  // fail-open path (viewer.js bounces back to native handling rather than
+  // showing an alcoia error page) without needing an actual auth wall.
+  if (req.url.startsWith('/item31-broken.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end('not actually a pdf');
+    return;
+  }
+  // A normal page embedding item31-test.pdf in an iframe — proves
+  // tabs.onUpdated (tab-level only) never redirects an iframe's own
+  // navigation, since the TAB's own URL never changes when only the frame
+  // inside it loads a PDF.
+  if (req.url.startsWith('/item31-iframe.html')) {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><html><body><iframe src="/item31-test.pdf" width="600" height="400"></iframe></body></html>');
+    return;
+  }
   if (req.method === 'POST' && req.url.startsWith('/api/token')) {
     apiHits.token++;
     if (FAIL_TOKEN) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end('{}'); return; }
@@ -1305,6 +1330,79 @@ try {
   pdfViewerResult = { attempted: true, error: String((e && e.message) || e) };
 }
 
+// ── Web PDF takeover (item 31) ──────────────────────────────────────────────
+async function setWebPdfTakeover(on) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((v) => new Promise((r) => chrome.storage.local.set({ sra_web_pdf_takeover: v }, r)), on);
+  await helper.close();
+}
+
+let webPdfResult;
+try {
+  const defaultOn = await (async () => {
+    const helper = await ctx.newPage();
+    await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+    const v = await helper.evaluate(() => new Promise((r) =>
+      chrome.storage.local.get({ sra_web_pdf_takeover: false }, (res) => r(res.sra_web_pdf_takeover))));
+    await helper.close();
+    return v;
+  })();
+
+  // Off (default): a top-level web PDF must NOT redirect.
+  await setWebPdfTakeover(false);
+  const offPage = await ctx.newPage();
+  await offPage.goto('http://localhost:8731/item31-test.pdf', { waitUntil: 'domcontentloaded' });
+  await offPage.waitForTimeout(700);
+  const urlWhenOff = offPage.url();
+  await offPage.close();
+
+  // On: the same top-level web PDF must redirect to alcoia's viewer.
+  await setWebPdfTakeover(true);
+  const onPage = await ctx.newPage();
+  await onPage.goto('http://localhost:8731/item31-test.pdf', { waitUntil: 'domcontentloaded' });
+  await onPage.waitForTimeout(700);
+  const urlWhenOn = onPage.url();
+  await onPage.close();
+
+  // On, but the PDF is embedded in an iframe: the TAB's own URL must never
+  // change, since tabs.onUpdated only ever sees top-level navigation.
+  const iframePage = await ctx.newPage();
+  await iframePage.goto('http://localhost:8731/item31-iframe.html', { waitUntil: 'domcontentloaded' });
+  await iframePage.waitForTimeout(700);
+  const urlAfterIframeLoad = iframePage.url();
+  await iframePage.close();
+
+  // On, and the response is not a real PDF: viewer.js must fail OPEN —
+  // bounce back to the original URL with the bypass fragment — rather than
+  // show its own error box.
+  const brokenPage = await ctx.newPage();
+  const brokenPageErrors = [];
+  brokenPage.on('pageerror', (e) => brokenPageErrors.push(String(e)));
+  await brokenPage.goto('http://localhost:8731/item31-broken.pdf', { waitUntil: 'domcontentloaded' });
+  await brokenPage.waitForTimeout(1500);
+  const urlAfterBrokenLoad = brokenPage.url();
+  const errorBoxShown = await brokenPage.evaluate(() => {
+    const box = document.getElementById('error-box');
+    return !!box && box.style.display === 'block';
+  }).catch(() => null); // null if we already bounced away from the viewer page entirely
+  await brokenPage.close();
+
+  await setWebPdfTakeover(false); // restore default for anything after this block
+
+  webPdfResult = {
+    defaultsOff: defaultOn === false,
+    offKeepsOriginalUrl: urlWhenOff.includes('item31-test.pdf') && !urlWhenOff.startsWith('chrome-extension://'),
+    onRedirectsToAlcoiaViewer: urlWhenOn.startsWith('chrome-extension://') && urlWhenOn.includes('pdf-viewer/viewer.html'),
+    iframedPdfNeverRedirectsTab: urlAfterIframeLoad.includes('item31-iframe.html') && !urlAfterIframeLoad.startsWith('chrome-extension://'),
+    brokenPdfFailsOpenNotError: urlAfterBrokenLoad.includes('item31-broken.pdf') && urlAfterBrokenLoad.includes('#alcoia-open-native'),
+    brokenPdfNoErrorBoxShown: errorBoxShown !== true,
+    newPageErrors: brokenPageErrors.length,
+  };
+} catch (e) {
+  webPdfResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -1342,6 +1440,7 @@ console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2
 console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
 console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
+console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));

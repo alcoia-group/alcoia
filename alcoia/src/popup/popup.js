@@ -63,6 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
   backendUrlInput.placeholder = self.ALCOIA_CONFIG.SUMMARIZE_URL;
   const darkModeToggle      = $('darkModeToggle');
   const pdfTakeoverToggle   = $('pdfTakeoverToggle');
+  const webPdfTakeoverToggle = $('webPdfTakeoverToggle');
 
   const stateDot     = $('stateDot');
   const stateName    = $('stateName');
@@ -92,6 +93,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // storage at redirect time — it is not part of the content.js settings
     // broadcast below, since content.js never touches PDF/PPTX redirection.
     sra_pdf_takeover: true,
+    // Item 31: opt-in, off by default — a separate, larger trust ask than
+    // the local-file toggle above, since it applies to any PDF a website
+    // links to, not just files already on the reader's own computer.
+    sra_web_pdf_takeover: false,
   };
 
   chrome.storage.local.get(DEFAULTS, (res) => {
@@ -119,6 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.toggle('dark-mode', !!res.sra_dark_mode);
 
     pdfTakeoverToggle.checked = res.sra_pdf_takeover !== false;
+    webPdfTakeoverToggle.checked = !!res.sra_web_pdf_takeover;
 
     if (res.sra_active_persona) {
       document.querySelectorAll('.mode-btn').forEach((b) =>
@@ -229,6 +235,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // the effect is on the *next* navigation, not the current tab.
   pdfTakeoverToggle.addEventListener('change', () => {
     chrome.storage.local.set({ sra_pdf_takeover: pdfTakeoverToggle.checked });
+  });
+  webPdfTakeoverToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ sra_web_pdf_takeover: webPdfTakeoverToggle.checked });
   });
   autohideToggle.addEventListener('change', () => {
     timeoutRow.style.display = autohideToggle.checked ? 'flex' : 'none';
