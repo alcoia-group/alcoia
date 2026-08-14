@@ -5,6 +5,10 @@
   <title>alcoia — PDF Viewer</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
+  <!-- Item 30c: alcoia's own question card / nudge popups now render on
+       this page — overlay.css is what styles them, the same stylesheet
+       every ordinary DOM page gets from content.js. -->
+  <link rel="stylesheet" href="../styles/overlay.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -96,7 +100,11 @@
 <div id="status">Loading PDF…</div>
 <div id="error-box"></div>
 
-<script src="viewer.js"></script>
+<!-- Item 30c: reading-bridge.js needs self.ALCOIA_CONFIG (host.js reads it
+     for the token/summarize endpoints), same as popup.html/diagnostics.html
+     already load it before their own script. -->
+<script src="../shared/config.js"></script>
+<script type="module" src="viewer.js"></script>
 
 </body>
 </html>

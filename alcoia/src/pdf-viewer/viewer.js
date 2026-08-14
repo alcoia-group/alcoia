@@ -9,6 +9,10 @@
  * error" — the same shape, just outside the test suite this time). Moving
  * the identical code to this external file is the fix: same logic, allowed
  * to execute. */
+import { attachReadingBridge } from './reading-bridge.js';
+
+let bridge = null;
+
 (async () => {
   const params  = new URLSearchParams(location.search);
   const fileUrl = params.get('src');
@@ -67,6 +71,19 @@
   document.getElementById('status').style.display = 'none';
   updatePageInfo();
 
+  // Item 30c: alcoia's own reading-signal pipeline, wired to this page's
+  // real .textLayer spans. Kicked off concurrently with page rendering below
+  // — it only needs to be attached (listeners installed) before
+  // primeParagraph() runs, not before any page has actually rendered.
+  // Attaching only after the document is confirmed to have loaded avoids
+  // standing the whole pipeline up on a page that is about to show an error
+  // box or bounce back to the browser's own viewer (item 31's fail-open path
+  // above already returned before reaching here in that case).
+  const bridgePromise = attachReadingBridge({ sourceUrl: fileUrl }).catch((e) => {
+    console.warn('[alcoia] reading bridge failed to attach', e);
+    return null;
+  });
+
   // Render all pages up front for small docs; render lazily for large ones
   if (pdfDoc.numPages <= 20) {
     for (let i = 1; i <= pdfDoc.numPages; i++) await renderPage(i);
@@ -77,6 +94,14 @@
       requestIdleCallback ? requestIdleCallback(() => renderPage(i)) : setTimeout(() => renderPage(i), i * 80);
     }
   }
+
+  bridge = await bridgePromise;
+  // A scanned (image-only) PDF renders real pages but an empty text layer —
+  // groupTextLayerParagraphs() then finds zero paragraphs, the tracker never
+  // has an active paragraph, and no reading signal ever fires. That is the
+  // correct degrade-to-silence outcome (invariants 5/9), not a special case
+  // handled here.
+  if (bridge) bridge.primeParagraph();
 
   // ── Render a single page ──────────────────────────────────────────────
   async function renderPage(num) {
@@ -100,7 +125,21 @@
     textLayer.style.width  = vp.width  + 'px';
     textLayer.style.height = vp.height + 'px';
 
-    pdfjsLib.renderTextLayer({
+    // Item 30c: the returned task's completion is now awaited, where this
+    // used to be fire-and-forget — pdf.js's renderTextLayer() populates
+    // spans asynchronously, and nothing previously needed to know when that
+    // finished. Now something does: reading-bridge.js's primeParagraph()
+    // scans document.querySelectorAll('.textLayer') immediately once every
+    // page's renderPage() call has returned, and an as-yet-unpopulated text
+    // layer for a later page (all pages' renderTextLayer() calls fire
+    // around the same time) meant paragraph-tracker.js's very first scan
+    // permanently saw fewer paragraphs than actually exist — it only
+    // rescans lazily every 10s or on an explicit call, never on its own.
+    // The task is still started, and the container still attached to the
+    // document, in the exact same order as before (only the container's
+    // OWN attachment timing is layout-sensitive, not whether its promise is
+    // awaited) — only the await itself, at the very end, is new.
+    const textLayerTask = pdfjsLib.renderTextLayer({
       textContentSource: textContent,
       container: textLayer,
       viewport: vp,
@@ -110,6 +149,8 @@
     wrap.appendChild(canvas);
     wrap.appendChild(textLayer);
     document.getElementById('viewer').appendChild(wrap);
+
+    await textLayerTask.promise;
   }
 
   // ── Toolbar controls ──────────────────────────────────────────────────
@@ -132,6 +173,12 @@
   async function rebuildAllPages() {
     document.getElementById('viewer').innerHTML = '';
     for (let i = 1; i <= pdfDoc.numPages; i++) await renderPage(i);
+    // Every previous .textLayer span is gone, replaced by new ones at the
+    // new scale — reuse orchestrator.js's existing SPA-route-change reset
+    // (item 27) rather than inventing a second reset path for the same
+    // shape of problem (in-flight state pointing at DOM that no longer
+    // exists).
+    if (bridge) bridge.handleRebuild();
   }
 
   function updatePageInfo() {

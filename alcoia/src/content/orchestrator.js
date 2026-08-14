@@ -25,6 +25,18 @@ export async function createOrchestrator(deps) {
     comprehensionMonitor,
     settings,        // () => { comprehensionCheckEnabled, ... }
     host,            // see the destructure below
+    // Item 30c: the PDF viewer is its own chrome-extension:// page, so
+    // coverage-gate.js's default hostname+pathname key (window.location of
+    // *this* page) would be identical for every distinct PDF ever opened —
+    // all coalescing onto one shared, meaningless coverage record. An
+    // optional override lets a non-DOM host supply the real underlying
+    // document's identity instead. Omitted, behaviour is unchanged: the
+    // default is still coverage-gate.js's own documentKey().
+    documentKey: documentKeyOverride,
+    // Item 30c: paragraph-tracker.js's own injectable block source (item
+    // 30b), passed straight through. Omitted, behaviour is unchanged: the
+    // DOM scan stays the default, exactly as before this option existed.
+    paragraphTrackerOpts,
   } = deps;
 
   const s = () => settings() || {};
@@ -36,9 +48,10 @@ export async function createOrchestrator(deps) {
   const stateEngine  = engineModule.createReadingStateEngine();
   const interventionPolicy = policyModule.createInterventionPolicy();
   const coverageGate = coverageModule.createCoverageGate();
+  const resolveDocumentKey = documentKeyOverride || coverageModule.documentKey;
   // Reader-initiated — never touches interventionPolicy, spends no budget.
   const quizOffer = offerModule.createQuizOfferChecker({
-    coverageGate, documentKey: coverageModule.documentKey,
+    coverageGate, documentKey: resolveDocumentKey,
     onEligible: (result) => { try { host.onQuizOfferEligible?.(result); } catch (e) {} },
   });
 
@@ -55,7 +68,7 @@ export async function createOrchestrator(deps) {
     loadModule('src/content/signals/progression-entropy.js'),
   ]);
 
-  const paragraphTracker   = paraTrackModule.createParagraphTracker({ minWords: 20 });
+  const paragraphTracker   = paraTrackModule.createParagraphTracker({ minWords: 20, ...(paragraphTrackerOpts || {}) });
   const scrollRegression   = regressionModule.createScrollRegressionDetector();
   const interactionSignals = interactionModule.createInteractionSignals();
   const scrollDynamics     = dynamicsModule.createScrollDynamics();
@@ -117,7 +130,7 @@ export async function createOrchestrator(deps) {
       }
       // Feeds coverage-gate.js — "read enough to offer the quiz on".
       try {
-        const key = coverageModule.documentKey();
+        const key = resolveDocumentKey();
         if (key) {
           coverageGate.recordProgress(key, {
             text: leftText, words: transition.left.words, dwellMs: transition.left.dwellMs,
@@ -329,6 +342,6 @@ export async function createOrchestrator(deps) {
     paragraphTracker,
     // "Read enough to test" — the popup's quiz button reads this directly.
     coverageGate,
-    documentKey: coverageModule.documentKey,
+    documentKey: resolveDocumentKey,
   };
 }
