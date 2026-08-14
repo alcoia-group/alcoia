@@ -20,7 +20,7 @@ never the default path. The design intent is that the cheapest path through the 
 successful one, and that any adaptation which reduces how often the reader is interrupted is gated
 on demonstrated competence — answer accuracy at escalating difficulty — never on interruption count
 or dismissal rate by itself, since both a genuinely improving reader and a reader who has simply
-learned to avoid triggering the system look identical in raw interruption-frequency telemetry.
+learned to avoid triggering the system look identical in raw interruption-frequency data.
 
 ## Signal hierarchy
 
@@ -29,7 +29,7 @@ Two sources, in order of authority:
 1. **Reader responses.** The only ground truth. A correct answer resolves to `on_pace`. A dismissal
    asserts nothing — declining to be tested says nothing about comprehension, and is never read as
    either success or struggle.
-2. **Browser telemetry.** Reading rate versus text difficulty and personal baseline, scroll
+2. **Browser reading signals.** Reading rate versus text difficulty and personal baseline, scroll
    regressions, selection, copy, and tab blur/focus. This is the only detection path — precise,
    always available, and requires no permission prompt.
 
@@ -39,7 +39,7 @@ structural property of the shipped code, not a setting that can be turned on.
 
 ## Scope
 
-**In this repository:** content scripts, telemetry detectors, the state engine, the interruption
+**In this repository:** content scripts, reading-signal detectors, the state engine, the interruption
 policy, the question card, the quiz, the reading receipt, the popup and extension pages, styles, and
 the build.
 
@@ -169,7 +169,7 @@ product makes to a reader.
     ├── src/content/            the content-script pipeline: detectors feed a state engine, which
     │                           feeds an interruption-budget policy, which — only on a yes — renders
     │                           the question card, the quiz offer, or a summary popup
-    │   └── telemetry/          individual signal detectors (scroll behaviour, selection, blur,
+    │   └── signals/             individual signal detectors (scroll behaviour, selection, blur,
     │                           paragraph-level reading pace) — none of them require a permission
     │                           prompt or a sensor
     ├── src/popup/              the popup and every standalone extension page (diagnostics, the
@@ -206,6 +206,6 @@ node build.mjs                  # produces both build targets
 ```
 
 Then load the extension unpacked and confirm manually: it loads with no console errors on a plain
-article page; reading detection runs on telemetry alone, since there is no camera path to be off;
+article page; reading detection runs on reading signals alone, since there is no camera path to be off;
 no `getUserMedia` call is ever made; no network request contains image or video data; and no
 third-party request is made at all in the course of ordinary use.

@@ -6,7 +6,7 @@
  * Checks: content script injects, no page errors, no getUserMedia call ever
  * (there is no camera path left to make one — see the project notes' migration
  * note on removing webcam gaze), no image/video data in any request, and
- * that telemetry-only detection reaches the reader.
+ * that reading-signal-only detection reaches the reader.
  *
  * Not part of `npm test` — it needs a real browser and takes ~20s. */
 import { chromium } from 'playwright';

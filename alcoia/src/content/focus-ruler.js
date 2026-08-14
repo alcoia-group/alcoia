@@ -16,7 +16,7 @@
                   inside body text; people park the mouse anywhere, and a
                   stale cursor is not a reading position
      3. the reading line — a fixed fraction of viewport height, the same
-                  anchor telemetry/paragraph-tracker.js uses to decide which
+                  anchor signals/paragraph-tracker.js uses to decide which
                   paragraph is being read
 
    Source 3 is always available, needs no permission, and is the correct
@@ -24,7 +24,7 @@
    That makes it the floor rather than the failure case.
 */
 
-import { readingAxis } from './telemetry/segmentation.js';
+import { readingAxis } from './signals/segmentation.js';
 
 const RULER_ID    = 'sra-focus-ruler';
 const DIM_OPACITY = 0.38;

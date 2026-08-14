@@ -24,7 +24,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   const BACKEND_DEFAULT     = self.ALCOIA_CONFIG.SUMMARIZE_URL;
   const MIN_SELECTION_CHARS = 15;
   // Interruption cooldowns and budget live in intervention-policy.js — one
-  // place, applied to every telemetry-driven decision.
+  // place, applied to every signal-driven decision.
   // Popup geometry, the open-popup registry and the eviction cap now live in
   // ui-controller.js — it owns everything the reader sees.
   // Fingerprints of paragraphs currently awaiting an AI response (race-condition guard)
@@ -187,7 +187,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   const ttsModule      = await loadModule('src/content/tts-handler.js');
   const rulerModule    = await loadModule('src/content/focus-ruler.js');
   const dyslexiaModule  = await loadModule('src/content/dyslexia-utils.js');
-  const segmentation     = await loadModule('src/content/telemetry/segmentation.js');
+  const segmentation     = await loadModule('src/content/signals/segmentation.js');
   const mapModule       = await loadModule('src/content/reading-map.js');
 
   const ttsHandler    = ttsModule.createTTSHandler();
@@ -226,10 +226,10 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   const snoozeControl = snoozeModule.createSnoozeControl();
 
   // ── Question layer ─────────────────────────────────────────────────────
-  const responseModule = await loadModule('src/content/telemetry/response-signals.js');
+  const responseModule = await loadModule('src/content/signals/response-signals.js');
   const cardModule     = await loadModule('src/content/question-card.js');
   const responseSignals = responseModule.createResponseSignals();
-  const recallModule = await loadModule('src/content/telemetry/session-recall.js');
+  const recallModule = await loadModule('src/content/signals/session-recall.js');
   const sessionRecall = recallModule.createSessionRecall();
 
   // ── Receipt ────────────────────────────────────────────────────────────
@@ -369,8 +369,8 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     // Scoped to the sentence the reader missed, not the whole paragraph.
     fetchExplanation: (spanText) => fetchSummary(spanText, 'explain_more'),
     onAnswered: (record) => {
-      // An answer outranks every telemetry signal — see state-engine.js.
-      try { orchestrator.pumpTelemetry(record); } catch (e) {}
+      // An answer outranks every other signal — see state-engine.js.
+      try { orchestrator.pumpSignals(record); } catch (e) {}
       try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
       // A paragraph already answered correctly is a poor use of a recall slot.
       if (record.paragraphKey) sessionRecall.recordAnswered(record.paragraphKey, record.correct);
@@ -1648,7 +1648,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
     inFlightFingerprints.clear();
 
     // Item 27: paragraph tracking, the comprehension monitor's in-flight
-    // paragraph, and the paragraph-index-keyed telemetry detectors all
+    // paragraph, and the paragraph-index-keyed signal detectors all
     // belong to the DOM of the document that just disappeared. Only a real
     // pathname change warrants this — see orchestrator.js's
     // handleRouteChange() header for the full reasoning.
@@ -1754,7 +1754,7 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
 
   /* Turning the switch off has to leave the page as if the extension were
    * not installed: no cards, no ruler, no sidebar, no speech, and no
-   * telemetry accruing in the background. Turning it back on resumes
+   * signals accruing in the background. Turning it back on resumes
    * whatever the reader's settings already said. */
   function setAssistantEnabled(on) {
     const was = assistantEnabled;
