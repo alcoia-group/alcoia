@@ -860,6 +860,42 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
   // the only signal of when a document was last touched) is evicted once
   // this is exceeded.
   const MAX_HIGHLIGHT_DOCS = 150;
+  // Item 36: the explanation persisted alongside a highlight. The highlight
+  // text itself is capped at 300 chars; the explanation gets a tighter
+  // budget — 200 chars, roughly 1-2 sentences, enough to be useful on the
+  // Highlights page without dominating storage. This is deliberately
+  // shorter than what the transient popup shows (the full fetched summary,
+  // unchanged) — the popup is the one-time read, the stored copy is a
+  // scannable reminder. Worst case: MAX_HIGHLIGHTS_PER_DOC (100) *
+  // MAX_HIGHLIGHT_DOCS (150) = 15,000 highlight entries, each with a
+  // 200-char explanation (~400 bytes as UTF-16) plus the ~150-200 bytes
+  // already budgeted for text/context/url/title/etc — call it ~550-600
+  // bytes/entry total, so roughly 8-9 MB in the pathological case where
+  // every single highlight slot in every tracked document has a real,
+  // maxed-out explanation. That is far outside any realistic reader's
+  // actual use (it requires manually Ctrl+drag-highlighting with this
+  // toggle on, one hundred times, on a hundred and fifty separate sites),
+  // but it is why the cap is 200 and not the 300 the highlight text gets:
+  // the quoted passage is the highlight; the AI's gloss on it is secondary
+  // and gets a smaller share of a shared, non-unlimited storage budget.
+  const HIGHLIGHT_EXPLANATION_MAX_CHARS = 200;
+
+  // Item 36: patches the explanation onto an already-saved highlight once
+  // its assist call resolves — the initial write above already happened by
+  // the time this runs (local storage read/write is microtask-fast; the
+  // network fetch it waits on is not). Matches by id and re-reads fresh so
+  // it is correct regardless of ordering. If the entry is gone by then
+  // (deleted by the reader, or evicted by one of the two caps above), this
+  // is a silent no-op — there is nothing left to attach the explanation to,
+  // and that is not a failure worth surfacing.
+  function saveHighlightExplanation(urlKey, hlId, explanation) {
+    chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: hl }) => {
+      const entry = (hl[urlKey] || []).find((e) => e.id === hlId);
+      if (!entry) return;
+      entry.explanation = explanation.slice(0, HIGHLIGHT_EXPLANATION_MAX_CHARS);
+      chrome.storage.local.set({ sra_text_highlights: hl });
+    });
+  }
 
   async function applyTextHighlight(range, bgColor, colorKey) {
     if (!range || range.collapsed) return;
@@ -925,10 +961,13 @@ const comprehensionMonitor = compModule.createComprehensionMonitor({
       const summary = await fetchSummary(text, mode);
       if (summary) {
         renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source: 'highlight', mode });
+        // Item 36: persisted alongside the highlight, not just shown once.
+        saveHighlightExplanation(urlKey, hlId, summary);
       }
       // A failed fetch degrades to silence here, same as every other AI call
       // in this file (invariant 9) — the colour mark itself already landed
-      // and is not undone by a summary that could not be fetched.
+      // and is not undone by a summary that could not be fetched. No retry:
+      // a silent retry would spend an assist the reader never asked for.
     }
   }
 

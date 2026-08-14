@@ -41,6 +41,14 @@ before it goes into a published policy — treat these as leads, not findings:**
   it is local-only (item 25 in `the project notes` found nothing that transmits it) and that this
   predates the quiz below, contrary to an earlier draft of the top-level README's privacy
   section that called the quiz "the first feature that keeps something on disk."
+- **AI explanations saved with a highlight** (item 36, same `sra_text_highlights` entries, an
+  `explanation` field): opt-in via a separate popup toggle (`sra_highlight_summarize`, off by
+  default) — when on, the highlighted text is sent to the backend the same way any other AI
+  call in this extension is, and the response is kept locally, capped to 200 characters (shorter
+  than what the one-time popup shows), shown on the Highlights page. A fetch that fails is not
+  retried, and turning the toggle on does not retroactively generate explanations for highlights
+  made before it was on. Confirm the 200-character cap and the local-only storage against
+  `src/content/content.js`'s `saveHighlightExplanation()` before this goes in a published policy.
 - Webcam frames are processed in-page by WebGazer. Confirm and state plainly that no
   frame, no still image, and no derived image data leaves the device — this is a hard
   invariant in `the project notes` and should be verifiable by a reader from the network panel.

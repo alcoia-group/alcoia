@@ -109,13 +109,16 @@ thing that leaves your machine, and it is stated here rather than buried.
 
 **Reading content is kept on disk in a few places, all local-only.** Colour highlights you draw
 with Ctrl+drag are the oldest of these: the highlighted text and a little surrounding context, so
-the same passage can be found again on a later visit. The quiz is newer: take it from the
-end-of-page offer or the popup, and the questions, your answers and your confidence ratings are
-saved on your device — in IndexedDB, not synced, not sent anywhere — so you can review a result
-later. The passage itself is never part of that record: there is no retake, so there is nothing
-regeneration would need it for. Every one of these is deletable — a single highlight, every
-highlight on a page, or all of them; a single quiz or all of them — and deletion actually removes
-the record.
+the same passage can be found again on a later visit. If you also turn on "Save an explanation
+with each highlight," the AI's explanation is kept with it too — capped shorter than what the
+one-time popup shows — and appears on the Highlights page; that toggle is off by default, and
+turning it on never retroactively summarises highlights you already made. The quiz is newer: take
+it from the end-of-page offer or the popup, and the questions, your answers and your confidence
+ratings are saved on your device — in IndexedDB, not synced, not sent anywhere — so you can review
+a result later. The passage itself is never part of that record: there is no retake, so there is
+nothing regeneration would need it for. Every one of these is deletable — a single highlight,
+every highlight on a page, or all of them; a single quiz or all of them — and deletion actually
+removes the record.
 
 Full data map, including everything stored locally and the disclosure obligations that follow
 from it: [`LEGAL-DISCLOSURE-MAP.md`](LEGAL-DISCLOSURE-MAP.md).

@@ -78,6 +78,8 @@ const FAIL_QUESTIONS = process.env.FAIL === 'questions';
 // `page errors` (thrown exceptions) staying at 0 is the assertion that
 // actually matters here, and is checked below.
 const FAIL_TOKEN = process.env.FAIL === 'token';
+// Item 36: see the /api/summarize handler below for what this controls.
+let nextSummarizeBehavior = null;
 
 // Item 29: a minimal hand-built one-page PDF for the viewer escape-hatch
 // check — no external PDF-generation dependency, and small enough to keep
@@ -156,6 +158,27 @@ const server = http.createServer((req, res) => {
       if (isQuestions && FAIL_QUESTIONS) {
         res.writeHead(422, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'no_citable_question' }));
+        return;
+      }
+      // Item 36: a one-shot override for the next /api/summarize response
+      // only, set directly from the test flow below and self-clearing after
+      // one use — 'poison' fails the call (for the "explanation persistence
+      // degrades to silence on fetch failure" check), a string overrides the
+      // canned summary text (for the "the stored explanation is capped
+      // shorter than what the popup shows" check). Deliberately not a whole-
+      // process FAIL= mode like FAIL_QUESTIONS/FAIL_TOKEN: this only needs
+      // to affect one specific call inside an otherwise-normal run, not the
+      // whole suite.
+      if (!isQuestions && nextSummarizeBehavior !== null) {
+        const behavior = nextSummarizeBehavior;
+        nextSummarizeBehavior = null;
+        if (behavior === 'poison') {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'poisoned_for_test' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ summary: behavior }));
         return;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1135,6 +1158,169 @@ try {
 }
 await writeHighlightStore({});
 
+// ── Persisted highlight explanations (item 36) ────────────────────────────
+// Item 34 left "Save an explanation with each highlight" as a pure,
+// honestly-worded rename because the underlying explanation was never
+// actually kept — only shown once in a transient popup (see the project notes'
+// item-34 finding). This item makes the label true: the fetched
+// explanation is now patched back onto the same sra_text_highlights entry
+// (matched by id) and rendered, collapsed by default, on the Highlights
+// page. Separate from — and untouched by this item — sra_highlights, the
+// unrelated selection-summary path's own storage key.
+let explanationResult;
+try {
+  // (a) Toggle on: the highlight stores an explanation, and it renders on
+  // the Highlights page, collapsed (a <details> with no `open` attribute)
+  // until expanded.
+  await setHighlightToggles(true, true); // also clears sra_text_highlights
+  const beforeOn = apiHits.summarize;
+  const onPage = await ctx.newPage();
+  await onPage.goto('http://localhost:8731/hl-fixture.html');
+  await onPage.waitForTimeout(600);
+  await selectAndCtrlDrag(onPage, HL_PHRASE);
+  if (await onPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
+    await onPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await onPage.waitForTimeout(600); // fetchSummary() + the storage patch after it
+  }
+  await onPage.close();
+  const storeAfterOn = await readHighlightStore();
+  const onEntry = (storeAfterOn[HL_URL_KEY] || [])[0];
+
+  const listPage = await ctx.newPage();
+  await listPage.goto(`chrome-extension://${extId}/src/popup/highlights.html`);
+  await listPage.waitForTimeout(400);
+  const renderedOn = await listPage.evaluate(() => {
+    const d = document.querySelector('.hl-explanation');
+    return {
+      exists: !!d,
+      collapsedByDefault: d ? !d.open : null,
+      shownText: d?.querySelector('.hl-explanation-text')?.textContent || null,
+    };
+  });
+  await listPage.close();
+
+  // (b) Toggle off: no explanation stored, and no server call made at all —
+  // not even one that got discarded.
+  await setHighlightToggles(true, false); // also clears sra_text_highlights
+  const beforeOff = apiHits.summarize;
+  const offPage = await ctx.newPage();
+  await offPage.goto('http://localhost:8731/hl-fixture.html');
+  await offPage.waitForTimeout(600);
+  await selectAndCtrlDrag(offPage, HL_PHRASE);
+  if (await offPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
+    await offPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await offPage.waitForTimeout(400);
+  }
+  await offPage.close();
+  const storeAfterOff = await readHighlightStore();
+  // Snapshotted here, not re-read later — (c) and (e) below make their own
+  // real calls, and a live re-read at the end would wrongly count those
+  // against this step's "no call" assertion.
+  const noServerCallInToggleOff = apiHits.summarize === beforeOff;
+
+  // (c) Fetch failure: the colour mark and its storage entry still land
+  // (invariant 9 — the mark that already succeeded is not undone by an AI
+  // call that failed), but with no explanation, and — since
+  // nextSummarizeBehavior self-clears after exactly one response — no
+  // retry spending a second assist the reader never asked for.
+  await setHighlightToggles(true, true); // also clears sra_text_highlights
+  nextSummarizeBehavior = 'poison';
+  const beforeFail = apiHits.summarize;
+  const failPage = await ctx.newPage();
+  const failPageErrors = [];
+  failPage.on('pageerror', (e) => failPageErrors.push(e.message));
+  await failPage.goto('http://localhost:8731/hl-fixture.html');
+  await failPage.waitForTimeout(600);
+  await selectAndCtrlDrag(failPage, HL_PHRASE);
+  if (await failPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
+    await failPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await failPage.waitForTimeout(600);
+  }
+  await failPage.close();
+  const storeAfterFail = await readHighlightStore();
+  const failEntry = (storeAfterFail[HL_URL_KEY] || [])[0];
+  // Snapshotted here for the same reason as noServerCallInToggleOff above —
+  // (e) below makes its own real call, and a live re-read at the end would
+  // wrongly count it against this step's "exactly one attempt" assertion.
+  const exactlyOneAttemptInFailStep = apiHits.summarize === beforeFail + 1;
+
+  // (d) A pre-existing highlight with no `explanation` field at all — made
+  // before this shipped, or with the toggle off — renders without error and
+  // without an empty explanation slot standing in for one.
+  await writeHighlightStore({
+    [HL_URL_KEY]: [{
+      id: 'sra-hl-no-explanation', text: HL_PHRASE, color: '#FFF59D', colorKey: 'yellow',
+      ctxBefore: '', ctxAfter: '', paragraphIndex: 0,
+      url: 'http://localhost:8731/hl-fixture.html', title: 'test', timestamp: Date.now(),
+    }],
+  });
+  const legacyPage = await ctx.newPage();
+  const legacyPageErrors = [];
+  legacyPage.on('pageerror', (e) => legacyPageErrors.push(e.message));
+  await legacyPage.goto(`chrome-extension://${extId}/src/popup/highlights.html`);
+  await legacyPage.waitForTimeout(400);
+  const legacyRendered = await legacyPage.evaluate(() => ({
+    cardCount: document.querySelectorAll('.hl-card').length,
+    explanationBlockCount: document.querySelectorAll('.hl-explanation').length,
+    textShown: document.querySelector('.hl-text')?.textContent || null,
+  }));
+  await legacyPage.close();
+
+  // (e) The cap holds: a long fetched explanation is truncated to 200 chars
+  // before it is stored, while the popup shown at the moment of highlighting
+  // still gets the full, uncapped text — the persisted copy is deliberately
+  // the shorter form.
+  await setHighlightToggles(true, true); // also clears sra_text_highlights
+  const LONG_EXPLANATION = 'A'.repeat(500);
+  nextSummarizeBehavior = LONG_EXPLANATION;
+  const capPage = await ctx.newPage();
+  await capPage.goto('http://localhost:8731/hl-fixture.html');
+  await capPage.waitForTimeout(600);
+  await selectAndCtrlDrag(capPage, HL_PHRASE);
+  if (await capPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
+    await capPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await capPage.waitForTimeout(600);
+  }
+  const capPopupText = await capPage.evaluate(() =>
+    document.querySelector('.sra-popup.show .sra-popup-body')?.textContent || null);
+  await capPage.close();
+  const storeAfterCap = await readHighlightStore();
+  const capEntry = (storeAfterCap[HL_URL_KEY] || [])[0];
+
+  explanationResult = {
+    attempted: true,
+    toggleOn: {
+      storedExplanation: onEntry?.explanation || null,
+      serverCallMade: apiHits.summarize > beforeOn,
+      rendered: renderedOn,
+    },
+    toggleOff: {
+      storedExplanationAbsent: !(storeAfterOff[HL_URL_KEY] || [])[0]?.explanation,
+      noServerCallMade: noServerCallInToggleOff,
+    },
+    fetchFailure: {
+      highlightStillSaved: !!failEntry,
+      noExplanationStored: !failEntry?.explanation,
+      exactlyOneAttemptNoRetry: exactlyOneAttemptInFailStep,
+      noPageErrors: failPageErrors.length === 0,
+    },
+    legacyHighlightNoExplanationField: {
+      pageErrors: legacyPageErrors.length,
+      cardRendered: legacyRendered.cardCount > 0,
+      noExplanationBlockShown: legacyRendered.explanationBlockCount === 0,
+      quotedTextStillShown: !!legacyRendered.textShown,
+    },
+    explanationCap: {
+      popupShowedFullUncappedText: capPopupText === LONG_EXPLANATION,
+      storedLength: capEntry?.explanation?.length ?? null,
+      storedAtOrUnderCap: (capEntry?.explanation?.length ?? 0) <= 200,
+    },
+  };
+} catch (e) {
+  explanationResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeHighlightStore({});
+
 // ── SPA route-change detection (item 27) ───────────────────────────────────
 // The isolated-world history.pushState/replaceState patch never sees a real
 // page's own pushState call (see the project notes' item-25 finding, and
@@ -1513,6 +1699,7 @@ console.log('dev tools (item 33)     :', JSON.stringify(devToolsResult));
 console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")');
 console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2));
 console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
+console.log('highlight explanations (36):', JSON.stringify(explanationResult, null, 2));
 console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
 console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));

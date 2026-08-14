@@ -50,6 +50,28 @@ function render() {
     text.className = 'hl-text';
     text.textContent = '"' + (entry.text || '').slice(0, 300) + (entry.text?.length > 300 ? '…' : '') + '"';
 
+    card.appendChild(del);
+    card.appendChild(text);
+
+    // Item 36: only present for a highlight saved with the summarise toggle
+    // on, and only once its assist call actually resolved — pre-existing
+    // highlights, toggle-off highlights, and failed fetches all simply have
+    // no `explanation` field. Rendering nothing for those (rather than an
+    // empty "AI explanation" slot) is the sensible presentation for "no
+    // explanation exists here", so this block is skipped entirely for them.
+    if (entry.explanation) {
+      const details = document.createElement('details');
+      details.className = 'hl-explanation';
+      const summaryEl = document.createElement('summary');
+      summaryEl.textContent = 'AI explanation';
+      const body = document.createElement('div');
+      body.className = 'hl-explanation-text';
+      body.textContent = entry.explanation;
+      details.appendChild(summaryEl);
+      details.appendChild(body);
+      card.appendChild(details);
+    }
+
     const meta = document.createElement('div');
     meta.className = 'hl-meta';
 
@@ -81,8 +103,6 @@ function render() {
     meta.appendChild(site);
     meta.appendChild(date);
     meta.appendChild(docDelete);
-    card.appendChild(del);
-    card.appendChild(text);
     card.appendChild(meta);
     list.appendChild(card);
   });
