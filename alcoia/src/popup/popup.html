@@ -556,11 +556,10 @@
         </div>
         <label class="pill"><input type="checkbox" id="debugTogglePopup"><span class="pill-track"></span></label>
       </label>
-      <div class="field-row" style="padding-top:6px">
-        <span class="field-label">Backend URL</span>
-        <!-- placeholder is set from src/shared/config.js by popup.js, not hardcoded here -->
-        <input class="field-input" id="backendUrl" type="text" placeholder="">
-      </div>
+      <p class="section-note">
+        More developer tools — a backend URL override and a state simulator, for local testing —
+        live on the diagnostics page once this is on.
+      </p>
       <div class="btn-row" style="padding-top:10px">
         <button class="btn btn-ghost" id="diagnosticsBtn">Diagnostics</button>
       </div>
@@ -638,17 +637,6 @@
           <kbd>Esc</kbd><span class="kbd-desc">Close open cards</span>
         </div>
       </div>
-    </div>
-
-    <div class="section">
-      <div class="section-label">Simulate a state</div>
-      <div class="btn-grid">
-        <button class="btn btn-ghost" id="simStrugglingBtn">Struggling <kbd>Alt+1</kbd></button>
-        <button class="btn btn-ghost" id="simDriftingBtn">Drifting <kbd>Alt+3</kbd></button>
-        <button class="btn btn-ghost" id="simSkimmingBtn">Skimming <kbd>Alt+4</kbd></button>
-        <button class="btn btn-ghost" id="simOnPaceBtn">On pace <kbd>Alt+5</kbd></button>
-      </div>
-      <p class="section-note">Forces the matching intervention on the paragraph in view, for testing.</p>
     </div>
 
   </div>
