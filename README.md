@@ -193,3 +193,18 @@ still bundled under `src/libs/` is permissive or OFL.
 Fonts (Literata, Plus Jakarta Sans) are **SIL OFL 1.1**, with their licences alongside the
 binaries. The API server is a separate program in a separate private repository and was never
 covered by this grant. Details in [`NOTICE.md`](NOTICE.md).
+
+## About this repository
+
+This repository is public **for transparency and verification** — so anyone can read exactly what
+the extension does with a reader's data, rather than take a claim on trust. It is not a
+solicitation for contributions. Issues and pull requests may be read but are not actively triaged,
+and an unsolicited PR is not likely to be merged. If you have found a security issue, see
+[`SECURITY.md`](SECURITY.md) instead of opening a public issue.
+
+[`ARCHITECTURE.md`](ARCHITECTURE.md) explains how the system works in more detail than this file.
+The team's own internal engineering-context file, which additionally tracks line-by-line
+implementation status and in-progress work, is not published.
+
+The code is [AGPL-3.0](LICENSE), as above — see that file and `NOTICE.md` for exactly what it
+covers.

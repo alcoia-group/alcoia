@@ -267,6 +267,40 @@ export async function createOrchestrator(deps) {
     try { paragraphTracker.rescan(); syncParagraph(); } catch (e) {}
   }
 
+  /* Item 27: a genuine SPA route change (new pathname, per
+   * coverage-gate.js's documentKey()) swaps the DOM out from under every
+   * paragraph-index-keyed piece of state below. Without this, the next
+   * transition would report the OLD document's paragraph as "left" — full
+   * stale dwell time and all — and syncParagraph() would attribute that
+   * dwell to the NEW document's coverage-gate key, since documentKey() is
+   * read live at the point of recording, not captured. scrollRegression,
+   * progressionEntropy, interactionSignals, cursorTracker and scrollDynamics
+   * all already exported a reset() for exactly this purpose — none of them
+   * had ever been called from anywhere in the shipped tree, because nothing
+   * before this item ever detected a route change to call them from. Found
+   * incidentally while wiring this: the same "dead code that reads as
+   * wired" shape the project notes already tracks for cursor_reading, five more
+   * instances of it, all closed by this one call site rather than by
+   * inventing new reset logic.
+   *
+   * interventionPolicy is deliberately NOT touched here — its session cap
+   * is a session-scoped budget by design (the project notes: "cap scales with
+   * content read, not with 'session'... absolute per-session ceiling"), and
+   * resetting it per SPA route would let a reader bypass the ceiling simply
+   * by clicking through many short pages. */
+  function handleRouteChange() {
+    try { paragraphTracker.reset(); } catch (e) {}
+    try { comprehensionMonitor.resetParagraph(); } catch (e) {}
+    try { scrollRegression.reset(); } catch (e) {}
+    try { progressionEntropy.reset(); } catch (e) {}
+    try { interactionSignals.reset(); } catch (e) {}
+    try { cursorTracker.reset(); } catch (e) {}
+    try { scrollDynamics.reset(); } catch (e) {}
+    try { host.setCurrentParagraph(null); } catch (e) {}
+    if (s().debugEnabled) { try { host.log('SPA route change — paragraph tracking reset'); } catch (e) {} }
+    primeParagraph();
+  }
+
   /* Tear everything down. Not called in the extension today — the content
    * script lives as long as the page — but the timer is owned here, so the
    * ability to stop it belongs here too rather than being unreachable. */
@@ -278,6 +312,7 @@ export async function createOrchestrator(deps) {
   return {
     installListeners,
     primeParagraph,
+    handleRouteChange,
     syncParagraph,
     pumpTelemetry,
     stop,
