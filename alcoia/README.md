@@ -6,23 +6,22 @@
 
 ---
 
-
 A browser extension that notices when reading slows down on a page and offers help with that
-passage. Detection runs on **browser telemetry** — pace against text difficulty and against your
-own baseline, re-reading, selection, tab focus — which needs no permission and no camera. There is
-no webcam mode: it has been removed, not merely demoted, and no `getUserMedia` call exists in the
-shipped code.
+passage. Detection runs on **browser reading signals**: pace against text difficulty and against your
+own baseline, re-reading, selection, tab focus, which needs no permission and no camera. There is
+no webcam mode: it has been removed, not merely demoted, and no `getUserMedia` call exists anywhere
+in the shipped code.
 
 The primary intervention is a **question about what you just read**, not a summary: an answer is
-the only ground truth in the system, and summarising removes the difficulty that produces
-retention.
+the only ground truth in the system, and summarising performs the work retrieval would otherwise
+do. A correct answer ends the interaction with confirmation only; an explanation appears only after
+a wrong one.
 
-> **Reading this file:** the sections below are a feature and configuration reference, and much of
-> it predates the gaze-path removal (see `../the project notes`'s migration note under "Signal hierarchy").
-> Any section below describing WebGazer, a camera control, gaze coordinates, or a `sra_eye`/
-> `sra_camera_*`/`sra_calibration`/`sra_webgazer_*`/`sra_personal_baseline` storage key documents
-> code that no longer exists. Where this file and [`../README.md`](../README.md) or
-> [`../the project notes`](../the project notes) disagree, those two are current and this one is not.
+This file is the extension's own reference: feature list, configuration, keyboard shortcuts. For
+product intent, invariants and the actual state of the repository (what's built, what's a known
+gap, what's deliberately deferred), see [`../the project notes`](../the project notes), which is kept current and
+is the source of truth whenever the two disagree. The top-level [`../README.md`](../README.md)
+covers the product pitch, privacy and licensing.
 
 ---
 
@@ -31,380 +30,229 @@ retention.
 1. [Overview](#overview)
 2. [How It Works](#how-it-works)
 3. [Features](#features)
-4. [Cognitive States](#cognitive-states)
+4. [Reading States](#reading-states)
 5. [Reader Profiles](#reader-profiles)
 6. [Multilingual Support](#multilingual-support)
 7. [Architecture](#architecture)
-8. [File Structure](#file-structure)
-9. [Installation](#installation)
-10. [Running the Backend Server](#running-the-backend-server)
-11. [Usage Guide](#usage-guide)
-12. [Keyboard Shortcuts](#keyboard-shortcuts)
-13. [Configuration](#configuration)
-14. [Accessibility](#accessibility)
-15. [Privacy](#privacy)
-16. [Security](#security)
-17. [Development Notes](#development-notes)
+8. [Installation](#installation)
+9. [Running the Backend Server](#running-the-backend-server)
+10. [Usage Guide](#usage-guide)
+11. [Keyboard Shortcuts](#keyboard-shortcuts)
+12. [Configuration](#configuration)
+13. [Accessibility](#accessibility)
+14. [Privacy](#privacy)
+15. [Security](#security)
+16. [Development Notes](#development-notes)
 
 ---
 
 ## Overview
 
-alcoia is a Chrome extension that watches how you read — pace against text difficulty and your own baseline, re-reading, selection, tab focus — using only browser telemetry, no camera, and asks a retrieval question when it detects struggling or dense-text skimming. It can also generate AI summaries, speak paragraphs aloud, and adapt its visual presentation, all without you lifting a finger.
+alcoia watches how you read (pace against text difficulty and your own baseline, re-reading,
+selection, tab focus) using only browser reading signals, no camera, and asks a retrieval question when
+it detects struggling or dense-text skimming. A wrong answer gets an explanation with 2-4 key terms
+highlighted; a correct one gets confirmation and nothing else. It can also generate on-demand
+summaries, speak paragraphs aloud, and adapt its visual presentation.
 
 The extension supports:
-- Ordinary web pages (articles, documentation, Wikipedia, etc.)
-- Local PDF files (`.pdf` opened from your computer)
-- Local PPTX files (`.pptx` opened from your computer)
+- **Ordinary web pages** (articles, documentation, Wikipedia, etc.): full detection, questions,
+  the quiz, coverage tracking.
+- **Local PDF and PPTX files**, opened from your computer: text extraction and the manual `Alt+S`
+  summary work. **Detection, retrieval questions, and the quiz do not reach these formats yet**;
+  they run on a separate paragraph model the signal pipeline can't see. See the project notes'
+  `pdf-handler.js` / `pptx-handler.js` entry for the verified detail.
 
-All eye-tracking computation happens locally in the browser. Only paragraph text (never gaze data or video) is sent to the AI backend.
+Passage text is sent to a backend server (a separate repository, not part of this one) to generate
+questions, explanations and summaries. Nothing else: no gaze data, because there is none, and no
+reading history stored server-side. See [Privacy](#privacy).
 
 ---
 
 ## How It Works
 
 ```
-Webcam → WebGazer.js (gaze estimation) → Feature Extractor → Script Patch → Classifier
-                                                                                  ↓
-                                                             Cognitive State (focused / skimming /
-                                                             confused / zoning_out / overloaded)
-                                                                                  ↓
-                                                             Action: AI Summary · TTS · Nudge · nothing
+Reading-signal detectors (scroll, pace, selection, copy, blur, cursor)
+                    |
+     comprehension-monitor.js (pace vs. difficulty vs. your baseline)
+                    |
+        state-engine.js  ->  on_pace / skimming / struggling / drifting / absent / unknown
+                    |
+      intervention-policy.js (interruption budget, dismissal-aware backoff)
+                    |
+     Action: retrieval question, nudge, or nothing
 ```
 
-1. **WebGazer.js** processes the webcam feed locally (TensorFlow FaceMesh) and outputs an estimated gaze point (x, y) on the screen every ~33ms. No video is recorded or transmitted.
-2. **Feature extraction** computes 9 gaze features over a 2.5-second rolling window: average fixation duration, regression rate, saccade length and variance, gaze drift, velocity mean, line re-read count, and gaze quality.
-3. **Personal baseline normalization** scales each feature against the user's natural reading profile (captured during reading calibration) so that a naturally fast reader and a naturally slow reader are both measured relative to themselves.
-4. **Script-aware patching** adjusts features before classification based on detected page language: regression rate is inverted for RTL languages (where forward saccades go right-to-left), and fixation durations are scaled for CJK scripts (where characters require longer fixations by nature). See [Multilingual Support](#multilingual-support).
-5. **The classifier** is a decision tree (exported as plain JavaScript if/else — no ML runtime needed) that maps the 9 normalized features to one of five cognitive states.
-6. **State smoothing** takes the modal label across a 3-sample ring buffer to suppress single-frame noise.
-7. **Actions** are dispatched based on the state: confused and overloaded fetch an AI summary and optionally trigger TTS; zoning_out shows a visual nudge; skimming and focused take no action.
+1. **Detectors** (`src/content/signals/`) watch scroll behaviour, reading pace, text selection,
+   copy events, tab focus, and cursor position. No permission needed; nothing observes you doing
+   anything other than using the page normally.
+2. **`comprehension-monitor.js`** compares reading pace against the text's measured difficulty and
+   your own running baseline (kept per language), correcting for a reader who is simply naturally
+   fast or slow.
+3. **`state-engine.js`** fuses the signals into one of six states. `unknown` is a valid, common
+   answer and never interrupts.
+4. **`intervention-policy.js`** decides whether a state earns an interruption: at most one every
+   three minutes, a session cap that scales with how much has actually been read, and a backoff
+   that kicks in after repeated dismissals.
+5. **The action** is almost always a retrieval question (`question-card.js`), with the sentence the
+   answer came from quoted underneath so the reader can check the evidence. A `drifting` state
+   gets a nudge instead. Explaining is the failure path, reached only after a wrong answer.
+
+There is no classifier and no trained model anywhere in the shipped extension. Every judgement
+above is a plain, inspectable rule over measured values.
 
 ---
 
 ## Features
 
-### Core Reading Assistant
+### Reading and questions
 | Feature | Description |
 |---|---|
-| **Gaze-triggered summaries** | When confused or overloaded state persists, the AI summarises the current paragraph |
-| **Text selection summaries** | Select any text with the mouse → instant AI summary popup |
-| **Image / figure explanation** | Eye tracker detects confused or overloaded state while gazing at an image (2-second dwell) → AI explains what the image shows and how it connects to the surrounding text. Also triggered by `Ctrl+hover` on any `<img>` element |
-| **Summary caching** | AI responses are cached for the session by `mode:fingerprint` key (max 100 entries, LRU). Re-visiting the same paragraph is instant with no extra API call |
-| **Comprehension monitoring** | Detects reading too fast through dense text (Flesch-Kincaid readability) and reading too slow relative to personal baseline |
-| **Scroll backtrack detection** | Detects when you scroll back to re-read, offering a summary |
-| **Previous paragraph context** | The paragraph before the selected one is sent to the AI so summaries are contextually aware |
-| **Save Notes** | Save any summary to a persistent notes store, viewable from the extension |
+| **Retrieval question** | The primary intervention. Confirmation only on a correct answer; an explanation with the passage quoted and 2-4 key terms highlighted on a wrong one |
+| **Confidence rating** | Captured at the same moment as the answer, not as a follow-up probe. A probe that appears more after wrong answers would leak the result |
+| **The quiz** | 5-8 questions drawn from what you've actually read on a document, offered once you've covered enough of it. One server call, local-only (IndexedDB), no retake, deletable |
+| **The reading receipt** | `Alt+I` builds a local record of what was covered and recalled. Can be signed by the server as *unaltered since issued*, never as a claim that reading happened |
+| **Snooze** | Explicit, reader-chosen pause (15 min / 1 hour / rest of today) on interruptions. Detection and coverage tracking keep running underneath it |
+| **Text selection summaries** | Select text with the mouse for an instant summary popup |
+| **Comprehension monitoring** | Reading too fast through dense text, or too slow against your own baseline |
+| **Scroll backtrack detection** | Detects re-reading and can offer a summary |
+| **Summary caching** | Responses cached per session by a `mode:fingerprint` key |
 
-### Accuracy & Personalisation
+### Visual aids
 | Feature | Description |
 |---|---|
-| **Dot calibration** | 9-point 3×3 grid, two passes — provides training examples for WebGazer's ridge regression |
-| **Reading calibration** | Words are highlighted at natural reading speed; calibration captures ~80 training examples from actual reading positions |
-| **Calibration persistence** | Calibration runs once. The offset is saved to extension storage and silently restored on every subsequent page |
-| **Model persistence** | The full WebGazer ridge-regression training data is serialised and saved to extension storage after every calibration (dot or reading). On subsequent pages the model is restored for a warm start instead of starting cold — accuracy compounds across sessions instead of resetting on every page load |
-| **Personal baseline** | Gaze features recorded during reading calibration become a normalisation baseline, so the classifier adapts to the individual reader |
-| **Click training** | Every click on the page is recorded as a WebGazer training example, continuously improving gaze accuracy |
-| **Multi-sample offset** | At calibration completion, 5 predictions at viewport centre are taken, outliers trimmed, and averaged for a stable correction offset |
-| **Gaze quality gate** | When gaze quality < 25% (poor lighting, face obstructed), classification is skipped rather than guessing |
-| **Gaze quality toast** | After 24 seconds of poor quality, a user-facing notification appears: "Low camera quality — move to better lighting" |
-| **State smoothing** | 3-sample modal ring buffer prevents single bad frames from triggering actions |
-
-### Visual Aids
-| Feature | Description |
-|---|---|
-| **Dark Mode** | Toggle in the popup that themes both the extension UI and all in-page summary popups and overlays |
-| **Reading Map** | Collapsible right-side sidebar showing article progress, a clickable heading minimap, and an event log of confusion / summary moments. Toggle: `Alt+M` |
-| **Focus Ruler** | Dims everything above and below a ~104px horizontal band following gaze Y position. Acts as a digital reading ruler. Toggle: `Alt+F` or Assist tab |
+| **Dark Mode** | Themes the popup UI and in-page overlays. Toggle in the popup header |
+| **Reading Map** | Collapsible sidebar: progress, a heading minimap, an event log. `Alt+M` |
+| **Focus Ruler** | Dims everything above and below a band that follows your cursor, falling back to a fixed reading-line heuristic when the cursor hasn't moved recently. `Alt+F` |
 | **Paragraph highlight** | The paragraph that triggered an action is briefly outlined |
-| **Idle edge pulse** | Screen edges pulse when gaze leaves the reading area for extended periods |
 
-### Reading Personas
-Four named presets that configure all toggles at once. Select in the popup's **Reading Mode** section; settings can be further adjusted per-session.
+### Reading personas
+Four presets that set several toggles at once, from the popup's **Reading Mode** section:
 
 | Persona | What it sets |
 |---|---|
-| **Research** | selection on · highlight on · comprehension on · focus ruler on · pin popups |
-| **Study** | TTS on · comprehension on · autohide after 10s |
-| **Casual** | selection only · autohide after 6s |
-| **Speed** | focus ruler on · autohide after 4s · no comprehension check |
+| **Research** | selection, paragraph highlight, comprehension, focus ruler, pin popups open |
+| **Study** | comprehension, read-aloud, autohide after 10s |
+| **Casual** | selection only, autohide after 6s |
+| **Speed** | focus ruler, autohide after 4s, comprehension off |
 
 ### Accessibility
 | Feature | Description |
 |---|---|
-| **Dyslexia Mode** | Applies Verdana/Arial font, 2× line height, wider letter/word spacing, left alignment |
-| **Colour overlay** | Optional tint (warm yellow, light blue, soft green, pale rose) rendered with `mix-blend-mode: multiply` |
-| **Bionic Reading** | Bolds the first ~45% of each word to create visual anchors for each word |
-| **Threshold softening** | When Dyslexia Mode is on, regression rate and fixation thresholds are patched before classification so natural dyslexic patterns do not over-trigger confused/overloaded |
-| **TTS (Read Aloud)** | Web Speech API reads the triggered paragraph aloud, word by word, with each word highlighted as it is spoken. Toggle: `Alt+T` or Assist tab |
+| **Dyslexia Mode** | Verdana/Arial, 2x line height, wider letter/word spacing, left alignment, optional colour overlay |
+| **Bionic Reading** | Bolds the first ~45% of each word as a visual anchor |
+| **Read Aloud (TTS)** | Web Speech API, sentence by sentence, current word highlighted. `Alt+T` |
 
-### Session Reports
-| Feature | Description |
+### Document support
+| Format | What works |
 |---|---|
-| **Session tracking** | Every reading session (>30s) records: time in each cognitive state, comprehension signals, average WPM, confusion/backtrack counts |
-| **Session report page** | Shows: time on page, avg WPM, colour-coded state distribution bar, list of confusion moments with paragraph excerpts |
-| **Highlight persistence** | Paragraphs that received an AI summary get a subtle green left border on next visit to the same URL |
-| **Notes** | Summaries can be manually saved and reviewed from a dedicated notes page |
-
-### Document Support
-| Format | Mechanism |
-|---|---|
-| **Web pages** | Content script injects directly; gaze maps to DOM paragraphs |
-| **Local PDFs** | `file://*.pdf` navigations are intercepted by the background service worker and redirected to a bundled PDF.js viewer. alcoia content script injects normally |
-| **Local PPTX** | `file://*.pptx` navigations redirected to a bundled PPTX viewer (JSZip parses slide XML). Each slide renders as a readable text card |
+| **Web pages** | Everything above |
+| **Local PDF** | `file://*.pdf` is redirected to a bundled PDF.js viewer; text extraction and `Alt+S` summaries work. No detection or questions, see [Overview](#overview) |
+| **Local PPTX** | Same shape as PDF, via a bundled JSZip-based viewer |
 
 ---
 
-## Reading states
+## Reading States
 
-Six states, each naming an **observation** rather than a feeling. `confused` and `overloaded`
-were removed deliberately: they are internal states that cannot be measured from a browser, and
-claiming to detect them would be claiming something this software cannot support.
+Six states, each naming an **observation**, not a feeling:
 
 | State | What was observed | What it earns |
 |---|---|---|
 | `on_pace` | Pace matches the difficulty of the text and your own baseline | Nothing |
-| `skimming` | Moving faster than this text usually takes to read | A question, but only on difficult text — skimming easy prose is a choice |
+| `skimming` | Moving faster than this text usually takes to read | A question, but only on difficult text (skimming easy prose is a choice) |
 | `struggling` | Slower than your usual pace here, or going back over it | A question; an explanation if the answer is wrong |
 | `drifting` | Movement on the page has stalled without you leaving it | A nudge on the current paragraph |
-| `absent` | Nothing to read from — you are away from the page | Nothing |
-| `unknown` | The signals do not agree | **Nothing, ever.** This is a valid and common answer |
+| `absent` | Nothing to read from; you are away from the page | Nothing |
+| `unknown` | The signals do not agree, or there is no signal | **Nothing, ever.** This is a valid and common answer |
 
-Gaze may assert only `absent`. It can corroborate a telemetry state to raise confidence, but it
-can never assert a reading state on its own — a gaze label with nothing behind it resolves to
-`unknown` and is dropped.
+There is deliberately no `confused` and no `overloaded`. Those named an internal state a browser
+cannot measure, and were the previously-removed camera classifier's vocabulary.
 
 ## Reader Profiles
 
-### Professionals (lawyers, doctors, analysts, office workers)
-Dense, long-form text is the daily norm. alcoia helps with:
-- Comprehension check flags paragraphs read faster than their difficulty warrants (critical in contracts)
-- AI explains jargon in context, with the surrounding paragraph included for accuracy
-- Session reports show where reading slowed down — useful for identifying clauses to re-examine
-- Personal baseline adapts to their naturally fast professional reading pace, avoiding false "confused" triggers
-- TTS useful for hands-free review while annotating or taking notes
-
-### Students
-- Reading calibration sets a personal WPM baseline per document type
-- Confused state triggers explanations; overloaded state triggers simplifications
-- PPTX viewer gives alcoia treatment to lecture slides
-- Session reports show exactly which sections they struggled with — useful for revision and identifying gaps
-- Highlight persistence marks previously difficult paragraphs on re-reads
-- Scroll backtrack detection recognises when they re-read a section and offers a summary
-- Dyslexia Mode + bionic reading available for students who need it
-
-### Dyslexic readers
-- **Turn on Dyslexia Mode** (Accessibility tab in popup): font, spacing, and colour overlay adjust immediately
-- Bionic reading bolds word anchors to reduce horizontal tracking difficulty
-- Classifier thresholds are patched so the natural dyslexic reading pattern (higher regression, longer fixations) does not over-trigger confused/overloaded — the extension understands this is normal
-- TTS as a parallel channel: the text is both visible and spoken
-- Focus Ruler eliminates the common "losing my place on the line" problem
-- Because Dyslexia Mode is self-declared (toggle), there are no false-positive detection issues
-
-### Non-native speakers / language learners
-- AI responses are generated **in the same language as the text being read** — explanations of a French article come in French, Arabic in Arabic, Japanese in Japanese
-- RTL language support: the gaze classifier is adapted automatically for Arabic, Hebrew, Persian, and other RTL scripts (see [Multilingual Support](#multilingual-support))
-- TTS helps with pronunciation and prosody
-- Backtrack detection recognises when a sentence needed a second read
-- Selection summary works on any highlighted phrase
-- Consider combining with Dyslexia Mode's wider spacing, which also helps when reading in a second language
-
-### Casual / general readers
-- Everything is automatic once the camera is on — no manual interaction required
-- Idle edge pulse is a gentle reminder to re-engage when zoning out
-- Session reports show how long sessions actually were vs how much was active reading
-- Autohide popups keep the experience clean
-
-### Researchers / academics
-- FK readability scoring is calibrated to academic difficulty levels
-- Very difficult paragraphs (FK score < 40) trigger a different expected WPM threshold
-- Personal baseline normalises to the researcher's own pace with dense literature
-- Previous paragraph context means AI summaries understand the argument structure
+- **Professionals** (lawyers, doctors, analysts): comprehension monitoring flags paragraphs read
+  faster than their difficulty warrants; the personal baseline adapts to a naturally fast
+  professional reading pace so it doesn't false-trigger.
+- **Students**: reading calibration sets a personal WPM baseline; the quiz and receipt give
+  something to review after the fact; Dyslexia Mode and bionic reading are available if needed.
+- **Dyslexic readers**: turn on Dyslexia Mode in the Accessibility tab, font, spacing and colour
+  overlay adjust immediately; Focus Ruler helps with losing a line; TTS gives a parallel channel.
+- **Non-native speakers / language learners**: AI responses come back in the same language as the
+  passage; backtrack detection catches sentences that needed a second read.
+- **Researchers / academics**: difficulty scoring accounts for genuinely dense material rather than
+  flagging it as slow reading by default; the personal baseline adjusts to a dense-literature pace.
 
 ---
 
 ## Multilingual Support
 
-### AI response language
-All server prompts instruct the model to respond in the same language as the passage being read. An Arabic paragraph produces an Arabic summary; a Japanese paragraph produces Japanese. This requires no user configuration.
+Word and sentence counting goes through `Intl.Segmenter`, so pace signals work correctly in
+scripts that don't put spaces between words (Chinese, Japanese, Thai, Khmer, Lao, Burmese) as well
+as space-delimited ones. A whitespace-split word count used to return `1` for an entire CJK
+paragraph, silently disabling detection on those pages. Difficulty scoring falls back to sentence
+and clause structure with per-script anchors where Flesch-Kincaid doesn't apply, so ordinary prose
+in Arabic or Chinese isn't scored as unusually dense by an English-shaped formula. AI responses
+come back in the same language as the passage being read. Reading-pace baselines are kept per
+language.
 
-### RTL languages (Arabic, Hebrew, Persian, Urdu, and others)
-
-The gaze classifier was trained on left-to-right English reading data. In LTR reading, a leftward eye movement (dx < 0) is a regression — going back to re-read. In RTL reading, leftward is *forward*. Without adaptation, a focused Arabic reader would generate a very high raw regression rate (~0.7) and be falsely classified as confused or overloaded.
-
-`lang-detect.js` detects RTL pages and inverts the `regression_rate` feature before classification:
-
-```
-patched_regression_rate = 1 − raw_regression_rate
-```
-
-This inversion is symmetric: it correctly maps both states.
-
-| Reader state | Raw regression rate | After inversion | Classifier output |
-|---|---|---|---|
-| Focused RTL reader (mostly leftward saccades) | ~0.70 | ~0.30 | focused ✓ |
-| Confused RTL reader (re-reading rightward) | ~0.30 | ~0.70 | confused ✓ |
-
-A confused RTL reader produces *fewer* forward (leftward) saccades because they are re-reading sections rightward — so their raw rate drops, the inversion pushes it high, and the classifier correctly fires. The distress signal is preserved, not erased.
-
-### CJK languages (Chinese, Japanese, Korean)
-
-CJK character-based scripts require longer fixation durations per unit of text — typically 30–40% above alphabetic baselines, because each glyph is semantically dense. The trained classifier threshold for confusion is 450 ms average fixation. A focused Japanese reader processing complex kanji at 450–500 ms would cross that threshold and be falsely classified as confused.
-
-`lang-detect.js` scales fixation features by 0.78 on CJK pages:
-
-```
-avg_fixation_ms  ← avg_fixation_ms × 0.78
-fixation_std     ← fixation_std     × 0.78
-```
-
-A 500 ms normal-but-dense fixation becomes 390 ms — safely in the focused zone. A genuinely confused fixation at 650 ms becomes 507 ms — still above threshold, correctly triggering an explanation.
-
-The Flesch-Kincaid readability check (in `comprehension-monitor.js`) is already bypassed on non-English pages via an `isEnglishPage()` guard, so CJK readers are not penalised by an English-only formula.
-
-### Script detection (`lang-detect.js`)
-
-Detection runs once on page load using three layers:
-
-1. `<html lang="...">` attribute — most reliable when set correctly
-2. `dir="rtl"` HTML attribute or CSS `direction: rtl` computed style — catches sites that set direction without a proper lang tag
-3. Unicode character sampling — reads the first 1000 visible characters of `body.innerText` and checks what fraction fall in RTL Unicode blocks (Arabic U+0600–06FF, Hebrew U+0590–05FF, etc.) or CJK blocks (Hiragana, Katakana, CJK Unified U+4E00–9FFF, Hangul). If >15% of non-whitespace characters match, the script is detected.
-
-The 15% threshold avoids false positives from pages that embed a few foreign words in otherwise Latin-script text.
-
-Summary popups use `dir="auto"` on their content area, so the browser's bidi algorithm automatically renders RTL AI responses in the correct direction without explicit tracking.
-
-Detection re-runs automatically on single-page apps: `watchScriptChanges()` observes `<html lang>` / `dir` attribute mutations, `<body>` child replacements (SPA page swaps), and `popstate` / `hashchange` events. Any change triggers a debounced re-detection, so navigating from an English article to an Arabic one without a full reload updates the classifier patch within a few hundred milliseconds.
+There is no script-aware feature patching of any kind. That machinery existed only to correct the
+now-removed gaze classifier's training bias, and left with it.
 
 ---
 
 ## Architecture
 
-```
-alcoia/
-├── manifest.json              MV3 extension manifest
-├── background.js              Service worker: message routing, file:// intercept, tab management
-│
-├── src/
-│   ├── content/
-│   │   ├── content.js         Main content script: orchestrates all modules
-│   │   ├── classifier.js      Decision tree: 9 features → 5 cognitive states
-│   │   ├── gaze-utils.js      EMA smoothing, velocity rejection, calibration, baseline normalisation
-│   │   ├── gaze-features.js   Rolling window feature extractor (DBSCAN noise filter)
-│   │   ├── lang-detect.js     Script detection (RTL/CJK), SPA re-detection, feature patching
-│   │   ├── comprehension-monitor.js  WPM measurement, too-fast/too-slow detection, backtrack
-│   │   ├── reading-calibration.js    Word-by-word expert calibration overlay
-│   │   ├── session-tracker.js        Per-session state durations, signals, WPM, persistence
-│   │   ├── tts-handler.js     Web Speech API: sentence splitting, word-boundary highlighting
-│   │   ├── focus-ruler.js     Horizontal dim-band following gaze Y
-│   │   ├── dyslexia-utils.js  Font/spacing CSS, colour overlay, bionic reading, threshold patch
-│   │   ├── reading-map.js     Collapsible sidebar: progress bar, heading minimap, event log
-│   │   ├── idle-overlay.js    Edge pulse when gaze leaves screen
-│   │   ├── overlay-utils.js   DOM block ancestor finder, popup positioning helpers
-│   │   ├── pdf-handler.js     PDF text extraction helpers
-│   │   ├── pptx-handler.js    PPTX parsing via JSZip
-│   │   ├── sra-page-bridge.js Bridge between isolated content-script world and page context
-│   │   └── webgazer-bootstrap.js  Loads WebGazer in MAIN world, pipes gaze via postMessage
-│   │
-│   ├── popup/
-│   │   ├── popup.html         Three-tab popup: Assist · Accessibility · Session
-│   │   ├── popup.js           Popup logic: settings, broadcast, camera status, simulate, personas
-│   │   ├── session-report.html  Per-session reading report with state distribution chart
-│   │   └── notes.html         Saved notes viewer
-│   │
-│   ├── pdf-viewer/
-│   │   └── viewer.html        Extension-hosted PDF viewer (PDF.js); content script injects here
-│   │
-│   ├── pptx-viewer/
-│   │   └── viewer.html        Extension-hosted PPTX viewer (JSZip); content script injects here
-│   │
-│   ├── libs/
-│   │   ├── webgazer.min.js    Bundled WebGazer (TF FaceMesh + ridge regression)
-│   │   ├── jszip.min.js       Bundled JSZip (PPTX parsing)
-│   │   └── pdfjs/
-│   │       ├── pdf.min.js     Bundled PDF.js
-│   │       └── pdf.worker.min.js
-│   │
-│   └── styles/
-│       └── overlay.css        Popup, calibration, highlight, nudge styles
-│
-```
-
-The backend (Express proxy to Groq) used to live under `server/` in this tree. It has moved to a
-separate private repository — see "Running the Backend Server" below.
-
-### Cross-world communication
-
-Chrome extensions run content scripts in an isolated JavaScript world. `window.webgazer` is not accessible from there. alcoia solves this with a postMessage bridge:
-
-```
-Content script (isolated world)
-    ↓ postMessage({ source: 'sra-cal-record', x, y })
-webgazer-bootstrap.js (MAIN world)
-    ↓ webgazer.recordScreenPosition(x, y)
-    ↓ postMessage({ source: 'sra-webgazer', gaze: {x, y} })
-Content script
-    ↓ onGaze(data) → feature extraction → script patch → classification
-```
-
----
-
-## File Structure
-
-See the Architecture section above for the annotated tree. Key relationships:
-
-- `content.js` imports all other content modules via `import(chrome.runtime.getURL(...))` (dynamic ES module imports)
-- `background.js` handles `file://` interception and message routing (tab creation, note saving, WebGazer injection fallback)
-- The popup communicates with the content script via `chrome.tabs.sendMessage` and `chrome.storage`
+See [`../the project notes`](../the project notes)'s "Actual repository state" section for the annotated,
+kept-current file tree and line counts. Duplicating it here is exactly how this file went stale
+last time. In short: `src/content/` holds the content-script modules (reading-signal detectors
+under `signals/`, the state engine, the interruption policy, the question card, the quiz); `src/popup/`
+holds the toolbar panel and its pages; `src/shared/` holds the backend-origin config and the
+install-token client; `background.js` is a thin message relay and the local-file PDF/PPTX redirect.
 
 ---
 
 ## Installation
 
 ### Prerequisites
-- Google Chrome (or Chromium-based browser)
-- Node.js 18+ (for this repo's own tooling — lint, tests, build)
-- A running instance of the backend (separate private repo) with a Groq API key configured there
+- Google Chrome (or Chromium-based browser), or Firefox via the `firefox` build target
+- Node.js 18+ (for this repo's own tooling: lint, tests, build)
+- A running instance of the backend (separate private repository)
 
 ### Load the extension
 
-1. Clone or download this repository.
+1. Clone this repository and run `node build.mjs` from the repo root (or load `alcoia/` directly;
+   its `manifest.json` is generated and committed for unpacked development).
 2. Open `chrome://extensions`.
-3. Enable **Developer mode** (top right toggle).
+3. Enable **Developer mode**.
 4. Click **Load unpacked** and select the `alcoia/` folder (the one containing `manifest.json`).
 
-### Allow file access (for PDF and PPTX support)
+### Allow file access (for local PDF and PPTX viewing)
 
-1. On `chrome://extensions`, click **Details** next to alcoia.
-2. Enable **Allow access to file URLs**.
-
-This is required for the PDF and PPTX viewers to fetch local files.
+On `chrome://extensions`, click **Details** next to alcoia and enable **Allow access to file
+URLs**. Required for the local-file viewers to fetch the file itself.
 
 ---
 
 ## Running the Backend Server
 
-The extension requires a backend that proxies requests to the Groq API. That backend's source no
-longer lives in this repository — it moved to a separate private repo as part of the ongoing
-client/server split (see `the project notes`, "Migration in progress"). Get its setup instructions from
-that repo.
+The extension calls a backend for question generation, explanations, summaries and receipt
+signing. That backend's source is not part of this repository, see `../the project notes`'s Scope table.
+Get its setup instructions from that repository.
 
-Point the extension at wherever your instance runs — see `the project notes`'s Item 4 notes on the backend
-origin for how the default is configured. By default it still expects a local instance at
-`http://localhost:3000` for development. It exposes one endpoint:
+By default the extension points at a placeholder, unresolvable origin (`src/shared/config.js`) so
+an unconfigured install fails DNS cleanly rather than silently reaching somewhere unintended. Point
+it at your own instance from the popup's Settings > **Backend URL** field (stored as
+`sra_backend_url`), no code or manifest edit needed. The endpoints the extension calls:
 
 ```
-POST /api/summarize
-Content-Type: application/json
-
-{
-  "text": "paragraph text...",
-  "mode": "tldr" | "explain_more" | "simplify" | "explain_code" | "image_context",
-  "context": "previous paragraph text (optional)"
-}
+POST /api/token          issues the opaque per-install token every other call must carry
+POST /api/summarize      { text, mode, context? } -> { summary }
+POST /api/questions      { text, count } -> { questions: [...] }
+POST /api/receipt/sign   signs a reader-built receipt
 ```
 
-**Security:** CORS is restricted to `localhost` and `chrome-extension://` origins only. A rate limiter of 30 requests per minute per IP is applied. The `GROQ_API_KEY` is never exposed to the extension.
+**Every AI call carries the install token** (`X-Alcoia-Install-Token` header) issued by
+`/api/token` and stored locally; a 401/403 clears it and a fresh one is requested on the next call.
+See `../the project notes`'s Access control section for the full mechanism.
 
 ---
 
@@ -413,39 +261,30 @@ Content-Type: application/json
 ### First use
 
 1. Navigate to any page with text.
-2. Open the extension popup (click the alcoia icon).
-3. That's it — telemetry detection starts immediately, no permission prompt and no setup step.
+2. That's it: reading-signal detection starts immediately, no permission prompt and no setup step.
 
-### Optional: reading calibration (recommended)
+### Optional: reading calibration
 
-In the popup's **Reading** tab, click **Measure my reading speed**. A passage is shown, blurred
-until you start; read it at your natural pace and press the button the moment you finish. This
-sets your personal words-per-minute baseline, which every pace judgement is compared against. No
-camera involved, and it persists across all future pages until you run it again.
-
-### Reading personas
-
-In the popup's **Reading Mode** section, click a persona button (**Research**, **Study**, **Casual**, or **Speed**) to apply a preset configuration instantly. You can still adjust individual toggles after applying a persona.
+In the popup's **Reading** tab, **Measure my reading speed** shows a passage blurred until you
+start; read it at your natural pace and press the button when you finish. This sets your personal
+WPM baseline, kept per language, and persists until you run it again. No camera involved.
 
 ### Day-to-day
 
-The extension runs silently once it is on. It will:
-- Ask a retrieval question when it detects struggling or dense-text skimming
-- Offer a summary when you read through a dense paragraph too quickly
-- Offer a summary when you scroll back up to re-read
+- A retrieval question appears when detection flags struggling or dense-text skimming
+- A correct answer ends it with confirmation only; a wrong one shows an explanation with the
+  passage quoted and key terms highlighted
+- Near the bottom of a document you've read enough of, an unprompted quiz offer appears. It's
+  reader-initiated, so it doesn't spend the interruption budget
+- **Select any text** for an instant summary
+- **Press `Alt+S`** to summarise the paragraph at the viewport centre manually
 
-You can also:
-- **Select any text** → instant summary appears
-- **`Ctrl+hover` over any image** → instant image explanation
-- **Press `Alt+S`** → summarise the paragraph at the viewport centre
-- **Press `Alt+T`** → toggle read-aloud
-- **Press `Alt+F`** → toggle focus ruler
-- **Press `Alt+M`** → toggle reading map sidebar
-- **Press `Esc`** → close any open popup
+### Reviewing what you've read
 
-### Viewing your session report
-
-After reading, open the popup → **Session** tab → **Session Report**. Sessions shorter than 30 seconds are not saved.
+- `Alt+I`: the reading receipt for this session
+- `Alt+R`: review what you've read this session
+- `Alt+G`: the session report page
+- The quiz, once taken, is reviewable (not retakeable) from wherever it was offered
 
 ---
 
@@ -453,154 +292,116 @@ After reading, open the popup → **Session** tab → **Session Report**. Sessio
 
 | Shortcut | Action |
 |---|---|
-| `Alt+S` | Summarise paragraph at the viewport centre |
-| `Alt+T` | Toggle Read Aloud (TTS) on/off |
-| `Alt+F` | Toggle Focus Ruler on/off |
+| `Alt+S` | Summarise the paragraph at the viewport centre |
+| `Alt+T` | Toggle Read Aloud (TTS) |
+| `Alt+F` | Toggle Focus Ruler |
 | `Alt+M` | Toggle Reading Map sidebar |
 | `Alt+N` | Open Saved Notes page |
 | `Alt+G` | Open Session Report page |
 | `Alt+I` | Show the reading receipt |
 | `Alt+R` | Review what you've read this session |
-| `Esc` | Close the active summary popup |
-| `Alt+1` | Simulate: Struggling state (for testing) |
-| `Alt+2` | Simulate: Struggling state, forced to the simplify renderer |
-| `Alt+3` | Simulate: Drifting state |
-| `Alt+4` | Simulate: Skimming state |
-| `Alt+5` | Simulate: On-pace state |
+| `Esc` | Close the active popup |
+| `Alt+1` | Simulate: struggling state (testing) |
+| `Alt+2` | Simulate: struggling state, forced to the simplify renderer |
+| `Alt+3` | Simulate: drifting state |
+| `Alt+4` | Simulate: skimming state |
+| `Alt+5` | Simulate: on-pace state |
 
-All shortcuts are listed in the **Session** tab of the popup for discoverability.
+All shortcuts are listed in the popup for discoverability.
 
 ---
 
 ## Configuration
 
-All settings are stored in `chrome.storage.local` and survive browser restarts.
-
-| Storage key | Default | Description |
-|---|---|---|
-| `sra_enabled` | `true` | Master on/off |
-| `sra_selection` | `true` | Text-selection summaries |
-| `sra_highlight_para` | `true` | Highlight source paragraph |
-| `sra_autohide` | `false` | Auto-dismiss popups |
-| `sra_autohide_timeout` | `12` | Auto-dismiss delay (seconds) |
-| `sra_pin_default` | `false` | Pin popups open by default |
-| `sra_debug` | `false` | Narrate detection state to the console |
-| `sra_comprehension` | `true` | Comprehension speed checks |
-| `sra_tts` | `false` | Read Aloud on confusion |
-| `sra_focus_ruler` | `false` | Focus ruler (dim band) |
-| `sra_dyslexia` | `false` | Dyslexia mode |
-| `sra_dyslexia_color` | `rgba(255,243,180,0.12)` | Colour overlay tint |
-| `sra_bionic` | `false` | Bionic reading |
-| `sra_dark_mode` | `false` | Dark mode for extension UI and in-page popups |
-| `sra_active_persona` | `''` | Last applied reading persona (`research` / `study` / `casual` / `speed`) |
-| `sra_backend_url` | set from `src/shared/config.js` | AI backend endpoint |
-| `sra_baseline_wpm` | `null` | Personal WPM baseline, from self-paced reading calibration |
-| `sra_current_state` | `''` | Last classified reading state |
-| `sra_notes` | `[]` | Saved notes array |
-| `sra_sessions` | `[]` | Session report data (last 20) |
-| `sra_highlights` | `{}` | Paragraph highlights by URL key |
+Settings live in `chrome.storage.local` under `sra_*` keys and survive browser restarts, changed
+from the popup. Rather than duplicate the full list here (the drift risk that made this file stale
+the first time), **the diagnostics page** (popup > Developer section) shows every local `sra_*`
+setting live, plus install-token status and a capped log of silently-failed AI calls. A few of the
+more load-bearing keys: `sra_enabled` (master on/off), `sra_backend_url`, `sra_comprehension`,
+`sra_baseline_wpm_by_lang` (per-language WPM baseline), `sra_snooze_until`, `sra_install_token`.
 
 ---
 
 ## Accessibility
 
 ### Dyslexia Mode
-Activated via the **Accessibility** tab in the popup (self-declaration). Applies:
-- Font: Verdana/Arial (high legibility, wider letterforms)
-- Line height: 2.0 (reduces line crowding)
-- Letter spacing: +0.06em
-- Word spacing: +0.14em
-- Text alignment: left (ragged right reduces river patterns)
-- Optional colour overlay (warm yellow default) with `mix-blend-mode: multiply`
+Self-declared toggle in the **Accessibility** tab. Applies a high-legibility font, 2.0 line height,
+wider letter/word spacing, left alignment, and an optional colour overlay.
 
 ### Bionic Reading
-When enabled (sub-option under Dyslexia Mode), the first 45% of each word is bolded to provide a visual anchor. Applied to paragraphs when an AI action fires.
+Sub-option under Dyslexia Mode. Bolds the first ~45% of each word as a visual anchor.
 
 ### Focus Ruler
-A soft horizontal dim-band follows gaze Y position in real time. Keeps the eye anchored to the current reading line. Especially effective for:
-- Readers who lose their place mid-line
-- Dense multi-column layouts
-- Long lines without natural breaks
+A dim-band follows your cursor position when it's moved recently and is over body text; otherwise
+it falls back to a fixed reading-line heuristic, the same anchor the paragraph tracker uses to
+decide which paragraph is active. Off by default. `Alt+F`.
 
-**The focus ruler is optional.** Toggle with `Alt+F` or the **Focus Ruler** toggle in the Assist tab. It is off by default.
-
-### TTS (Text-to-Speech)
-Uses the Web Speech API (browser-native, no external dependencies, works offline). When the confused state is detected and TTS is on, the paragraph is spoken sentence-by-sentence with each word highlighted as it is spoken.
-
-Toggle with `Alt+T` or the **Read Aloud** toggle in the Assist tab.
+### Read Aloud (TTS)
+Web Speech API, browser-native, works offline. Speaks the triggered paragraph sentence by sentence
+with the current word highlighted. `Alt+T`.
 
 ### Dark Mode
-Toggle in the popup header. Themes the popup UI and all in-page overlays (summary popups, reading map, calibration panel, page summary panel). Preference is saved across sessions.
+Themes the popup UI and every in-page overlay. Preference persists across sessions.
 
 ---
 
 ## Privacy
 
-- **No video is recorded, stored, or transmitted.** WebGazer processes webcam frames locally using TensorFlow.js and discards them immediately after extracting facial landmarks.
-- **Only paragraph text is sent to the AI backend.** Gaze coordinates, feature values, cognitive state labels, and all session data remain local.
-- **The AI backend runs locally** (`localhost:3000`). Paragraph text leaves your machine only to reach `localhost` (which then calls Groq). If you run your own Groq-compatible endpoint, no text leaves your machine at all.
-- **Session reports, highlights, and notes** are stored in `chrome.storage.local` — local to your browser profile, never synced to a server.
+Full detail lives in the top-level [`../README.md`](../README.md#privacy) and
+[`../PRIVACY.md`](../PRIVACY.md); this is the short version specific to this reference:
+
+- No camera path exists in this extension. No `getUserMedia` call, no hidden mode, no fingerprinting.
+- Passage text is sent to the backend to generate questions, explanations and summaries: the one
+  thing that leaves your machine, stated plainly rather than buried.
+- Colour highlights (Ctrl+drag) and the quiz both keep reading content on disk, locally only,
+  never synced. Highlights persist the highlighted text and its surrounding context so the same
+  passage can be re-found on a later visit; the quiz persists in IndexedDB. Both are deletable:
+  a single highlight, every highlight on a page, or all of them; a single quiz or all of them.
+- Settings, the WPM baseline, and UI preferences persist locally and are not reading content.
 
 ---
 
 ## Security
 
-| Control | Implementation |
-|---|---|
-| CORS restriction | Backend only accepts requests from `chrome-extension://` and `localhost` origins |
-| Rate limiting | 30 requests per minute per IP on `/api/summarize` |
-| Secret isolation | `GROQ_API_KEY` lives in the backend repo's `.env` only, never in extension files |
-| `.gitignore` | `.env` is excluded from version control |
-| No remote code | All libraries (WebGazer, PDF.js, JSZip) are bundled locally; no CDN calls from the extension |
-| Input sanitisation | All text rendered in popups is HTML-escaped before insertion |
+- **Install-token gated.** Every AI call carries an opaque, issued-not-derived token
+  (`src/shared/install-token.js`). No token, no response. It identifies an install, not a person or
+  device; no fingerprinting of any kind is used or considered.
+- **No remote code.** PDF.js and JSZip are bundled locally; nothing is fetched from a CDN.
+- **Input sanitisation.** All text rendered in popups and the quiz is HTML-escaped before
+  insertion; nothing the server returns is ever parsed as markup.
+- Server-side controls (rate limiting, CORS, secret handling) live in the separate backend
+  repository and are out of scope here, see `../the project notes`'s Scope table.
 
 ---
 
 ## Development Notes
 
-### Adding a new cognitive state
+### Adding a new reading state
+There is no classifier to edit. Register the type in `state-engine.js`'s `fromSignal()` with a
+confidence and an evidence sentence (or as a corroboration-only type in `CORROBORATING_TYPES` /
+`CORROBORATION`); an unregistered type is silently ignored. See `../the project notes`'s Conventions
+section.
 
-1. Add the label to the classifier tree in `src/content/classifier.js`.
-2. Add a corresponding entry in `COGNITIVE_STATE_ACTIONS` in the same file.
-3. Add a chip and colour in `popup.html` and `overlay.css`.
+### Adding a new reading-signal detector
+Goes in `src/content/signals/`, exporting `{ update(), signal() }`.
 
 ### Changing the AI model
-
-Edit `index.js` in the backend repo — update the `model` field in the Groq API call. The extension is model-agnostic.
-
-### Retraining the classifier
-
-The current classifier is a static decision tree generated from synthetic training data. To retrain:
-1. Collect labelled `(features, state)` pairs from real sessions (session-tracker.js can be extended to export raw feature vectors)
-2. Train a decision tree (scikit-learn works well)
-3. Export as JavaScript if/else and replace `src/content/classifier.js`
-
-Note: if retraining with multilingual data, include RTL and CJK reading samples and remove the script-aware patching in `lang-detect.js` — the patching is only needed because the current classifier was trained on LTR alphabetic data.
+Lives entirely in the separate backend repository. The extension is model-agnostic.
 
 ### Adding a new reading persona
-
-In `popup.js`, add a key to the `PERSONAS` constant with the desired toggle values, then add a corresponding `<button class="persona-btn" data-persona="...">` in `popup.html`.
+In `popup.js`, add a key to the `MODES` constant with the desired toggle values, then a
+corresponding `<button class="mode-btn" data-persona="...">` in `popup.html`.
 
 ### Extension permissions explained
 
 | Permission | Reason |
 |---|---|
-| `storage` | Save settings, calibration, notes, sessions |
+| `storage` | Save settings, notes, sessions, quiz records |
 | `activeTab` | Communicate with the current tab |
-| `tabs` | Read tab URL for file:// interception; create new tabs |
-| `webNavigation` | Monitor navigation for file:// redirect |
+| `tabs` | Read tab URL for `file://` interception; create new tabs |
+| `webNavigation` | Detect a single-page app's own route change (`history.pushState`), so reading detection resets between articles on sites that never do a full page reload |
 | `file:///*` | Fetch local PDF/PPTX files in the viewer pages |
 
 ---
 
-## Upcoming
-
-- **Domain-specific calibration** — separate WPM baselines per content type (news, academic, technical)
-- **Multilingual classifier retraining** — collect RTL and CJK reading data to train a natively multilingual decision tree, removing the need for the current feature-patching workaround
-- **Collaborative / classroom mode** — lecturer creates a room; students' confusion events are aggregated in real time; lecturer sees a heatmap of which sections the class struggled with (architecture in progress)
-- **Session export** — export session reports as JSON or formatted text for teacher review
-- **PPTX image slides** — current viewer renders text-only slides; image-heavy slides show as empty
-
----
-
-*Built by CJ_ · Powered by WebGazer.js, PDF.js, JSZip, Groq (llama-3.1-8b-instant / llama-3.3-70b-versatile)*
+*Built by CJ_. Powered by PDF.js and JSZip.*

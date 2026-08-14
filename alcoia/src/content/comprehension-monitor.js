@@ -28,9 +28,9 @@
 // ── Readability ────────────────────────────────────────────────────────────────
 // Flesch-Kincaid plus syntactic proxies. The syntactic half is what makes
 // non-English pages produce a difficulty signal at all — see text-difficulty.js.
-import { analyzeDifficulty, fleschKincaid } from './telemetry/text-difficulty.js';
-import { countWords, detectLanguage } from './telemetry/segmentation.js';
-import { ResidualDistribution } from './telemetry/residual-distribution.js';
+import { analyzeDifficulty, fleschKincaid } from './signals/text-difficulty.js';
+import { countWords, detectLanguage } from './signals/segmentation.js';
+import { ResidualDistribution } from './signals/residual-distribution.js';
 
 // Generic WPM for typical readers (used before personal baseline is established)
 const GENERIC_WPM = { easy: 260, standard: 220, difficult: 160, very_difficult: 110 };
@@ -187,6 +187,21 @@ export function createComprehensionMonitor(opts = {}) {
     // this returned early on every one of them and the monitor produced nothing.
     if (countWords(text, lang) < MIN_WORD_COUNT) return;
     const readability = analyzeDifficulty(text, { lang });
+    /* Invariant 5: text-difficulty.js's structureIsUnreadable() case (a
+     * script such as Thai or Khmer with no terminal punctuation, so the
+     * whole paragraph parses as one "sentence") returns basis:
+     * 'structure_unavailable' alongside a placeholder score: 60,
+     * grade: 'standard' — a plausible-looking default standing in for a
+     * measurement that was never taken. Leaving paragraphEntry unset here
+     * means leaveParagraph()'s own `if (!paragraphEntry) return null;`
+     * guard makes the whole paragraph a no-op: no expectedMs, no WPM
+     * baseline sample, no residual, no speed_mismatch signal. The reader
+     * gets `unknown` for this paragraph, and unknown never interrupts —
+     * not a guess dressed up as a measurement. Backtrack and scroll
+     * regression are untouched: neither reads paragraphEntry or difficulty
+     * at all, so the extension keeps working, just without a pace signal
+     * for text nothing could actually measure. */
+    if (readability.basis === 'structure_unavailable') return;
     paragraphEntry = { el, text, lang, readability, enteredAt: Date.now() };
   }
 
@@ -275,6 +290,17 @@ export function createComprehensionMonitor(opts = {}) {
 
   function markOfferShown() { lastOfferAt = Date.now(); }
 
+  /* Discard the in-flight paragraph without scoring it as a departure — used
+   * on a genuine SPA route change. leaveParagraph() would otherwise compute
+   * elapsed time against `enteredAt` from a paragraph that no longer exists
+   * on screen; the WPM/residual samples that comes from would still be
+   * numerically real (the reader did spend that time reading), but the
+   * expected-time comparison it feeds is bound to text that is gone, so the
+   * safer choice is silence rather than a sample that cannot be reproduced
+   * or checked (invariant 5's instinct applied to a case its own text never
+   * anticipated). */
+  function resetParagraph() { paragraphEntry = null; }
+
   /* The calibration passages are English, so that is the language the measured
      figure belongs to. It still serves as the fallback everywhere else until
      each language earns its own samples. */
@@ -292,7 +318,7 @@ export function createComprehensionMonitor(opts = {}) {
   }
 
   return {
-    enterParagraph, leaveParagraph, onScroll, markOfferShown,
+    enterParagraph, leaveParagraph, onScroll, markOfferShown, resetParagraph,
     seedWpmFromCalibration, fleschKincaid, getCurrentExpectation,
     getBaselineWpm: () => wpmBaseline.get(),
     getResidualStats: () => residuals.stats(),

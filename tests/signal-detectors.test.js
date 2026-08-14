@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createParagraphTracker } from '../alcoia/src/content/telemetry/paragraph-tracker.js';
-import { createScrollRegressionDetector, FAST_RETURN_MS, SLOW_RETURN_MS } from '../alcoia/src/content/telemetry/scroll-regression.js';
-import { createInteractionSignals, LONG_BLUR_MS } from '../alcoia/src/content/telemetry/interaction-signals.js';
-import { createScrollDynamics } from '../alcoia/src/content/telemetry/scroll-dynamics.js';
+import { createParagraphTracker } from '../alcoia/src/content/signals/paragraph-tracker.js';
+import { createScrollRegressionDetector, FAST_RETURN_MS, SLOW_RETURN_MS } from '../alcoia/src/content/signals/scroll-regression.js';
+import { createInteractionSignals, LONG_BLUR_MS } from '../alcoia/src/content/signals/interaction-signals.js';
+import { createScrollDynamics } from '../alcoia/src/content/signals/scroll-dynamics.js';
 import { createComprehensionMonitor } from '../alcoia/src/content/comprehension-monitor.js';
 
 function fixedClock(start = 1_000_000) {
@@ -137,6 +137,92 @@ describe('paragraph-tracker', () => {
     expect(toNext.left.dwellMs).toBe(4000);     // the figure's own dwell, not folded into either paragraph
     expect(toNext.entered.index).toBe(2);
     expect(toNext.entered.media).toBe(false);
+  });
+});
+
+/* Item 30b: an injected block source lets a non-DOM reading surface (a PDF
+ * viewer's own paragraph model, wired up in a later item) drive this same
+ * tracker. These blocks are plain objects, not real DOM elements — only
+ * getBoundingClientRect() is required, since that is all elementAtReadingLine()
+ * calls on them; words/media are supplied directly rather than computed. */
+describe('paragraph-tracker: injected block source (item 30b)', () => {
+  function block(top, height, words, media = false) {
+    return { el: { getBoundingClientRect: () => ({ top, bottom: top + height, height }) }, words, media };
+  }
+
+  it('drives the same transition an equivalent DOM layout would', () => {
+    // Mirrors "picks the paragraph straddling the reading line" above,
+    // 1:1, but via blockSource instead of document.querySelectorAll.
+    const blocks = [
+      block(0, 200, 50),     // 0-200
+      block(250, 200, 50),   // 250-450, contains the 320 reading line
+      block(500, 200, 50),
+    ];
+    const t = createParagraphTracker({ viewportHeight: () => 800, blockSource: () => blocks });
+    const transition = t.update();
+    expect(transition.entered.index).toBe(1);
+    expect(t.getActive().index).toBe(1);
+  });
+
+  it('ignores an injected block below the word threshold, same as the DOM path', () => {
+    const blocks = [
+      block(100, 40, 5),         // too short
+      block(200, 200, 50),       // real
+    ];
+    const t = createParagraphTracker({ document: null, viewportHeight: () => 800, minWords: 20, blockSource: () => blocks });
+    t.rescan();
+    expect(t.count()).toBe(1);
+  });
+
+  it('suppresses pace attribution on an injected media block, same as the DOM path', () => {
+    const blocks = [
+      block(0, 200, 50, false),
+      block(250, 200, 0, true),   // media: no word floor, still a candidate
+    ];
+    const t = createParagraphTracker({ viewportHeight: () => 800, blockSource: () => blocks });
+    t.rescan();
+    expect(t.count()).toBe(2);
+    expect(t.count({ excludeMedia: true })).toBe(1);
+
+    const transition = t.update();
+    expect(transition.entered.media).toBe(true);
+  });
+
+  it('assigns sequential document-order indices from blockSource() order, which scroll-regression.js consumes unchanged', () => {
+    const blocks = [block(0, 200, 50), block(250, 200, 50), block(500, 200, 50)];
+    const t = createParagraphTracker({ viewportHeight: () => 800, blockSource: () => blocks });
+    t.rescan();
+    expect(blocks.map((b) => t.getIndex(b.el))).toEqual([0, 1, 2]);
+
+    // scroll-regression.js only ever reads transition.left.index / .entered.index
+    // as plain integers — it has no DOM dependency — so feeding it transitions
+    // produced from injected blocks exercises the real integration, not just
+    // the tracker in isolation.
+    const reg = createScrollRegressionDetector({ now: fixedClock().now, minDistance: 1, cooldown: 0 });
+    t.update();                                  // enters index 1 (line at 320)
+    reg.update(t.signal());
+    // Force a jump forward past index 2, establishing maxIndexReached, then
+    // move back to index 1 to trigger a real regression off injected indices.
+    const forward = { type: 'paragraph_change', left: { index: 1 }, entered: { index: 2 }, at: 2000 };
+    reg.update(forward);
+    const back = { type: 'paragraph_change', left: { index: 2 }, entered: { index: 1 }, at: 3000 };
+    const regression = reg.update(back);
+    expect(regression.type).toBe('regression');
+    expect(regression.toIndex).toBe(1);
+  });
+
+  it('leaves the DOM path completely unchanged when no blockSource is supplied', () => {
+    // Same fixture/expectations as "picks the paragraph straddling the reading
+    // line" above, run again here to pin that omitting blockSource is a no-op.
+    const doc = fakeDocument([
+      { name: 'a', text: words(50), top: 0,   height: 200 },
+      { name: 'b', text: words(50), top: 250, height: 200 },
+      { name: 'c', text: words(50), top: 500, height: 200 },
+    ]);
+    const t = createParagraphTracker({ document: doc, viewportHeight: () => 800 });
+    const transition = t.update();
+    expect(transition.entered.index).toBe(1);
+    expect(t.getActive().index).toBe(1);
   });
 });
 
