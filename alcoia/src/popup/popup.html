@@ -470,7 +470,7 @@
     </div>
 
     <div class="section">
-      <div class="section-label">Local documents</div>
+      <div class="section-label">PDF &amp; PPTX documents</div>
       <label class="toggle-row" for="pdfTakeoverToggle">
         <div class="toggle-info">
           <span class="toggle-name">Open local PDF/PPTX files in alcoia</span>
@@ -484,6 +484,17 @@
         Every alcoia viewer page has its own "Open in browser viewer" button too, for a document
         you have already opened. You are never stuck in a viewer you did not want.
       </p>
+
+      <label class="toggle-row" for="webPdfTakeoverToggle" style="margin-top:10px">
+        <div class="toggle-info">
+          <span class="toggle-name">Also open PDFs linked from the web</span>
+          <span class="toggle-desc">Off by default. On means a PDF opened from a website — not just
+            a file on your computer — opens in alcoia too. Only whole-tab links; a PDF embedded in a
+            page (an iframe) is never redirected. A PDF that fails to load this way always falls
+            back to your browser's own viewer rather than showing an error.</span>
+        </div>
+        <label class="pill"><input type="checkbox" id="webPdfTakeoverToggle"><span class="pill-track"></span></label>
+      </label>
     </div>
 
   </div>
