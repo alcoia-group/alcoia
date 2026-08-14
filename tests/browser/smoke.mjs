@@ -110,7 +110,157 @@ function minimalPdfBytes() {
 }
 const TEST_PDF_BYTES = minimalPdfBytes();
 
+// Item 30c: a real, multi-page PDF — one genuine, real, ≥20-word paragraph
+// of distinct text per page, so alcoia's own PDF viewer has real reading
+// material to track across a real scroll-and-dwell session, the same way
+// article.html gives the DOM path several real <p> elements to scroll
+// through. One .textLayer per rendered page (viewer.js's own renderPage())
+// means one paragraph-tracker candidate per page here, via
+// groupTextLayerParagraphs(). Each paragraph is wrapped across several real
+// Tj lines rather than one long line — a single 160+ character Tj line at
+// 12pt spills far past the page's own 612pt width, and (found while
+// building this check) something downstream truncates the extracted text
+// for the off-page portion, silently under-counting words. Real PDFs wrap;
+// this fixture now does too, which is both more realistic and what avoids
+// the truncation entirely.
+function wrapLines(text, maxChars = 70) {
+  const words = text.split(' ');
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (next.length > maxChars && cur) { lines.push(cur); cur = w; } else cur = next;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+function multiPagePdfBytes(pageTexts) {
+  const esc = (s) => s.replace(/([\\()])/g, '\\$1');
+  const N = pageTexts.length;
+  const objects = [];
+  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'); // 1
+  pageTexts.forEach((text) => {                                          // 2..N+1: content streams
+    const lines = wrapLines(text, 70);
+    const ops = lines.map((line, i) => `1 0 0 1 40 ${700 - i * 14} Tm (${esc(line)}) Tj`).join(' ');
+    const stream = `BT /F1 12 Tf ${ops} ET`;
+    objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  });
+  const pagesObjNum = 2 * N + 2;
+  for (let i = 0; i < N; i++) {                                          // N+2..2N+1: page objects
+    const contentObjNum = i + 2;
+    objects.push(`<< /Type /Page /Parent ${pagesObjNum} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents ${contentObjNum} 0 R >>`);
+  }
+  const kids = Array.from({ length: N }, (_, i) => `${N + 2 + i} 0 R`).join(' ');
+  objects.push(`<< /Type /Pages /Kids [${kids}] /Count ${N} >>`);        // pagesObjNum
+  objects.push(`<< /Type /Catalog /Pages ${pagesObjNum} 0 R >>`);        // catalog, == objects.length
+  const catalogObjNum = objects.length;
+
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogObjNum} 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+}
+// Comfortably past paragraph-tracker.js's 20-word floor (each is 25+ words
+// by real countWords() segmentation, not just a naive space-split count).
+const ITEM30C_PAGE_TEXTS = [
+  'This first page of the reading test document opens right here with a real paragraph long enough to clear the paragraph tracker word floor for genuine tracking today.',
+  'This second page continues the very same document with an entirely different paragraph of its own real text, also comfortably past the twenty word floor required here.',
+  'This third and final page closes the document with a third distinct real paragraph, again well past the minimum word count the paragraph tracker enforces here today.',
+];
+const ITEM30C_MULTI_PDF_BYTES = multiPagePdfBytes(ITEM30C_PAGE_TEXTS);
+const ITEM30C_PAGE_TEXTS_2 = [
+  'A second, entirely separate document opens right here with its own first page paragraph, unrelated to the first test document, still comfortably past the word floor today.',
+  'The second separate document continues here with its own second page paragraph, again real text distinct from every paragraph in the other test document above today.',
+];
+const ITEM30C_MULTI_PDF_BYTES_2 = multiPagePdfBytes(ITEM30C_PAGE_TEXTS_2);
+// A "scanned" PDF: one real page, but its content stream has no text-showing
+// operator at all — pdf.js's getTextContent() then returns zero items, so
+// groupTextLayerParagraphs() finds zero paragraphs, exactly reproducing an
+// image-only scanned document without needing to embed a real raster image.
+const ITEM30C_SCANNED_PDF_BYTES = (() => {
+  const objects = [
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Length 0 >>\nstream\n\nendstream',
+    '<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Catalog /Pages 4 0 R >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 5 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+})();
+
+// Item 30d: a real two-column PDF (hand-built, known text positions — left
+// column at x=72pt, right column at x=320pt on a 612x792pt page, same shape
+// item 20 already verified for text-layer alignment) — for confirming
+// rotate/fit-width/fit-page never break the correspondence between the
+// canvas and its text layer, which are always built from the same pdf.js
+// viewport object.
+const ITEM30D_TWO_COLUMN_PDF_BYTES = (() => {
+  const esc = (s) => s.replace(/([\\()])/g, '\\$1');
+  const ops = [
+    ...['Left column line one of real text here.', 'Left column line two continues the text.']
+      .map((line, i) => `1 0 0 1 72 ${700 - i * 16} Tm (${esc(line)}) Tj`),
+    ...['Right column line one of real text here.', 'Right column line two continues the text.']
+      .map((line, i) => `1 0 0 1 320 ${700 - i * 16} Tm (${esc(line)}) Tj`),
+  ];
+  const stream = `BT /F1 12 Tf ${ops.join(' ')} ET`;
+  const objects = [
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Page /Parent 4 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Catalog /Pages 4 0 R >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(Buffer.byteLength(out, 'latin1'));
+    out += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefAt = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets.slice(1)) out += `${String(off).padStart(10, '0')} 00000 n \n`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 5 0 R >>\nstartxref\n${xrefAt}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
+})();
+
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/item30c-multi2.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30C_MULTI_PDF_BYTES_2);
+    return;
+  }
+  if (req.url.startsWith('/item30c-multi.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30C_MULTI_PDF_BYTES);
+    return;
+  }
+  if (req.url.startsWith('/item30c-scanned.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30C_SCANNED_PDF_BYTES);
+    return;
+  }
+  if (req.url.startsWith('/item30d-two-column.pdf')) {
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(ITEM30D_TWO_COLUMN_PDF_BYTES);
+    return;
+  }
   if (req.url.startsWith('/item29-test.pdf')) {
     res.writeHead(200, { 'Content-Type': 'application/pdf' });
     res.end(TEST_PDF_BYTES);
@@ -247,6 +397,24 @@ const server = http.createServer((req, res) => {
         });
       </script>
     </body></html>`);
+    return;
+  }
+  // Item 38: eight distinct, real, individually-tall paragraphs to build a
+  // real session-recall pool via genuine scroll-and-dwell — the questions-
+  // path rate-limit check needs several distinct real reading candidates,
+  // not a synthetic one, since fetchQuestions() has no cache to short-cut
+  // through and session-recall.js's pool is in-memory (built only by real
+  // reading, not seedable via storage the way sra_text_highlights is).
+  // Each block is tall enough that a scrollTo() by its own height reliably
+  // advances exactly one paragraph regardless of the real viewport height.
+  if (req.url.startsWith('/rate-limit-fixture.html')) {
+    const paras = Array.from({ length: 8 }, (_, i) => `Paragraph number ${i + 1} of this rate limiting fixture ` +
+      `covers an entirely distinct filler topic so that session recall treats each block as its own genuine ` +
+      `reading candidate, comfortably past the forty word floor session-recall.js enforces before anything ` +
+      `counts as read material worth asking a retrieval question about later on.`);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><body>${paras.map((t) =>
+      `<div style="min-height:900px;padding-top:40px;box-sizing:border-box;"><p>${t}</p></div>`).join('')}</body></html>`);
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -1616,6 +1784,262 @@ try {
   webPdfResult = { attempted: true, error: String((e && e.message) || e) };
 }
 
+// ── PDF reading detection (item 30c) ────────────────────────────────────────
+// alcoia's own detection pipeline — orchestrator.js, host.js, the signal
+// detectors, coverage-gate.js — now runs inside alcoia's own PDF viewer, fed
+// from paragraph-tracker.js's injected block source (item 30b) via
+// pdf-handler.js's groupTextLayerParagraphs() (item 30c). This drives the
+// real thing end to end: real .textLayer text extracted from a real PDF,
+// real paragraph transitions from genuine scroll-and-dwell, real coverage
+// recorded under the PDF's own source URL — not the shared viewer page URL
+// every PDF opened here would otherwise collide on (orchestrator.js's new
+// `documentKey` override option exists specifically to prevent that).
+async function scrollPdfPageTextToReadingLine(pg, pageNum) {
+  const target = await pg.evaluate((n) => {
+    const wrap = document.querySelector(`[data-page="${n}"]`);
+    const span = wrap && wrap.querySelector('.textLayer span');
+    if (!span) return null;
+    const r = span.getBoundingClientRect();
+    const mid = (r.top + window.scrollY) + r.height / 2;
+    return mid - window.innerHeight * 0.4;
+  }, pageNum);
+  if (target == null) return false;
+  await pg.evaluate((y) => window.scrollTo(0, Math.max(0, y)), target);
+  return true;
+}
+
+let pdfDetectionResult;
+try {
+  await writeCoverageStore({});
+
+  const multiUrl   = 'http://localhost:8731/item30c-multi.pdf';
+  const multi2Url  = 'http://localhost:8731/item30c-multi2.pdf';
+  const scannedUrl = 'http://localhost:8731/item30c-scanned.pdf';
+  const docKey1 = `pdf:${multiUrl}`;
+  const docKey2 = `pdf:${multi2Url}`;
+
+  // ── A real multi-page text PDF: real reading, real paragraphs ──────────
+  const readPage = await ctx.newPage();
+  const readErrors = [];
+  readPage.on('pageerror', (e) => readErrors.push(String(e)));
+  await readPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(multiUrl)}`);
+  await readPage.waitForTimeout(1500);
+
+  const rendered = await readPage.evaluate(() => ({
+    pageCount: document.querySelectorAll('.page-wrap').length,
+    joinedText: [...document.querySelectorAll('.textLayer span')].map((s) => s.textContent).join(' '),
+  }));
+
+  for (let i = 1; i <= 3; i++) {
+    await scrollPdfPageTextToReadingLine(readPage, i);
+    await readPage.waitForTimeout(1800);
+  }
+  // Leave the last page too, so its own dwell is recorded on the way out.
+  await readPage.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await readPage.waitForTimeout(1800);
+  await readPage.close();
+
+  const coverageAfterFirst = await readCoverageStore();
+
+  // ── A second, distinct PDF must get its OWN coverage record ────────────
+  const read2Page = await ctx.newPage();
+  const read2Errors = [];
+  read2Page.on('pageerror', (e) => read2Errors.push(String(e)));
+  await read2Page.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(multi2Url)}`);
+  await read2Page.waitForTimeout(1500);
+  for (let i = 1; i <= 2; i++) {
+    await scrollPdfPageTextToReadingLine(read2Page, i);
+    await read2Page.waitForTimeout(1800);
+  }
+  await read2Page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await read2Page.waitForTimeout(1800);
+  await read2Page.close();
+
+  const coverageAfterSecond = await readCoverageStore();
+
+  // ── A scanned (image-only) PDF: real pages, empty text layer — must
+  // degrade to silence, not error (invariants 5/9). ──────────────────────
+  const scannedPage = await ctx.newPage();
+  const scannedErrors = [];
+  scannedPage.on('pageerror', (e) => scannedErrors.push(String(e)));
+  await scannedPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(scannedUrl)}`);
+  await scannedPage.waitForTimeout(1500);
+  const scannedRendered = await scannedPage.evaluate(() => ({
+    pageCount: document.querySelectorAll('.page-wrap').length,
+    spanCount: document.querySelectorAll('.textLayer span').length,
+  }));
+  await scannedPage.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await scannedPage.waitForTimeout(2500);
+  await scannedPage.close();
+
+  const coverageAfterScanned = await readCoverageStore();
+
+  await writeCoverageStore({});
+
+  pdfDetectionResult = {
+    attempted: true,
+    rendering: {
+      pageCount: rendered.pageCount,
+      allThreePagesHaveRealText: ITEM30C_PAGE_TEXTS.every((t) =>
+        rendered.joinedText.includes(t.split(' ').slice(0, 5).join(' '))),
+    },
+    coverage: {
+      recordedUnderPdfSourceKey: !!coverageAfterFirst[docKey1],
+      totalParagraphsMatchesPageCount: coverageAfterFirst[docKey1]?.totalParagraphs === 3,
+      atLeastOneParagraphCovered: (coverageAfterFirst[docKey1]?.fingerprints?.length || 0) >= 1,
+      notKeyedUnderTheSharedViewerUrl: !Object.keys(coverageAfterFirst).some((k) => k.includes('pdf-viewer/viewer.html')),
+    },
+    secondPdfGetsItsOwnRecord: {
+      firstKeyUnchanged: JSON.stringify(coverageAfterSecond[docKey1]) === JSON.stringify(coverageAfterFirst[docKey1]),
+      secondKeyRecordedSeparately: !!coverageAfterSecond[docKey2],
+      secondKeyTotalParagraphsCorrect: coverageAfterSecond[docKey2]?.totalParagraphs === 2,
+      keysAreDifferent: docKey1 !== docKey2,
+    },
+    scannedPdfDegradesToSilence: {
+      pageRenderedButNoText: scannedRendered.pageCount === 1 && scannedRendered.spanCount === 0,
+      noCoverageRecordCreated: !Object.prototype.hasOwnProperty.call(coverageAfterScanned, `pdf:${scannedUrl}`),
+      noPageErrors: scannedErrors.length === 0,
+    },
+    newPageErrors: readErrors.length + read2Errors.length,
+  };
+} catch (e) {
+  pdfDetectionResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeCoverageStore({});
+
+// ── PDF viewer parity: fit width/page, rotate, download (item 30d) ─────────
+// Native-reader parity beyond item 29's escape hatch and print. Rotate and
+// the two fit modes all go through the same rebuildAllPages() → renderPage()
+// path, which builds the canvas and its text layer from the SAME pdf.js
+// viewport object — the real risk this item's own brief calls out is the
+// two drifting apart after a scale/rotation change, not either one simply
+// failing to render. Verified directly against a real two-column PDF (the
+// same shape item 20 already used for alignment), not asserted from the
+// outside.
+// canvas.width/.height are integer attributes (assignment truncates a float
+// viewport width); the text layer's CSS width/height carries the same
+// pdf.js viewport value at full float precision — so a sub-pixel difference
+// between them is expected and not a sign the two have drifted apart. Real
+// drift would be off by many pixels (a stale scale, a stale rotation), not
+// a fraction of one.
+const closeEnough = (a, b) => Math.abs(a - b) < 1;
+
+let pdfParityResult;
+try {
+  const twoColUrl = 'http://localhost:8731/item30d-two-column.pdf';
+  const pPage = await ctx.newPage();
+  const pErrors = [];
+  pPage.on('pageerror', (e) => pErrors.push(String(e)));
+  await pPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(twoColUrl)}`);
+  await pPage.waitForTimeout(1500);
+
+  // pdf.js's own renderTextLayer() sets the container's width/height as a
+  // CSS calc()/round() expression driven by a --scale-factor custom
+  // property, not a plain px string — parseFloat(el.style.width) reads NaN
+  // against that, regardless of whether canvas and text layer actually
+  // agree. getBoundingClientRect() reads the real, laid-out, CSS-resolved
+  // size for both, which is what "does the text layer still line up with
+  // the canvas" actually means, independent of how either internally
+  // expresses its own CSS.
+  const readViewerState = () => {
+    const canvas = document.querySelector('.page-wrap canvas');
+    const tl = document.querySelector('.textLayer');
+    const cr = canvas ? canvas.getBoundingClientRect() : { width: 0, height: 0 };
+    const tr = tl ? tl.getBoundingClientRect() : { width: 0, height: 0 };
+    return {
+      canvasW: canvas?.width || 0,
+      canvasH: canvas?.height || 0,
+      canvasRectW: cr.width, canvasRectH: cr.height,
+      textLayerRectW: tr.width, textLayerRectH: tr.height,
+      spanCount: document.querySelectorAll('.textLayer span').length,
+      hasLeftColumnText: [...document.querySelectorAll('.textLayer span')].some((s) => s.textContent.includes('Left column')),
+    };
+  };
+
+  const before = await pPage.evaluate(() => {
+    const canvas = document.querySelector('.page-wrap canvas');
+    const tl = document.querySelector('.textLayer');
+    const cr = canvas.getBoundingClientRect();
+    const tr = tl.getBoundingClientRect();
+    const spans = [...document.querySelectorAll('.textLayer span')];
+    const left  = spans.find((s) => s.textContent.includes('Left column'));
+    const right = spans.find((s) => s.textContent.includes('Right column'));
+    return {
+      canvasW: canvas.width, canvasH: canvas.height,
+      canvasRectW: cr.width, canvasRectH: cr.height,
+      textLayerRectW: tr.width, textLayerRectH: tr.height,
+      hasBothColumns: !!left && !!right,
+      leftX: left ? left.getBoundingClientRect().left : null,
+      rightX: right ? right.getBoundingClientRect().left : null,
+    };
+  });
+
+  await pPage.click('#fitWidthBtn');
+  await pPage.waitForTimeout(700);
+  const afterFitWidth = await pPage.evaluate(readViewerState);
+
+  await pPage.click('#fitPageBtn');
+  await pPage.waitForTimeout(700);
+  const beforeRotate = await pPage.evaluate(readViewerState);
+
+  await pPage.click('#rotateRightBtn');
+  await pPage.waitForTimeout(700);
+  const afterRotate = await pPage.evaluate(readViewerState);
+
+  await pPage.click('#rotateLeftBtn');
+  await pPage.waitForTimeout(700);
+  const afterRotateBack = await pPage.evaluate(readViewerState);
+
+  const [download] = await Promise.all([
+    pPage.waitForEvent('download'),
+    pPage.click('#downloadBtn'),
+  ]);
+  const downloadFilename = download.suggestedFilename();
+
+  const escapeHatchStillPresent = await pPage.evaluate(() => !!document.getElementById('openNativeBtn'));
+
+  await pPage.close();
+
+  pdfParityResult = {
+    attempted: true,
+    twoColumnBaseline: {
+      hasBothColumns: before.hasBothColumns,
+      columnsSeparatedHorizontally: before.leftX != null && before.rightX != null && before.rightX > before.leftX + 50,
+      textLayerMatchesCanvas: closeEnough(before.textLayerRectW, before.canvasRectW) && closeEnough(before.textLayerRectH, before.canvasRectH),
+    },
+    fitWidth: {
+      changedScale: afterFitWidth.canvasW !== before.canvasW,
+      textLayerMatchesCanvas: closeEnough(afterFitWidth.textLayerRectW, afterFitWidth.canvasRectW) && closeEnough(afterFitWidth.textLayerRectH, afterFitWidth.canvasRectH),
+      stillHasRealText: afterFitWidth.hasLeftColumnText,
+    },
+    fitPage: {
+      rendered: beforeRotate.canvasW > 0 && beforeRotate.canvasH > 0,
+      textLayerMatchesCanvas: closeEnough(beforeRotate.textLayerRectW, beforeRotate.canvasRectW) && closeEnough(beforeRotate.textLayerRectH, beforeRotate.canvasRectH),
+    },
+    rotate: {
+      // A 90° rotation at the same scale swaps width and height — checked
+      // against the state captured immediately before rotating, not the
+      // very first baseline, since fit-width/fit-page already changed scale.
+      dimensionsSwapped: afterRotate.canvasW === beforeRotate.canvasH && afterRotate.canvasH === beforeRotate.canvasW,
+      textLayerStillMatchesCanvas: closeEnough(afterRotate.textLayerRectW, afterRotate.canvasRectW) && closeEnough(afterRotate.textLayerRectH, afterRotate.canvasRectH),
+      stillHasRealText: afterRotate.hasLeftColumnText,
+      spanCountUnchanged: afterRotate.spanCount === beforeRotate.spanCount,
+    },
+    rotateReversible: {
+      backToPreRotationDimensions: afterRotateBack.canvasW === beforeRotate.canvasW && afterRotateBack.canvasH === beforeRotate.canvasH,
+      textLayerStillMatchesCanvas: closeEnough(afterRotateBack.textLayerRectW, afterRotateBack.canvasRectW) && closeEnough(afterRotateBack.textLayerRectH, afterRotateBack.canvasRectH),
+    },
+    download: {
+      triggered: !!downloadFilename,
+      filename: downloadFilename,
+    },
+    escapeHatchStillPresent,
+    newPageErrors: pErrors.length,
+  };
+} catch (e) {
+  pdfParityResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
 // ── Pin / auto-dismiss exclusivity (item 34) ────────────────────────────────
 // A real popup.html load, checking the UI itself rather than just the
 // source text: clicking "Keep cards until I close them" must force "Clear
@@ -1663,6 +2087,128 @@ try {
   pinAutohideResult = { attempted: true, error: String((e && e.message) || e) };
 }
 
+// ── Client-side AI-call rate limiting (item 38) ────────────────────────────
+// A bug backstop, not entitlement enforcement — see checkAiCallBudget()'s
+// own header in content.js. Two independent budgets (fetchSummary's
+// 'summarize' path, fetchQuestions' 'questions' path), each with a 6-call/
+// 10s burst limit. Both paths are exercised for real, not synthetically:
+// the summarize burst reuses item 26's "colour off, summarize on" direct-
+// summarise flow across 8 distinct phrases on /rate-limit-fixture.html; the
+// questions burst builds a real 8-paragraph session-recall pool via genuine
+// scroll-and-dwell (session-recall.js's pool is in-memory only — unlike
+// sra_text_highlights, there is no storage key to seed directly) and then
+// triggers one real recall asking for more candidates than the burst limit.
+async function readDiagLog() {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  const entries = await helper.evaluate(() => new Promise((r) =>
+    chrome.storage.local.get({ sra_diag_log: [] }, (res) => r(res.sra_diag_log))));
+  await helper.close();
+  return entries;
+}
+async function clearDiagLog() {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate(() => new Promise((r) => chrome.storage.local.set({ sra_diag_log: [] }, r)));
+  await helper.close();
+}
+
+let rateLimitResult;
+try {
+  await clearDiagLog();
+
+  // (a) Summarize-path burst: 8 distinct real Ctrl+drag selections, colour
+  // off / summarize on (item 26's direct-summarise flow — no picker click
+  // needed), each a genuinely different phrase so none is a cache hit.
+  await setHighlightToggles(false, true); // also clears sra_text_highlights
+  const beforeSumBurst = apiHits.summarize;
+  const sumBurstPage = await ctx.newPage();
+  await sumBurstPage.goto('http://localhost:8731/rate-limit-fixture.html');
+  await sumBurstPage.waitForTimeout(400);
+  for (let i = 1; i <= 8; i++) {
+    await selectAndCtrlDrag(sumBurstPage, `Paragraph number ${i} of this rate`);
+  }
+  await sumBurstPage.waitForTimeout(600);
+  await sumBurstPage.close();
+  const summarizeCallsMade = apiHits.summarize - beforeSumBurst;
+
+  // (b) The cache still serves an identical repeat without ever reaching
+  // checkAiCallBudget() at all — it sits after fetchSummary()'s existing
+  // cache-hit early return, not before it.
+  const cachePage = await ctx.newPage();
+  await cachePage.goto('http://localhost:8731/rate-limit-fixture.html');
+  await cachePage.waitForTimeout(400);
+  const beforeCacheFirst = apiHits.summarize;
+  await selectAndCtrlDrag(cachePage, 'Paragraph number 1 of this rate');
+  const afterCacheFirst = apiHits.summarize;
+  await selectAndCtrlDrag(cachePage, 'Paragraph number 1 of this rate'); // identical text+mode
+  const afterCacheSecond = apiHits.summarize;
+  await cachePage.close();
+
+  // (c) Questions-path burst, independent from (a): a real reading session
+  // over all 8 paragraphs (each div is 900px tall and holds one paragraph,
+  // so scrolling by its own height reliably advances exactly one paragraph
+  // regardless of the real viewport height; the reading-line target is
+  // computed from the actual viewport height rather than assumed).
+  const qBurstPage = await ctx.newPage();
+  await qBurstPage.goto('http://localhost:8731/rate-limit-fixture.html');
+  await qBurstPage.waitForTimeout(400);
+  const viewportH = await qBurstPage.evaluate(() => window.innerHeight);
+  for (let i = 0; i < 8; i++) {
+    const y = Math.max(0, Math.round(i * 900 + 40 - viewportH * 0.4));
+    await qBurstPage.evaluate((yy) => window.scrollTo(0, yy), y);
+    await qBurstPage.waitForTimeout(300);  // let the engine sync on the new position
+    await qBurstPage.waitForTimeout(4200); // clear session-recall's MIN_DWELL_MS (4000ms)
+  }
+  // One more scroll to leave paragraph 8, finalising its dwell record.
+  await qBurstPage.evaluate((yy) => window.scrollTo(0, yy), 8 * 900);
+  await qBurstPage.waitForTimeout(400);
+
+  const beforeQBurst = apiHits.questions;
+  await sendToArticleTab({ action: 'sessionRecall', count: 8 }, 'http://localhost:8731/rate-limit-fixture.html');
+  // sessionRecall's message handler responds immediately, before the async
+  // fetch loop inside runSessionRecall() actually runs — wait for it here.
+  await qBurstPage.waitForTimeout(4000);
+  const questionsCallsMade = apiHits.questions - beforeQBurst;
+  await qBurstPage.close();
+
+  const diagAfter = await readDiagLog();
+  const rateLimitEntries = diagAfter.filter((e) => /rate_limited/.test(e.message || ''));
+
+  rateLimitResult = {
+    attempted: true,
+    summarizeBurst: {
+      attempts: 8,
+      callsMade: summarizeCallsMade,
+      stoppedAtLimit: summarizeCallsMade === 6,
+    },
+    cacheStillServesRepeats: {
+      firstCallHitNetwork: afterCacheFirst > beforeCacheFirst,
+      secondCallServedFromCache: afterCacheSecond === afterCacheFirst,
+    },
+    questionsBurst: {
+      requestedCount: 8,
+      callsMade: questionsCallsMade,
+      stoppedAtLimit: questionsCallsMade === 6,
+      independentFromSummarizeBudget: questionsCallsMade > 0, // its own budget wasn't pre-exhausted by (a)
+    },
+    diagnosticsLogging: {
+      totalRateLimitEntries: rateLimitEntries.length,
+      // Expect at least one entry per path, and none carrying a URL or
+      // passage text — diag-log.js sanitises URLs and this item must never
+      // hand it either.
+      hasSummarizePathEntry: rateLimitEntries.some((e) => e.context === 'summarize'),
+      hasQuestionsPathEntry: rateLimitEntries.some((e) => e.context === 'questions'),
+      noUrlsInMessages: rateLimitEntries.every((e) => !/https?:\/\//.test(e.message || '')),
+      sampleMessage: rateLimitEntries[0]?.message || null,
+    },
+  };
+} catch (e) {
+  rateLimitResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await setHighlightToggles(true, false); // restore the default combo for anything after this block
+await writeHighlightStore({});
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -1702,8 +2248,11 @@ console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
 console.log('highlight explanations (36):', JSON.stringify(explanationResult, null, 2));
 console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
+console.log('PDF reading detection (30c):', JSON.stringify(pdfDetectionResult, null, 2));
+console.log('PDF viewer parity (30d)  :', JSON.stringify(pdfParityResult, null, 2));
 console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));
 console.log('pin/auto-dismiss (34)   :', JSON.stringify(pinAutohideResult, null, 2));
+console.log('AI-call rate limit (38) :', JSON.stringify(rateLimitResult, null, 2));
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));
