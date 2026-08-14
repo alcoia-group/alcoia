@@ -1,10 +1,10 @@
 /* state-engine.js — single reading-state estimate for alcoia
  *
  * Replaces the two independent pipelines that used to each fire their own
- * popups: comprehension-monitor (telemetry) and a webcam gaze classifier.
+ * popups: comprehension-monitor (signals) and a webcam gaze classifier.
  * The gaze classifier is gone — see the project notes' migration note — so
- * telemetry is now the only input, and this module's job is narrower than
- * its name once implied: turn a batch of telemetry signals into one state
+ * signals are now the only input, and this module's job is narrower than
+ * its name once implied: turn a batch of reading signals into one state
  * estimate, applying corroboration between signals of that one kind.
  *
  * `unknown` is the default and a correct, common answer. The engine never
@@ -22,19 +22,19 @@ export const STATES = Object.freeze({
 
 function clamp01(n) { return n < 0 ? 0 : n > 1 ? 1 : n; }
 
-/* Base confidence per telemetry signal. These are deliberately not 1.0:
+/* Base confidence per reading signal. These are deliberately not 1.0:
  * a speed measurement is evidence, not proof, and the number is shown to
  * nobody as an accuracy claim. */
 /* Reader responses sit above every other signal. Everything else infers
  * comprehension from behaviour; an answer observes it. These confidences are
- * deliberately higher than anything telemetry can produce, so that when a
+ * deliberately higher than anything a signal can produce, so that when a
  * reader answers, their answer decides the state. */
 const RESPONSE_CONFIDENCE = Object.freeze({
   incorrect: 0.95,
   correct:   0.90,
 });
 
-const TELEMETRY_CONFIDENCE = Object.freeze({
+const SIGNAL_CONFIDENCE = Object.freeze({
   too_slow:     0.70,
   too_fast:     0.55,
   backtrack:    0.60,
@@ -86,7 +86,7 @@ function describeTooFast(sig) {
 }
 
 /* Turn a comprehension-monitor signal into a state proposal. */
-function fromTelemetry(sig) {
+function fromSignal(sig) {
   if (!sig || !sig.type) return null;
 
   /* Ground truth. A wrong answer is a reader failing to retrieve something
@@ -119,7 +119,7 @@ function fromTelemetry(sig) {
   if (sig.type === 'speed_mismatch' && sig.subtype === 'too_slow') {
     return {
       label: STATES.STRUGGLING,
-      confidence: TELEMETRY_CONFIDENCE.too_slow,
+      confidence: SIGNAL_CONFIDENCE.too_slow,
       evidence: [describeTooSlow(sig)],
       signal: sig,
     };
@@ -128,7 +128,7 @@ function fromTelemetry(sig) {
   if (sig.type === 'speed_mismatch' && sig.subtype === 'too_fast') {
     return {
       label: STATES.SKIMMING,
-      confidence: TELEMETRY_CONFIDENCE.too_fast,
+      confidence: SIGNAL_CONFIDENCE.too_fast,
       evidence: [describeTooFast(sig)],
       signal: sig,
     };
@@ -138,7 +138,7 @@ function fromTelemetry(sig) {
     const px = Math.round(sig.backtrackPx || 0);
     return {
       label: STATES.STRUGGLING,
-      confidence: TELEMETRY_CONFIDENCE.backtrack,
+      confidence: SIGNAL_CONFIDENCE.backtrack,
       evidence: [px ? `You scrolled back ${px}px to re-read` : 'You scrolled back to re-read'],
       signal: sig,
     };
@@ -153,7 +153,7 @@ function fromTelemetry(sig) {
     if (sig.subtype === 'slow_return') {
       return {
         label: STATES.ON_PACE,
-        confidence: TELEMETRY_CONFIDENCE.slow_return,
+        confidence: SIGNAL_CONFIDENCE.slow_return,
         evidence: [`You went back ${paras} to review`],
         signal: sig,
       };
@@ -165,7 +165,7 @@ function fromTelemetry(sig) {
 
     return {
       label: STATES.STRUGGLING,
-      confidence: TELEMETRY_CONFIDENCE[sig.subtype] ?? TELEMETRY_CONFIDENCE.return,
+      confidence: SIGNAL_CONFIDENCE[sig.subtype] ?? SIGNAL_CONFIDENCE.return,
       evidence,
       signal: sig,
     };
@@ -176,7 +176,7 @@ function fromTelemetry(sig) {
     const away = mins >= 1 ? `${mins} minute${mins === 1 ? '' : 's'}` : 'a while';
     return {
       label: STATES.STRUGGLING,
-      confidence: TELEMETRY_CONFIDENCE.blur_return,
+      confidence: SIGNAL_CONFIDENCE.blur_return,
       evidence: [`You came back to this paragraph after ${away} away`],
       signal: sig,
     };
@@ -185,11 +185,11 @@ function fromTelemetry(sig) {
   return null;
 }
 
-/* Pick the strongest thing telemetry is willing to assert. */
+/* Pick the strongest thing a signal is willing to assert. */
 function strongestAssertion(signals) {
   let best = null;
   for (const sig of signals) {
-    const proposal = fromTelemetry(sig);
+    const proposal = fromSignal(sig);
     if (!proposal) continue;
     if (!best || proposal.confidence > best.confidence) best = proposal;
   }
@@ -219,12 +219,12 @@ export function createReadingStateEngine(config = {}) {
     return current;
   }
 
-  /* input: { telemetry } — may be a single signal or an array of them. */
+  /* input: { reading } — may be a single signal or an array of them. */
   function update(input = {}) {
     const at = now();
 
-    const all = input.telemetry
-      ? (Array.isArray(input.telemetry) ? input.telemetry.filter(Boolean) : [input.telemetry])
+    const all = input.reading
+      ? (Array.isArray(input.reading) ? input.reading.filter(Boolean) : [input.reading])
       : [];
     const asserting     = all.filter((s) => s && !CORROBORATING_TYPES.includes(s.type));
     const corroborating = all.filter((s) => s && CORROBORATING_TYPES.includes(s.type));
@@ -232,7 +232,7 @@ export function createReadingStateEngine(config = {}) {
     const proposal = strongestAssertion(asserting);
 
     if (proposal) {
-      // Other telemetry that agrees raises confidence and adds its own
+      // Other signals that agree raise confidence and add their own
       // observation. A corroborating signal alone never gets this far.
       for (const sig of corroborating) {
         const rule = CORROBORATION[sig.type];

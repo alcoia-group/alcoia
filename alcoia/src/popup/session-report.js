@@ -32,7 +32,7 @@ function renderReport(session) {
    * six states above), subtype is decision.action ('ask'/'nudge').
    * question-card.js separately records answers as type: 'response',
    * subtype: 'correct'/'incorrect'/'dismissed' (response-signals.js). A
-   * raw 'backtrack' or 'speed_mismatch' telemetry signal is never itself
+   * raw 'backtrack' or 'speed_mismatch' signal is never itself
    * pushed into session.signals — those only ever fold into a resulting
    * struggling/skimming state above — so filtering on those two type
    * strings, or on the removed 'confused'/'overloaded' subtype values,

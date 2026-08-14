@@ -3,7 +3,7 @@
  * Why this exists: enterParagraph/leaveParagraph used to be called only from
  * inside onGaze(), so with the camera off — the default — they never fired.
  * No paragraph timing meant no WPM baseline, no speed_mismatch signal and no
- * reading-time expectation. Scroll backtrack was the only telemetry signal
+ * reading-time expectation. Scroll backtrack was the only signal
  * that worked. This replaces the gaze point with the viewport, which is
  * always available and costs no permission.
  *

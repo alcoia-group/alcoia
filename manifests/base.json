@@ -40,7 +40,7 @@
     {
       "resources": [
         "src/content/*.js",
-        "src/content/telemetry/*.js",
+        "src/content/signals/*.js",
         "src/shared/*.js",
         "src/styles/*.css",
         "src/libs/fonts/*.woff2",

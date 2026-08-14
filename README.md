@@ -25,8 +25,8 @@ passage you just read, with the sentence containing the answer quoted underneath
 the only thing in the system that produces ground truth: getting it right ends the interruption,
 getting it wrong is when an explanation appears.
 
-There is no webcam mode. Detection is telemetry only — no camera, no permission prompt, no video
-of any kind, ever.
+There is no webcam mode. Detection runs on reading signals only — no camera, no permission prompt,
+no video of any kind, ever.
 
 ---
 
@@ -35,12 +35,12 @@ of any kind, ever.
 Two sources, in order of authority. This ordering is the product, not an implementation detail.
 
 1. **Reader responses** — answers to retrieval questions. The only ground truth here. An answer
-   outranks anything telemetry says. A correct answer resolves to `on_pace` and stops the system
-   pressing; a dismissal asserts nothing at all, because declining to be tested says nothing
-   about comprehension.
-2. **Browser telemetry** — reading rate against text difficulty and your own baseline, scroll
-   regressions, selection, copy, blur, idle. Precise, always available, no permission needed.
-   **This is the only detection path.**
+   outranks anything a reading signal says. A correct answer resolves to `on_pace` and stops the
+   system pressing; a dismissal asserts nothing at all, because declining to be tested says
+   nothing about comprehension.
+2. **Browser reading signals** — reading rate against text difficulty and your own baseline,
+   scroll regressions, selection, copy, blur, idle. Precise, always available, no permission
+   needed. **This is the only detection path.**
 
 ## Reading states
 
@@ -99,7 +99,7 @@ Reading-rate baselines are kept per language.
   that could have started one is not in the extension.
 - **No video, image or webcam frame is ever transmitted.** Verified by an automated browser test
   that inspects every outbound request body.
-- **No analytics, no telemetry-to-vendor, no crash reporting, no third-party fonts or scripts.**
+- **No analytics, no usage data sent to a vendor, no crash reporting, no third-party fonts or scripts.**
   Verified: zero third-party requests in the browser test.
 - **There is no covert mode**, and there will not be one. Not behind a flag, not for an
   institution, not for testing.
@@ -168,7 +168,7 @@ stylesheet actually reaches its elements, and that every keyboard shortcut still
 ```
 alcoia/                  the extension (AGPL-3.0)
   src/content/           content scripts — detection, fusion, UI
-    telemetry/           the detectors; each exports { update(), signal() }
+    signals/              the detectors; each exports { update(), signal() }
   src/popup/             the toolbar panel and its pages
   src/shared/config.js   the one place the backend origin is defined
   src/shared/install-token.js  the opaque per-install token that gates every AI call

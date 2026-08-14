@@ -57,10 +57,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const dyslexiaOptions     = $('dyslexiaOptions');
   const bionicToggle        = $('bionicToggle');
   const dyslexiaColorSelect = $('dyslexiaColorSelect');
-  const backendUrlInput     = $('backendUrl');
-  // The static HTML placeholder would drift from the real default the
-  // moment either changed independently — set it from the same config.
-  backendUrlInput.placeholder = self.ALCOIA_CONFIG.SUMMARIZE_URL;
+  // Item 33: the backend URL field itself moved to the diagnostics page
+  // (developer-only, sra_debug-gated) — a reader editing it in the main
+  // popup could only break their own install once a real origin is
+  // configured. This file still needs the current value to include in every
+  // settings broadcast to content.js, so it reads it once from storage
+  // (below) rather than holding it in a removed input's .value.
+  let currentBackendUrl = self.ALCOIA_CONFIG.SUMMARIZE_URL;
   const darkModeToggle      = $('darkModeToggle');
   const pdfTakeoverToggle   = $('pdfTakeoverToggle');
   const webPdfTakeoverToggle = $('webPdfTakeoverToggle');
@@ -100,7 +103,7 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   chrome.storage.local.get(DEFAULTS, (res) => {
-    backendUrlInput.value       = res.sra_backend_url;
+    currentBackendUrl            = res.sra_backend_url;
     selToggle.checked           = res.sra_selection !== false;
     highlightToggle.checked     = res.sra_highlight_para !== false;
     highlightColorToggle.checked     = res.sra_highlight_color !== false;
@@ -109,6 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
     autohideTimeout.value       = res.sra_autohide_timeout;
     timeoutRow.style.display    = res.sra_autohide ? 'flex' : 'none';
     pinDefaultToggle.checked    = !!res.sra_pin_default;
+    syncPinAutohideExclusivity();
     debugTogglePopup.checked    = !!res.sra_debug;
     comprehensionToggle.checked = res.sra_comprehension !== false;
     assistantToggle.checked     = res.sra_enabled !== false;
@@ -138,7 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Status ──────────────────────────────────────────────────────────────
   function setSignalChip(on) {
     signalChip.className = 'src-chip' + (on ? ' on' : '');
-    signalStatus.textContent = on ? 'Reading signals' : 'Reading signals off';
+    signalStatus.textContent = on ? 'Noticing' : 'Not noticing';
   }
 
   /* Paint the fused estimate. An unrecognised label is shown as unknown
@@ -177,7 +181,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Save & broadcast ────────────────────────────────────────────────────
   function saveAndBroadcast() {
     const s = {
-      sra_backend_url:      backendUrlInput.value.trim(),
+      // Read-only here now (item 33) — the diagnostics page owns writing
+      // this. Included so every settings broadcast still carries the
+      // current value through to content.js's live setting.
+      sra_backend_url:      currentBackendUrl,
       sra_selection:        selToggle.checked,
       sra_highlight_para:   highlightToggle.checked,
       sra_highlight_color:      highlightColorToggle.checked,
@@ -243,16 +250,35 @@ document.addEventListener('DOMContentLoaded', () => {
     timeoutRow.style.display = autohideToggle.checked ? 'flex' : 'none';
     saveAndBroadcast();
   });
+  // Item 34: "keep cards until I close them" and "clear cards automatically"
+  // are opposite intentions. Both could previously be turned on at once,
+  // which was meaningless — ui-controller.js's resetAutohide() already
+  // checked `root.dataset.pinned === 'true'` before arming a timeout, so
+  // pin already won structurally in code; the popup just never showed that.
+  // Made explicit here: turning "keep" on forces "clear automatically" off
+  // and disables it, rather than leaving a reader looking at two switches
+  // that silently disagree.
+  function syncPinAutohideExclusivity() {
+    autohideToggle.disabled = pinDefaultToggle.checked;
+    if (pinDefaultToggle.checked && autohideToggle.checked) {
+      autohideToggle.checked = false;
+      timeoutRow.style.display = 'none';
+    }
+  }
+  pinDefaultToggle.addEventListener('change', () => {
+    syncPinAutohideExclusivity();
+    saveAndBroadcast();
+  });
   dyslexiaToggle.addEventListener('change', () => {
     dyslexiaOptions.style.display = dyslexiaToggle.checked ? 'block' : 'none';
     saveAndBroadcast();
   });
   [selToggle, highlightToggle, highlightColorToggle, highlightSummarizeToggle,
-   pinDefaultToggle, debugTogglePopup,
+   debugTogglePopup,
    comprehensionToggle, ttsToggle, focusRulerToggle,
    bionicToggle, darkModeToggle]
     .forEach((el) => el.addEventListener('change', saveAndBroadcast));
-  [backendUrlInput, autohideTimeout, dyslexiaColorSelect]
+  [autohideTimeout, dyslexiaColorSelect]
     .forEach((el) => el.addEventListener('change', saveAndBroadcast));
 
   // ── Tab messaging ───────────────────────────────────────────────────────
@@ -455,6 +481,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ttsToggle.checked           = !!p.sra_tts;
     if (p.sra_autohide_timeout) autohideTimeout.value = p.sra_autohide_timeout;
     timeoutRow.style.display = p.sra_autohide ? 'flex' : 'none';
+    syncPinAutohideExclusivity();
 
     document.querySelectorAll('.mode-btn').forEach((b) =>
       b.classList.toggle('active', b.dataset.persona === key));
@@ -465,17 +492,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.mode-btn').forEach((btn) =>
     btn.addEventListener('click', () => applyMode(btn.dataset.persona)));
 
-  // ── Simulate ────────────────────────────────────────────────────────────
-  function simulateState(state) {
-    sendToTab({ type: 'simulateState', state }, (resp, err) => {
-      if (err) alert('No content script on this page. Open a page with text first.');
-    });
-  }
-
-  $('simStrugglingBtn').addEventListener('click', () => simulateState('struggling'));
-  $('simDriftingBtn')  .addEventListener('click', () => simulateState('drifting'));
-  $('simSkimmingBtn')  .addEventListener('click', () => simulateState('skimming'));
-  $('simOnPaceBtn')    .addEventListener('click', () => simulateState('on_pace'));
+  // Item 33: the state simulator moved to the diagnostics page
+  // (developer-only, sra_debug-gated) — a reader clicking "struggling" in
+  // the main popup gets an interruption they did not earn and reasonably
+  // concludes detection is broken. The mechanism itself (runSimulatedState()
+  // in content.js, the simulateState message, and the Alt+1–5 keyboard
+  // shortcuts) is untouched; only this popup's buttons are gone.
 });
 
 // ── Logo (packaged path differs from the relative one in the markup) ───────

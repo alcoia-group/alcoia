@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createQuestionCard } from '../alcoia/src/content/question-card.js';
-import { createResponseSignals } from '../alcoia/src/content/telemetry/response-signals.js';
+import { createResponseSignals } from '../alcoia/src/content/signals/response-signals.js';
 import { esc } from '../alcoia/src/content/ui-controller.js';
 
 function fakeUI() {

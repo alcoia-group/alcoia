@@ -41,46 +41,46 @@ describe('one moment of difficulty produces exactly one interruption', () => {
     const clock = fixedClock();
     const { engine, interruptions } = buildReader(clock);
 
-    engine.update({ telemetry: { type: 'backtrack', backtrackPx: 200 } });
+    engine.update({ reading: { type: 'backtrack', backtrackPx: 200 } });
     clock.advance(1000);
     engine.update({
-      telemetry: { type: 'speed_mismatch', subtype: 'too_slow', text: 'another paragraph', actualWpm: 80, baselineWpm: 220 },
+      reading: { type: 'speed_mismatch', subtype: 'too_slow', text: 'another paragraph', actualWpm: 80, baselineWpm: 220 },
     });
 
     expect(interruptions).toHaveLength(1);
   });
 
-  it('holds the three-minute gap across separate telemetry signals', () => {
+  it('holds the three-minute gap across separate reading signals', () => {
     const clock = fixedClock();
     const { engine, interruptions } = buildReader(clock);
 
-    engine.update({ telemetry: { type: 'backtrack', backtrackPx: 200 } });
+    engine.update({ reading: { type: 'backtrack', backtrackPx: 200 } });
     expect(interruptions).toHaveLength(1);
 
     // A different signal, a different paragraph, 60s later — still too soon.
     clock.advance(60_000);
     engine.update({});
     engine.update({
-      telemetry: { type: 'speed_mismatch', subtype: 'too_slow', text: 'fresh paragraph', actualWpm: 80, baselineWpm: 220 },
+      reading: { type: 'speed_mismatch', subtype: 'too_slow', text: 'fresh paragraph', actualWpm: 80, baselineWpm: 220 },
     });
     expect(interruptions).toHaveLength(1);
 
     clock.advance(130_000);
     engine.update({});
     engine.update({
-      telemetry: { type: 'speed_mismatch', subtype: 'too_slow', text: 'fresh paragraph', actualWpm: 80, baselineWpm: 220 },
+      reading: { type: 'speed_mismatch', subtype: 'too_slow', text: 'fresh paragraph', actualWpm: 80, baselineWpm: 220 },
     });
     expect(interruptions).toHaveLength(2);
   });
 });
 
-describe('detection is telemetry-only', () => {
-  it('detects and interrupts on telemetry alone', () => {
+describe('detection is signals-only', () => {
+  it('detects and interrupts on reading signals alone', () => {
     const clock = fixedClock();
     const { engine, interruptions } = buildReader(clock);
 
     engine.update({
-      telemetry: { type: 'speed_mismatch', subtype: 'too_slow', text: 'p', actualWpm: 90, baselineWpm: 240 },
+      reading: { type: 'speed_mismatch', subtype: 'too_slow', text: 'p', actualWpm: 90, baselineWpm: 240 },
     });
 
     expect(interruptions).toHaveLength(1);
@@ -99,10 +99,10 @@ describe('every interruption can say what it noticed', () => {
       { type: 'speed_mismatch', subtype: 'too_fast', text: 'c', readability: { grade: 'difficult' } },
     ];
 
-    for (const telemetry of cases) {
+    for (const reading of cases) {
       clock.advance(300_000);
       engine.update({});
-      engine.update({ telemetry });
+      engine.update({ reading });
     }
 
     expect(interruptions).toHaveLength(3);

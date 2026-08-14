@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createComprehensionMonitor } from '../alcoia/src/content/comprehension-monitor.js';
-import { analyzeDifficulty } from '../alcoia/src/content/telemetry/text-difficulty.js';
+import { analyzeDifficulty } from '../alcoia/src/content/signals/text-difficulty.js';
 
 // Short sentences, simple words: scores as 'easy' (>=80), which is one of the
 // two grades the WPM baseline is allowed to learn from.

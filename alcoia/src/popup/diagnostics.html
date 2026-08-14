@@ -141,8 +141,38 @@
     </div>
   </div>
 
+  <!--
+    Item 33: developer-only tools, shown only when the popup's "Debug
+    overlay" setting (sra_debug) is on — moved out of the main popup, where
+    a reader could click "struggling" and reasonably conclude detection was
+    broken, or edit the backend URL and only break their own install.
+    diagnostics.js toggles this card's visibility; it does not read the
+    current tab's URL, title, or content, so it stays safe to screenshot.
+  -->
+  <div class="card" id="devCard" hidden>
+    <div class="card-title">Developer</div>
+    <div class="card-note">
+      Local testing tools. Shown because "Debug overlay" is on in the popup's Reading tab.
+    </div>
+    <div class="field-row" style="padding:4px 16px 13px">
+      <span class="field-label">Backend URL</span>
+      <input class="field-input" id="devBackendUrl" type="text" placeholder="">
+    </div>
+    <div class="card-note">
+      Simulate a state on the active tab's page, forcing the matching intervention on the
+      paragraph in view — the same mechanism as the Alt+1 / Alt+3 / Alt+4 / Alt+5 shortcuts.
+    </div>
+    <div class="btn-grid" style="padding:0 16px 15px">
+      <button class="btn btn-ghost" id="simStrugglingBtn">Struggling <kbd>Alt+1</kbd></button>
+      <button class="btn btn-ghost" id="simDriftingBtn">Drifting <kbd>Alt+3</kbd></button>
+      <button class="btn btn-ghost" id="simSkimmingBtn">Skimming <kbd>Alt+4</kbd></button>
+      <button class="btn btn-ghost" id="simOnPaceBtn">On pace <kbd>Alt+5</kbd></button>
+    </div>
+  </div>
+
 </div>
 
+<script src="../shared/config.js"></script>
 <script type="module" src="diagnostics.js"></script>
 </body>
 </html>
