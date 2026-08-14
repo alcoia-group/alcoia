@@ -3,7 +3,7 @@
  * Why this exists: enterParagraph/leaveParagraph used to be called only from
  * inside onGaze(), so with the camera off — the default — they never fired.
  * No paragraph timing meant no WPM baseline, no speed_mismatch signal and no
- * reading-time expectation. Scroll backtrack was the only telemetry signal
+ * reading-time expectation. Scroll backtrack was the only signal
  * that worked. This replaces the gaze point with the viewport, which is
  * always available and costs no permission.
  *
@@ -11,6 +11,28 @@
  * some way down the viewport, roughly where people hold their focus. That is a
  * heuristic, not a measurement, and it is deliberately the only one here — the
  * detectors downstream are what turn it into signals.
+ *
+ * Optional injected block source (item 30b): a caller may pass opts.blockSource,
+ * a function returning `[{ el, words, media }, ...]` in reading order, and scan()
+ * uses those blocks instead of querying the DOM. This exists so a non-DOM reading
+ * surface (a PDF viewer's own .textLayer-derived paragraph model, wired up in a
+ * later item) can drive this same tracker without it knowing anything about PDFs
+ * — no PDF-specific code is imported here, and nothing about that wiring lives in
+ * this file. When blockSource is omitted, behaviour is byte-for-byte identical to
+ * scanning the DOM: same selector, same word-count/media filtering, same index
+ * assignment order. `el` for an injected block must implement getBoundingClientRect()
+ * (elementAtReadingLine() calls it identically for both paths) and, if the caller
+ * wants intervention-policy.js's never-twice-on-the-same-paragraph dedup to work
+ * correctly for injected blocks, should also expose .innerText or .textContent
+ * returning the block's real text — paragraphKey() in intervention-policy.js reads
+ * `el.innerText || el.textContent`, independently of this tracker's own `index`,
+ * and that file is unchanged by this item. `words`/`media` are supplied directly
+ * by the caller rather than computed here, since word-counting injected text
+ * through the DOM-oriented segmentation path would not make sense for every
+ * future source. Document-order `index` is still assigned here, sequentially, in
+ * whatever order blockSource() returns — scroll-regression.js only needs correctly
+ * ordered integers, not DOM identity, so this is sufficient for it regardless of
+ * source; supplying blocks in true reading order is the caller's responsibility.
  */
 
 import { countWords, detectLanguage, readingAxis } from './segmentation.js';
@@ -53,6 +75,7 @@ export function createParagraphTracker(opts = {}) {
      captured copy would keep counting words with the wrong segmenter. */
   const getLang      = opts.lang || (() => detectLanguage(doc));
   const getAxis      = opts.axis || (() => readingAxis(doc));
+  const blockSource  = opts.blockSource || null;
 
   let paragraphs = [];       // [{ el, index, words }]
   let indexOf    = new WeakMap();
@@ -68,22 +91,44 @@ export function createParagraphTracker(opts = {}) {
     return t ? countWords(t, getLang()) : 0;
   }
 
+  /* Both paths funnel through here so index assignment and the found/lastScan
+   * write happen in exactly one place, in whatever order `blocks` arrives in. */
+  function buildIndex(blocks) {
+    const found = [];
+    let i = 0;
+    for (const b of blocks) {
+      const entry = { el: b.el, index: i++, words: b.words, media: b.media };
+      found.push(entry);
+      indexOf.set(b.el, entry.index);
+    }
+    paragraphs = found;
+    lastScan = now();
+  }
+
   /* Document order defines the index, which is what regression detection
    * compares against. Rescanned lazily — pages mutate. */
   function scan() {
+    if (blockSource) {
+      const blocks = [];
+      for (const block of blockSource() || []) {
+        if (!block || !block.el) continue;
+        const media = !!block.media;
+        const words = media ? 0 : (block.words || 0);
+        if (!media && words < minWords) continue;
+        blocks.push({ el: block.el, words, media });
+      }
+      buildIndex(blocks);
+      return;
+    }
     if (!doc) return;
-    const found = [];
-    let i = 0;
+    const blocks = [];
     for (const el of doc.querySelectorAll(BLOCK_SELECTOR)) {
       const media = isMediaEl(el);
       const words = media ? 0 : wordCount(el);
       if (!media && words < minWords) continue;
-      const entry = { el, index: i++, words, media };
-      found.push(entry);
-      indexOf.set(el, entry.index);
+      blocks.push({ el, words, media });
     }
-    paragraphs = found;
-    lastScan = now();
+    buildIndex(blocks);
   }
 
   /* `overrideY` is a measured reading position — currently the cursor, when the
@@ -147,10 +192,27 @@ export function createParagraphTracker(opts = {}) {
 
   function signal() { const s = pending; pending = null; return s; }
 
+  /* Discard in-flight tracking state without producing a transition — a
+   * genuine SPA route change swaps the DOM out from under `paragraphs`, and
+   * without this the next `update()` would report the OLD document's active
+   * paragraph as "left", carrying its full stale dwell time into a
+   * transition that syncParagraph() attributes to the NEW document's
+   * coverage-gate key (documentKey() is read live, at record time). Callers
+   * still need `rescan()` afterward to populate `paragraphs` from the new
+   * DOM; this only clears state that would otherwise misattribute. */
+  function reset() {
+    paragraphs = [];
+    indexOf = new WeakMap();
+    active = null;
+    pending = null;
+    lastScan = 0;
+  }
+
   return {
     update,
     signal,
     rescan: scan,
+    reset,
     getActive: () => (active ? { ...active } : null),
     getIndex: (el) => (el && indexOf.has(el) ? indexOf.get(el) : null),
     // Default keeps counting every tracked candidate, media included — the

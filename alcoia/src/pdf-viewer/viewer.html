@@ -5,6 +5,10 @@
   <title>alcoia — PDF Viewer</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
+  <!-- Item 30c: alcoia's own question card / nudge popups now render on
+       this page — overlay.css is what styles them, the same stylesheet
+       every ordinary DOM page gets from content.js. -->
+  <link rel="stylesheet" href="../styles/overlay.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -66,6 +70,16 @@
       border-radius: 10px; padding: 18px 24px; color: #f88; font-size: 13px;
       max-width: 480px; text-align: center; margin: 80px auto;
     }
+
+    /* Print: the toolbar and its fixed positioning have no place on paper,
+       and each rendered page should start its own printed page rather than
+       splitting across one. */
+    @media print {
+      #toolbar, #status, #error-box { display: none !important; }
+      #viewer { padding-top: 0; }
+      .page-wrap { break-inside: avoid; break-after: page; box-shadow: none; }
+      .page-wrap:last-child { break-after: auto; }
+    }
   </style>
 </head>
 <body>
@@ -74,17 +88,28 @@
   <span class="brand">alcoia</span>
   <button id="prevBtn">&#8592; Prev</button>
   <button id="nextBtn">Next &#8594;</button>
-  <button id="zoomOutBtn">&#8722;</button>
-  <button id="zoomInBtn">&#43;</button>
+  <button id="zoomOutBtn" title="Zoom out">&#8722;</button>
+  <button id="zoomInBtn" title="Zoom in">&#43;</button>
+  <button id="fitWidthBtn" title="Fit page width">Fit width</button>
+  <button id="fitPageBtn" title="Fit whole page">Fit page</button>
+  <button id="rotateLeftBtn" title="Rotate left">&#8634;</button>
+  <button id="rotateRightBtn" title="Rotate right">&#8635;</button>
+  <button id="printBtn">Print</button>
+  <button id="downloadBtn">Download</button>
   <span id="filename">loading…</span>
   <span id="page-info"></span>
+  <button id="openNativeBtn" title="Open this document in your browser's own PDF viewer — full search, print and every other browser feature, no alcoia detection">Open in browser viewer</button>
 </div>
 
 <div id="viewer"></div>
 <div id="status">Loading PDF…</div>
 <div id="error-box"></div>
 
-<script src="viewer.js"></script>
+<!-- Item 30c: reading-bridge.js needs self.ALCOIA_CONFIG (host.js reads it
+     for the token/summarize endpoints), same as popup.html/diagnostics.html
+     already load it before their own script. -->
+<script src="../shared/config.js"></script>
+<script type="module" src="viewer.js"></script>
 
 </body>
 </html>

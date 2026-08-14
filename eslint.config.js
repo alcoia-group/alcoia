@@ -67,10 +67,12 @@ export default [
   // pdf.js/JSZip via an injected <script> tag rather than import — the same
   // reason background.js declares `webgazer` above: the identifier is real in
   // that page's global scope, just not one this linter can see from the file
-  // alone. Classic scripts, not modules — no import/export in either.
+  // alone. pptx-viewer's viewer.js is still a classic script (no import/export).
+  // pdf-viewer's viewer.js became a real module in item 30c (it statically
+  // imports reading-bridge.js), matching viewer.html's own `type="module"`.
   {
     files: ['alcoia/src/pdf-viewer/viewer.js'],
-    languageOptions: { sourceType: 'script', globals: { ...browserExtension, pdfjsLib: 'readonly' } },
+    languageOptions: { sourceType: 'module', globals: { ...browserExtension, pdfjsLib: 'readonly' } },
   },
   {
     files: ['alcoia/src/pptx-viewer/viewer.js'],

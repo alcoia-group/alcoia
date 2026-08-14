@@ -102,14 +102,21 @@ describe('backend origin configuration', () => {
 
     const popupJs = fs.readFileSync(path.join(ROOT, 'alcoia/src/popup/popup.js'), 'utf8');
     expect(popupJs).toMatch(/sra_backend_url:\s*self\.ALCOIA_CONFIG\.SUMMARIZE_URL/);
-    expect(popupJs).toMatch(/backendUrlInput\.placeholder\s*=\s*self\.ALCOIA_CONFIG\.SUMMARIZE_URL/);
 
     const popupHtml = fs.readFileSync(path.join(ROOT, 'alcoia/src/popup/popup.html'), 'utf8');
     expect(popupHtml).toMatch(/src="\.\.\/shared\/config\.js"/);
     expect(popupHtml).not.toMatch(/localhost:3000/);
 
+    // Item 33: the editable backend-URL field moved to the diagnostics page
+    // (developer-only, sra_debug-gated) — popup.js/popup.html no longer show
+    // it at all, so the placeholder-from-config check moves with it.
+    const diagnosticsJs = fs.readFileSync(path.join(ROOT, 'alcoia/src/popup/diagnostics.js'), 'utf8');
+    expect(diagnosticsJs).toMatch(/devBackendUrl'\)\.placeholder\s*=\s*self\.ALCOIA_CONFIG\.SUMMARIZE_URL/);
+    const diagnosticsHtml = fs.readFileSync(path.join(ROOT, 'alcoia/src/popup/diagnostics.html'), 'utf8');
+    expect(diagnosticsHtml).toMatch(/src="\.\.\/shared\/config\.js"/);
+
     // No file goes back to hardcoding the origin instead of reading config.
-    for (const [label, text] of [['content.js', content], ['background.js', background], ['popup.js', popupJs]]) {
+    for (const [label, text] of [['content.js', content], ['background.js', background], ['popup.js', popupJs], ['diagnostics.js', diagnosticsJs]]) {
       expect(text, `${label} should not hardcode localhost:3000`).not.toMatch(/http:\/\/localhost:3000/);
     }
   });

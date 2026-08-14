@@ -35,8 +35,21 @@ export async function initPPTXHandler() {
     } catch (e) { console.warn('Local JSZip not available (expected under src/libs/)', e); return null; }
   }
 
+  // Item 30e: `.slide-wrap` — alcoia's own src/pptx-viewer/viewer.html's own
+  // slide markup — added alongside the pre-existing third-party-embed
+  // guesses (`.punch-viewer` etc., none independently verified against a
+  // real third-party embed). This is not a fix for a live defect today:
+  // content.js — the only caller of initPPTXHandler(), via
+  // detectAndInitHandlers() — never runs on a chrome-extension:// page
+  // (Chrome does not inject content scripts there; see item 30a), so
+  // alcoia's own viewer can never reach this selector regardless of what
+  // it matches. It is added for forward compatibility with a future item
+  // that wires this handler into alcoia's own PPTX viewer the way item 30c
+  // did for PDF, and because a selector list claiming to detect "a slide
+  // container" that omits this extension's own slide markup is misleading
+  // to read, independent of whether anything calls it there yet.
   function findSlideContainer() {
-    return document.querySelector('.slide, .punch-viewer, .slides-canvas, .slide-container') || document.body;
+    return document.querySelector('.slide-wrap, .slide, .punch-viewer, .slides-canvas, .slide-container') || document.body;
   }
 
   async function parsePptxFromUrl(url) {

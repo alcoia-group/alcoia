@@ -17,6 +17,82 @@
   decision nobody made, not a bug fix.
 */
 
+/* Pure, stateless, re-callable grouping of the DOM's current .textLayer spans
+ * into paragraphs (line-grouping by rounded top, then line-grouping into
+ * paragraphs by vertical proximity) — extracted from indexTextLayers() below
+ * so a caller who needs FRESH, LIVE results on every call (item 30c: feeding
+ * paragraph-tracker.js's blockSource from inside alcoia's own PDF viewer,
+ * where pages render in over time and the reader scrolls) doesn't have to
+ * duplicate this algorithm or go through initPDFHandler()'s own `parsed`
+ * latch, which is deliberately one-shot (see ensureParsed() below) and wrong
+ * for that use: it would freeze the paragraph list at whatever had rendered
+ * the first time anything called findParagraphAt()/getParagraphText().
+ *
+ * Each returned entry keeps its real `spans` (live DOM references, not a
+ * frozen rect) specifically so a caller can compute a bounding rect fresh
+ * every time it is asked — exactly the same "always live" contract
+ * paragraph-tracker.js's DOM path already has via a real element's own
+ * getBoundingClientRect(). indexTextLayers() below still only takes rect a
+ * single snapshot per call (its existing, unchanged behaviour for manual
+ * point-lookup extraction) — this export changes nothing about that path,
+ * it only factors out the part both paths already needed identically. */
+export function groupTextLayerParagraphs(doc = document) {
+  const textLayers = doc.querySelectorAll('.textLayer');
+  if (!textLayers || textLayers.length === 0) return [];
+  const out = [];
+  let pid = 0;
+  textLayers.forEach((layer) => {
+    const spans = Array.from(layer.querySelectorAll('span')).filter((s) => s.textContent && s.textContent.trim());
+    if (!spans.length) return;
+    const lines = [];
+    spans.forEach((sp) => {
+      const r = sp.getBoundingClientRect();
+      const top = Math.round(r.top);
+      let line = lines.find((l) => Math.abs(l.top - top) < 6);
+      if (!line) { line = { top, spans: [], bottom: r.bottom }; lines.push(line); }
+      line.spans.push(sp);
+      line.bottom = Math.max(line.bottom, r.bottom);
+    });
+    let cur = null;
+    lines.forEach((ln) => {
+      const txt = ln.spans.map((s) => s.textContent.trim()).join(' ');
+      if (!cur) {
+        cur = { id: `pdf-p-${pid++}`, text: txt, spans: [...ln.spans], bottom: ln.bottom };
+        out.push(cur);
+      } else {
+        const last = out[out.length - 1];
+        if (Math.abs(ln.top - last.bottom) < 12) {
+          last.text += '\n' + txt;
+          last.spans.push(...ln.spans);
+          last.bottom = Math.max(last.bottom, ln.bottom);
+        } else {
+          cur = { id: `pdf-p-${pid++}`, text: txt, spans: [...ln.spans], bottom: ln.bottom };
+          out.push(cur);
+        }
+      }
+    });
+  });
+  return out.map(({ id, text, spans }) => ({ id, text, spans }));
+}
+
+/* Union bounding rect of a group's live spans, measured fresh every call —
+ * the same "ask the DOM again, right now" contract a real element's own
+ * getBoundingClientRect() has. Empty/detached spans are skipped rather than
+ * thrown on, matching paragraph-tracker.js's own try/catch around a
+ * DOM-element rect read. */
+export function unionRect(spans) {
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const sp of spans) {
+    let r;
+    try { r = sp.getBoundingClientRect(); } catch (e) { continue; }
+    if (r.width === 0 && r.height === 0) continue;
+    left = Math.min(left, r.left); top = Math.min(top, r.top);
+    right = Math.max(right, r.right); bottom = Math.max(bottom, r.bottom);
+  }
+  if (!Number.isFinite(left)) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
 export async function initPDFHandler() {
   const paragraphs = []; // { id, text, rect, page }
   let parsed = false;
@@ -38,33 +114,17 @@ export async function initPDFHandler() {
     } catch (e) { console.warn('Local pdfjs not available (expected under src/libs/pdfjs/)', e); return null; }
   }
 
-  // Prefer existing textLayer (if viewer already uses PDF.js)
+  // Prefer existing textLayer (if viewer already uses PDF.js). Shares its
+  // grouping algorithm with groupTextLayerParagraphs() above (item 30c) —
+  // this wrapper still takes one rect snapshot at index time, unchanged from
+  // before; a caller wanting live-remeasured rects on every call (the
+  // paragraph tracker feed) calls groupTextLayerParagraphs()/unionRect()
+  // directly instead of going through this one-shot-latched path.
   function indexTextLayers() {
-    const textLayers = document.querySelectorAll('.textLayer');
-    if (!textLayers || textLayers.length === 0) return false;
-    paragraphs.length = 0; let pid = 0;
-    textLayers.forEach(layer => {
-      const spans = Array.from(layer.querySelectorAll('span')).filter(s=>s.textContent && s.textContent.trim());
-      if (!spans.length) return;
-      // group spans into lines by rounded top and then group lines into paragraphs
-      const lines = [];
-      spans.forEach(sp => {
-        const r = sp.getBoundingClientRect(); const top = Math.round(r.top);
-        let line = lines.find(l => Math.abs(l.top - top) < 6);
-        if (!line) { line = { top, spans: [], rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom } }; lines.push(line); }
-        line.spans.push(sp); line.rect.left = Math.min(line.rect.left, r.left); line.rect.right = Math.max(line.rect.right, r.right); line.rect.bottom = Math.max(line.rect.bottom, r.bottom);
-      });
-      let cur = null;
-      lines.forEach(ln => {
-        const txt = ln.spans.map(s=>s.textContent.trim()).join(' ');
-        if (!cur) { cur = { id: `pdf-p-${pid++}`, text: txt, rect: Object.assign({}, ln.rect) }; paragraphs.push(cur); }
-        else {
-          const last = paragraphs[paragraphs.length-1];
-          if (Math.abs(ln.top - last.rect.bottom) < 12) { last.text += '\n' + txt; last.rect.bottom = Math.max(last.rect.bottom, ln.rect.bottom); last.rect.right = Math.max(last.rect.right, ln.rect.right); }
-          else { cur = { id: `pdf-p-${pid++}`, text: txt, rect: Object.assign({}, ln.rect) }; paragraphs.push(cur); }
-        }
-      });
-    });
+    const groups = groupTextLayerParagraphs(document);
+    if (!groups.length) return false;
+    paragraphs.length = 0;
+    groups.forEach((g) => { paragraphs.push({ id: g.id, text: g.text, rect: unionRect(g.spans) }); });
     return paragraphs.length > 0;
   }
 

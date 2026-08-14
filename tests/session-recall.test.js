@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createSessionRecall, MIN_DWELL_MS } from '../alcoia/src/content/telemetry/session-recall.js';
+import { createSessionRecall, MIN_DWELL_MS } from '../alcoia/src/content/signals/session-recall.js';
 
 const para = (n, words = 60) => `paragraph-${n} ` + Array.from({ length: words }, (_, i) => `w${i}`).join(' ');
 
