@@ -399,7 +399,7 @@ corresponding `<button class="mode-btn" data-persona="...">` in `popup.html`.
 | `storage` | Save settings, notes, sessions, quiz records |
 | `activeTab` | Communicate with the current tab |
 | `tabs` | Read tab URL for `file://` interception; create new tabs |
-| `webNavigation` | Monitor navigation for the `file://` redirect |
+| `webNavigation` | Detect a single-page app's own route change (`history.pushState`), so reading detection resets between articles on sites that never do a full page reload |
 | `file:///*` | Fetch local PDF/PPTX files in the viewer pages |
 
 ---
