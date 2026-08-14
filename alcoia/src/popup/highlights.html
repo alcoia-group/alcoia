@@ -57,6 +57,20 @@
       font-size: 13px; line-height: 1.65; margin-bottom: 8px;
       font-style: italic; color: var(--text);
     }
+    .hl-explanation {
+      margin: 0 0 8px;
+    }
+    .hl-explanation summary {
+      cursor: pointer; font-size: 10px; color: var(--accent); list-style: none;
+      display: inline-flex; align-items: center; gap: 4px;
+    }
+    .hl-explanation summary::-webkit-details-marker { display: none; }
+    .hl-explanation summary::before { content: '▸'; font-size: 9px; transition: transform 0.12s; }
+    .hl-explanation[open] summary::before { transform: rotate(90deg); }
+    .hl-explanation-text {
+      font-size: 12px; line-height: 1.6; color: var(--text); margin-top: 6px;
+      padding: 8px 10px; background: rgba(126,96,174,0.05); border-radius: 8px;
+    }
     .hl-meta {
       font-size: 10px; color: var(--muted); display: flex; gap: 10px; align-items: center;
       flex-wrap: wrap;
