@@ -13,7 +13,9 @@
 ---
 
 alcoia is a browser extension that notices when you are struggling with a page and offers help
-with that specific passage.
+with that specific passage. 
+
+===TO BE REWRITEN. IT DOESN'T MONITOR, IT DETECTS===
 
 It does this by watching **how you read** — how fast you move through a paragraph compared with
 how dense that paragraph is and how fast you normally read, whether you scroll back to re-read
