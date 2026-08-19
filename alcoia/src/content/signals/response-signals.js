@@ -12,9 +12,28 @@
  * The auxiliary measures — how long they took, whether they changed their
  * mind, whether they scrolled back to look — are recorded for the receipt.
  * None of them are used to override the answer itself.
- */
+ *
+ * Item 43: grading authority now degrades by level. answer() below is
+ * UNCHANGED — recognition stays deterministic, client-side, full tier-1
+ * authority. Two more paths exist alongside it: answerGraded() for a
+ * MODEL verdict (free_recall, scenario — the answer was sent to the server
+ * for grading) and respond() for adversarial, which is never graded at all.
+ * Every record now carries gradingMethod and level explicitly — see
+ * state-engine.js's fromSignal(), which reads both to decide how much
+ * confidence the record is allowed to carry. This file never computes that
+ * confidence itself, on purpose: state-engine.js is the one place that
+ * decides, so a model verdict cannot accidentally end up trusted as much as
+ * a deterministic one just because whoever called this file supplied a
+ * generous number. */
 
 export const SLOW_ANSWER_MS = 20000;
+// Defensive truncation only — the real gate against an oversized answer is
+// host.js's fetchGrading(), which refuses to even attempt a grading call
+// above this length (mirrors tests/contract/grading.js's MAX_ANSWER_CHARS).
+// By the time a record reaches here the text should already be within
+// bounds; this just stops one from growing without limit in the receipt.
+const MAX_ANSWER_TEXT_CHARS = 500;
+const GRADABLE_LEVELS = ['free_recall', 'scenario', 'adversarial'];
 
 export function createResponseSignals(opts = {}) {
   const now = opts.now || (() => Date.now());
@@ -28,6 +47,7 @@ export function createResponseSignals(opts = {}) {
   function present(question, context = {}) {
     asked = {
       span: question?.span || null,
+      level: GRADABLE_LEVELS.includes(question?.level) ? question.level : 'recognition',
       paragraphKey: context.paragraphKey || null,
       askedAt: now(),
       revisions: 0,
@@ -72,6 +92,85 @@ export function createResponseSignals(opts = {}) {
       subtype: correct ? 'correct' : 'incorrect',
       correct,
       confidence: normalizedConfidence,
+      // Item 43: explicit even though this path never changes — a record
+      // that carries the method only sometimes would make state-engine.js's
+      // `sig.gradingMethod === 'model'` check the ONLY thing distinguishing
+      // "deterministic" from "just didn't say", which is worse than saying
+      // so plainly.
+      gradingMethod: 'deterministic',
+      level: asked.level,
+      latencyMs,
+      slow: latencyMs > slowAnswerMs,
+      revisions: asked.revisions,
+      scrolledBack: asked.scrolledBack,
+      span: asked.span,
+      paragraphKey: asked.paragraphKey,
+      wasExplorationSample: asked.wasExplorationSample,
+    };
+
+    history.push(record);
+    pending = record;
+    asked = null;
+    return record;
+  }
+
+  /* Call with a MODEL-GRADED verdict — free_recall or scenario (item 43).
+   * Unlike answer() above, grading happened server-side and arrives as a
+   * verdict already decided, not an index for this file to compare.
+   * `verdict` is 'correct' | 'incorrect' | 'unknown' (anything else
+   * normalises to 'unknown' — the safe default, never a guess). 'unknown'
+   * asserts nothing: state-engine.js's fromSignal() returns null for it,
+   * the same as a dismissal, per invariants 5/9. This file does not decide
+   * what confidence a model verdict carries — see this file's own header —
+   * that stays entirely state-engine.js's call. */
+  function answerGraded(answerText, verdict, confidence) {
+    if (!asked) return null;
+    const latencyMs = now() - asked.askedAt;
+    const normalizedConfidence = confidence === 'low' || confidence === 'high' ? confidence : null;
+    const normalizedVerdict = verdict === 'correct' || verdict === 'incorrect' ? verdict : 'unknown';
+
+    const record = {
+      type: 'response',
+      subtype: normalizedVerdict,
+      correct: normalizedVerdict === 'unknown' ? null : normalizedVerdict === 'correct',
+      confidence: normalizedConfidence,
+      gradingMethod: 'model',
+      level: asked.level,
+      answerText: String(answerText || '').slice(0, MAX_ANSWER_TEXT_CHARS),
+      latencyMs,
+      slow: latencyMs > slowAnswerMs,
+      revisions: asked.revisions,
+      scrolledBack: asked.scrolledBack,
+      span: asked.span,
+      paragraphKey: asked.paragraphKey,
+      wasExplorationSample: asked.wasExplorationSample,
+    };
+
+    history.push(record);
+    pending = record;
+    asked = null;
+    return record;
+  }
+
+  /* Call for an ADVERSARIAL answer (item 43) — never graded, by design. The
+   * reader produced an argument; the value is that they produced it, not
+   * whether a model agrees with it. Distinct from dismiss(): the reader DID
+   * engage, so this is not a refusal — but it asserts nothing about
+   * comprehension either. `correct` stays null and state-engine.js reads
+   * this the same way it reads a dismissal or an unknown grading verdict:
+   * nothing. */
+  function respond(answerText) {
+    if (!asked) return null;
+    const latencyMs = now() - asked.askedAt;
+
+    const record = {
+      type: 'response',
+      subtype: 'ungraded',
+      correct: null,
+      confidence: null,
+      gradingMethod: 'none',
+      level: asked.level,
+      answerText: String(answerText || '').slice(0, MAX_ANSWER_TEXT_CHARS),
       latencyMs,
       slow: latencyMs > slowAnswerMs,
       revisions: asked.revisions,
@@ -97,6 +196,8 @@ export function createResponseSignals(opts = {}) {
       type: 'response',
       subtype: 'dismissed',
       correct: null,
+      gradingMethod: 'none',
+      level: asked.level,
       latencyMs: now() - asked.askedAt,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
@@ -126,7 +227,7 @@ export function createResponseSignals(opts = {}) {
   }
 
   return {
-    present, revise, markScrollBack, answer, dismiss,
+    present, revise, markScrollBack, answer, answerGraded, respond, dismiss,
     signal, stats,
     isPending: () => asked !== null,
     history: () => history.slice(),

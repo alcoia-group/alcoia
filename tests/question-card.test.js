@@ -43,6 +43,24 @@ function rate(root, level) {
   else root.querySelector(`.sra-q-conf-btn[data-conf="${level}"]`).click();
 }
 
+function typeAnswer(root, text) {
+  const textarea = root.querySelector('.sra-q-answer-input');
+  textarea.value = text;
+  textarea.dispatchEvent(new Event('input'));
+}
+function submitAnswer(root) {
+  root.querySelector('.sra-q-submit-text').click();
+}
+
+const FREE_RECALL_QUESTION = {
+  q: 'What is the relationship described as?',
+  span: 'The passage spells out the right answer in detail, right here.',
+  explanation: 'The passage calls it real but weak.',
+  level: 'free_recall',
+};
+const SCENARIO_QUESTION = { ...FREE_RECALL_QUESTION, level: 'scenario' };
+const ADVERSARIAL_QUESTION = { ...FREE_RECALL_QUESTION, level: 'adversarial' };
+
 beforeEach(() => { document.body.innerHTML = ''; });
 
 describe('selecting an option', () => {
@@ -468,5 +486,285 @@ describe('snooze', () => {
 
     expect(onSnooze).toHaveBeenCalledTimes(1);
     expect(onDismissed).not.toHaveBeenCalled(); // already answered, not dismissed
+  });
+});
+
+/* Item 43: free_recall, scenario and adversarial render free text instead
+ * of the four options, alongside the SAME confidence control. */
+describe('free-text levels (item 43)', () => {
+  it('renders a textarea instead of options for free_recall/scenario/adversarial', () => {
+    for (const q of [FREE_RECALL_QUESTION, SCENARIO_QUESTION, ADVERSARIAL_QUESTION]) {
+      const ui = fakeUI();
+      const card = createQuestionCard({
+        ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+      });
+      card.show(q);
+      expect(ui.root.querySelector('.sra-q-answer-input')).toBeTruthy();
+      expect(ui.root.querySelector('.sra-q-options')).toBeNull();
+    }
+  });
+
+  it('recognition (no level, or level "recognition") still renders options, unchanged', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(QUESTION);
+    expect(ui.root.querySelector('.sra-q-options')).toBeTruthy();
+    expect(ui.root.querySelector('.sra-q-answer-input')).toBeNull();
+  });
+
+  it('rejects a free-text-level question with no span — the citation discipline is not relaxed', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    expect(card.show({ q: 'no span here', level: 'free_recall' })).toBe(false);
+  });
+
+  it('the submit button starts disabled and enables only once text is typed', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    const submitBtn = ui.root.querySelector('.sra-q-submit-text');
+    expect(submitBtn.disabled).toBe(true);
+    typeAnswer(ui.root, 'my answer');
+    expect(submitBtn.disabled).toBe(false);
+    typeAnswer(ui.root, '');
+    expect(submitBtn.disabled).toBe(true);
+  });
+
+  it('submitting shows the same confidence step as recognition, before anything is graded', () => {
+    const ui = fakeUI();
+    const fetchGrading = vi.fn(async () => ({ verdict: 'correct', span: FREE_RECALL_QUESTION.span }));
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading,
+      onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    typeAnswer(ui.root, 'my answer');
+    submitAnswer(ui.root);
+
+    expect(ui.root.querySelector('.sra-q-confidence')).toBeTruthy();
+    expect(fetchGrading).not.toHaveBeenCalled(); // not until confidence is given
+  });
+
+  it('free_recall: a correct verdict renders confirmation, no explanation', async () => {
+    const ui = fakeUI();
+    const fetchGrading = vi.fn(async () => ({ verdict: 'correct', span: FREE_RECALL_QUESTION.span }));
+    const onAnswered = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, onAnswered, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    typeAnswer(ui.root, 'real but weak');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+
+    await vi.waitFor(() => expect(onAnswered).toHaveBeenCalledTimes(1));
+    expect(onAnswered.mock.calls[0][0].subtype).toBe('correct');
+    expect(onAnswered.mock.calls[0][0].gradingMethod).toBe('model');
+    const result = ui.root.querySelector('.sra-q-result');
+    expect(result.classList.contains('sra-q-result-correct')).toBe(true);
+  });
+
+  it('free_recall: an incorrect verdict renders the wrong styling and offers an explanation', async () => {
+    const ui = fakeUI();
+    const fetchGrading = vi.fn(async () => ({ verdict: 'incorrect', span: FREE_RECALL_QUESTION.span }));
+    const fetchExplanation = vi.fn(async () => 'more detail');
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, fetchExplanation,
+      onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    typeAnswer(ui.root, 'a wrong guess');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+
+    await vi.waitFor(() => expect(ui.root.querySelector('.sra-q-result')).toBeTruthy());
+    expect(ui.root.querySelector('.sra-q-result').classList.contains('sra-q-result-wrong')).toBe(true);
+    await vi.waitFor(() => expect(fetchExplanation).toHaveBeenCalledWith(FREE_RECALL_QUESTION.span));
+  });
+
+  it('free_recall: an unknown verdict renders neutrally, not as wrong, and offers no explanation', async () => {
+    const ui = fakeUI();
+    const fetchGrading = vi.fn(async () => ({ verdict: 'unknown', span: null }));
+    const fetchExplanation = vi.fn(async () => 'more detail');
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, fetchExplanation,
+      onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    typeAnswer(ui.root, 'an ambiguous answer');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+
+    await vi.waitFor(() => expect(ui.root.querySelector('.sra-q-result')).toBeTruthy());
+    const result = ui.root.querySelector('.sra-q-result');
+    expect(result.classList.contains('sra-q-result-wrong')).toBe(false);
+    expect(result.classList.contains('sra-q-result-unknown')).toBe(true);
+    expect(fetchExplanation).not.toHaveBeenCalled();
+  });
+
+  /* The core safety property: even if a (mocked, misbehaving) fetchGrading
+   * returns "incorrect" for a scenario question, the card must never show
+   * it as wrong — this is the UI-layer guard, independent of host.js's own
+   * and state-engine.js's own. */
+  it('scenario: NEVER renders "wrong" even if fetchGrading misbehaves and returns incorrect', async () => {
+    const ui = fakeUI();
+    const fetchGrading = vi.fn(async () => ({ verdict: 'incorrect', span: SCENARIO_QUESTION.span }));
+    const onAnswered = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, onAnswered, onDismissed: () => {},
+    });
+    card.show(SCENARIO_QUESTION);
+    typeAnswer(ui.root, 'my reasoning about the scenario');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+
+    await vi.waitFor(() => expect(onAnswered).toHaveBeenCalledTimes(1));
+    expect(onAnswered.mock.calls[0][0].subtype).not.toBe('incorrect');
+    expect(ui.root.querySelector('.sra-q-result').classList.contains('sra-q-result-wrong')).toBe(false);
+  });
+
+  it('scenario: a correct verdict is still shown as correct', async () => {
+    const ui = fakeUI();
+    const fetchGrading = vi.fn(async () => ({ verdict: 'correct', span: SCENARIO_QUESTION.span }));
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(SCENARIO_QUESTION);
+    typeAnswer(ui.root, 'a correct application of the principle');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+
+    await vi.waitFor(() => expect(ui.root.querySelector('.sra-q-result')).toBeTruthy());
+    expect(ui.root.querySelector('.sra-q-result').classList.contains('sra-q-result-correct')).toBe(true);
+  });
+
+  it('a grader failure (thrown error) degrades to unknown, never a broken card', async () => {
+    const ui = fakeUI();
+    const fetchGrading = vi.fn(async () => { throw new Error('network down'); });
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    typeAnswer(ui.root, 'an answer');
+    expect(() => submitAnswer(ui.root)).not.toThrow();
+    rate(ui.root, null);
+
+    await vi.waitFor(() => expect(ui.root.querySelector('.sra-q-result')).toBeTruthy());
+    expect(ui.root.querySelector('.sra-q-result').classList.contains('sra-q-result-unknown')).toBe(true);
+  });
+
+  it('a response failing shape validation (fetchGrading returns something malformed) resolves to unknown and renders nothing alarming', async () => {
+    const ui = fakeUI();
+    const fetchGrading = vi.fn(async () => undefined); // simulates host.js's own defensive fallback shape being bypassed
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    typeAnswer(ui.root, 'an answer');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+
+    await vi.waitFor(() => expect(ui.root.querySelector('.sra-q-result')).toBeTruthy());
+    expect(ui.root.querySelector('.sra-q-result').classList.contains('sra-q-result-unknown')).toBe(true);
+  });
+
+  it('adversarial: never calls fetchGrading at all', async () => {
+    const ui = fakeUI();
+    const fetchGrading = vi.fn(async () => ({ verdict: 'correct', span: ADVERSARIAL_QUESTION.span }));
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(ADVERSARIAL_QUESTION);
+    typeAnswer(ui.root, 'here is my counter-argument');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+
+    expect(fetchGrading).not.toHaveBeenCalled();
+    expect(ui.root.querySelector('.sra-q-result-responded')).toBeTruthy();
+    expect(ui.root.querySelector('.sra-q-result-correct')).toBeNull();
+    expect(ui.root.querySelector('.sra-q-result-wrong')).toBeNull();
+  });
+
+  it('adversarial: the record carries no verdict — correct stays null, gradingMethod is "none"', () => {
+    const ui = fakeUI();
+    const onAnswered = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed: () => {},
+    });
+    card.show(ADVERSARIAL_QUESTION);
+    typeAnswer(ui.root, 'an argument');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+
+    expect(onAnswered).toHaveBeenCalledTimes(1);
+    expect(onAnswered.mock.calls[0][0].correct).toBeNull();
+    expect(onAnswered.mock.calls[0][0].gradingMethod).toBe('none');
+  });
+
+  it('never renders model output as HTML — the verdict drives fixed copy only, the span shown is the client\'s own known question.span', () => {
+    const ui = fakeUI();
+    const hostileSpanFromServer = '<img src=x onerror=alert(1)>';
+    // fetchGrading's own returned `span` is deliberately NOT what gets
+    // rendered — revealGraded() never looks at it, only at question.span,
+    // which came from item 42's own server-validated question generation,
+    // already trusted the same way the recognition path already trusts it.
+    const fetchGrading = vi.fn(async () => ({ verdict: 'incorrect', span: hostileSpanFromServer }));
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    typeAnswer(ui.root, 'an answer');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+    return vi.waitFor(() => {
+      expect(ui.root.querySelector('.sra-q-result')).toBeTruthy();
+    }).then(() => {
+      expect(ui.root.innerHTML).not.toContain(hostileSpanFromServer);
+      expect(ui.root.querySelector('img')).toBeNull();
+    });
+  });
+
+  it('the answer input respects the length cap via maxlength', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    const textarea = ui.root.querySelector('.sra-q-answer-input');
+    expect(Number(textarea.getAttribute('maxlength'))).toBe(500);
+  });
+
+  it('the textarea and submit button lock once the confidence step opens', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading: async () => ({ verdict: 'unknown', span: null }),
+      onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    typeAnswer(ui.root, 'an answer');
+    submitAnswer(ui.root);
+
+    expect(ui.root.querySelector('.sra-q-answer-input').disabled).toBe(true);
+  });
+
+  it('dismissing while the free-text card is open is not scored as an answer', () => {
+    const ui = fakeUI();
+    const onAnswered = vi.fn();
+    const onDismissed = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed,
+    });
+    card.show(FREE_RECALL_QUESTION);
+    typeAnswer(ui.root, 'an answer I did not submit');
+    ui.root.querySelector('.sra-close-btn').click();
+
+    expect(onAnswered).not.toHaveBeenCalled();
+    expect(onDismissed).toHaveBeenCalledTimes(1);
   });
 });

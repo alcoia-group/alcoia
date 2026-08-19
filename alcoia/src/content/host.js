@@ -56,34 +56,18 @@ export async function createHost(deps) {
   } = ui;
 
   // ── AI-call infrastructure ────────────────────────────────────────────
-  const installTokenModule = await loadModule('src/shared/install-token.js');
-  const installToken = installTokenModule.createInstallTokenManager({
-    tokenUrl: self.ALCOIA_CONFIG.TOKEN_URL,
-  });
   const diagLogModule = await loadModule('src/shared/diag-log.js');
   const diagLog = diagLogModule.createDiagLog();
   const tokenUrl = () => {
     try { return new URL('/api/token', s().backendUrl || BACKEND_DEFAULT).href; }
     catch (e) { return self.ALCOIA_CONFIG.TOKEN_URL; }
   };
-  async function callBackend(action, url, body) {
-    const token = await installToken.getToken(tokenUrl());
-    if (!token) { diagLog.log(action, 'no_install_token'); return { ok: false, error: 'no_install_token' }; }
-    return await new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage({ action, url, body, token }, (resp) => {
-          if (chrome.runtime.lastError || !resp) { diagLog.log(action, 'no_response'); resolve({ ok: false, error: 'no_response' }); return; }
-          if (resp.tokenRejected) {
-            installToken.invalidate();
-            diagLog.log(action, `token_rejected_${resp.status}`);
-          } else if (!resp.ok) {
-            diagLog.log(action, resp.error || `status_${resp.status}`);
-          }
-          resolve(resp);
-        });
-      } catch (e) { diagLog.log(action, String(e && e.message || e)); resolve({ ok: false, error: String(e && e.message || e) }); }
-    });
-  }
+  // Item 43: callBackend()/installToken extracted to src/shared/backend-client.js
+  // so quiz.js (a normal extension page, not this content-script host) can
+  // reach the grading endpoint the same way, without duplicating the
+  // token/retry logic — see that file's own header.
+  const backendClientModule = await loadModule('src/shared/backend-client.js');
+  const { callBackend, installToken } = backendClientModule.createBackendClient({ getTokenUrl: tokenUrl, diagLog });
 
   // Item 38: bug backstop, not entitlement enforcement — see the project notes'
   // "Client-side AI-call rate limiting" section for the full reasoning.
@@ -149,6 +133,10 @@ export async function createHost(deps) {
       count: opts.count || 1,
       kind: opts.kind || 'recall',
     };
+    // Item 42/44: one level per call, decided by the caller — omitted
+    // entirely rather than defaulted here, so a server that has never heard
+    // of levels sees exactly the request shape it always has.
+    if (opts.level) body.level = opts.level;
     const resp = await callBackend('apiPost', questionsUrl(), body);
     if (!resp.ok) {
       log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
@@ -158,6 +146,23 @@ export async function createHost(deps) {
     if (!j) return [];
     return Array.isArray(j.questions) ? j.questions : [];
   }
+
+  // ── Free-text answer grading (item 43) ──────────────────────────────────
+  // Grading authority degrades by level — see tests/contract/grading.js's
+  // header for the full reasoning. recognition is deterministic and never
+  // reaches this function at all; adversarial is never graded, refused
+  // before any network call. Own rate-limit bucket ('grade'), separate from
+  // 'summarize' and 'questions' — a burst of grading calls must not starve
+  // or be starved by either of those. The grading logic itself lives in
+  // src/shared/grading-client.js, shared with quiz.js — see that file's own
+  // header for why it was pulled out rather than duplicated.
+  const gradingClientModule = await loadModule('src/shared/grading-client.js');
+  const { fetchGrading } = gradingClientModule.createGradingClient({
+    callBackend,
+    getGradeUrl: () => (s().backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/grade'),
+    checkBudget: checkAiCallBudget,
+    log, warn,
+  });
 
   // ── comprehensionMonitor, sessionTracker, focusRuler ──────────────────
   const compModule = await loadModule('src/content/comprehension-monitor.js');
@@ -203,6 +208,7 @@ export async function createHost(deps) {
     esc,
     responseSignals,
     fetchExplanation: (spanText) => fetchSummary(spanText, 'explain_more'),
+    fetchGrading, // item 43 — free_recall/scenario only; question-card.js itself never calls this for recognition or adversarial
     onAnswered: (record) => {
       try { orchestratorRef?.pumpSignals(record); } catch (e) {}
       try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
@@ -422,6 +428,7 @@ export async function createHost(deps) {
     focusRuler,
     fetchSummary,
     fetchQuestions,
+    fetchGrading,
     // Exposed for content.js's receipt signing (receipt.js's signReceipt),
     // a reader-initiated cryptographic operation, not an AI call — it needs
     // the same token-attaching relay fetchSummary/fetchQuestions use, but
