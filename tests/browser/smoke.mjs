@@ -1480,6 +1480,128 @@ try {
 await writeHighlightStore({});
 await setHighlightPersist(true);
 
+// ── Highlights sidebar (theme-aware) + click-to-exact-spot ────────────────
+// The standalone Highlights page moved to an in-page sidebar reachable
+// without leaving the article (the popup's button and the hover chip's
+// "All highlights" link both now open it via an 'openHighlightsSidebar'
+// message), with the real page still one click away through the sidebar's
+// own Expand button. Both surfaces read the --alc-* tokens applyDarkMode()
+// already swaps, so dark mode is exercised here rather than assumed. A
+// highlight card's click target carries a ?sra_hl=<id> anchor so the reader
+// lands on the exact passage, not just the top of the page.
+const SIDEBAR_HL_ID = 'sra-hl-sidebar-test';
+let sidebarResult;
+try {
+  await writeHighlightStore({
+    [HL_URL_KEY]: [{
+      id: SIDEBAR_HL_ID, text: HL_PHRASE, color: '#FFF59D', colorKey: 'yellow',
+      ctxBefore: '', ctxAfter: '', paragraphIndex: 0,
+      url: 'http://localhost:8731/hl-fixture.html', title: 'test', timestamp: Date.now(),
+    }],
+  });
+  const HL_FIXTURE_URL = 'http://localhost:8731/hl-fixture.html';
+  await sendToArticleTab({ type: 'settings', darkMode: false }, HL_FIXTURE_URL);
+
+  const sbPage = await ctx.newPage();
+  await sbPage.goto(HL_FIXTURE_URL);
+  await sbPage.waitForTimeout(600);
+
+  // The default urlPattern on sendToArticleTab ('http://localhost:8731/*')
+  // can match other still-open tabs from earlier in this script (the main
+  // reading-flow `page` in particular never closes) — pass the exact URL so
+  // these messages land on sbPage and nowhere else, same as item 26 below.
+  const openResp = await sendToArticleTab({ action: 'openHighlightsSidebar' }, HL_FIXTURE_URL);
+  await sbPage.waitForTimeout(300);
+
+  const lightState = await sbPage.evaluate(() => {
+    const panel = document.getElementById('sra-hl-sidebar');
+    const card  = panel?.querySelector('.hl-card');
+    return {
+      panelExists: !!panel,
+      panelOpen: panel?.classList.contains('open') ?? false,
+      cardCount: panel?.querySelectorAll('.hl-card').length ?? 0,
+      fontFamily: card ? getComputedStyle(card).fontFamily : '',
+      panelBg: panel ? getComputedStyle(panel).backgroundColor : '',
+    };
+  });
+
+  await sendToArticleTab({ type: 'settings', darkMode: true }, HL_FIXTURE_URL);
+  await sbPage.waitForTimeout(300);
+  const darkPanelBg = await sbPage.evaluate(() => {
+    const panel = document.getElementById('sra-hl-sidebar');
+    return panel ? getComputedStyle(panel).backgroundColor : null;
+  });
+
+  // Expand: the real standalone page opens in a new tab, sidebar stays put.
+  const beforeExpand = ctx.pages().length;
+  await sbPage.evaluate(() => document.querySelector('#sra-hl-sidebar [data-hl-expand]').click());
+  await sbPage.waitForTimeout(600);
+  const expandedPage = ctx.pages().find((p) => p.url().includes('src/popup/highlights.html'));
+  const expandTabOpened = ctx.pages().length > beforeExpand && !!expandedPage;
+  let expandedPageState = { attempted: false };
+  if (expandedPage) {
+    await expandedPage.waitForTimeout(300);
+    expandedPageState = {
+      attempted: true,
+      noTlDrText: !(await expandedPage.evaluate(() => document.body.textContent.includes('TL;DR'))),
+      noEmDash: !(await expandedPage.evaluate(() => document.body.textContent.includes('—'))),
+      usesJakarta: (await expandedPage.evaluate(() =>
+        getComputedStyle(document.body).fontFamily)).includes('Jakarta'),
+    };
+    await expandedPage.close();
+  }
+
+  // Click-to-exact-spot: the card itself is the click target, not just a
+  // sub-element inside it.
+  const beforeCardClick = ctx.pages().length;
+  await sbPage.evaluate(() => document.querySelector('#sra-hl-sidebar .hl-card').click());
+  await sbPage.waitForTimeout(700);
+  const destPage = ctx.pages()[ctx.pages().length - 1];
+  const destOpened = ctx.pages().length > beforeCardClick;
+  const destUrl = destOpened ? destPage.url() : '';
+  let landedOnExactSpot = { attempted: false };
+  if (destOpened) {
+    await destPage.waitForTimeout(700); // restoreTextHighlights() + scrollToRequestedHighlight()
+    landedOnExactSpot = {
+      attempted: true,
+      urlCarriedAnchorParam: destUrl.includes(`sra_hl=${SIDEBAR_HL_ID}`),
+      ...(await destPage.evaluate((id) => {
+        const mark = document.querySelector(`mark[data-sra-hl-id="${id}"]`);
+        if (!mark) return { markFound: false };
+        // hl-fixture.html is only two short paragraphs — there is rarely
+        // enough scrollable height for "centred" to mean anything on it, so
+        // this only checks the mark actually ended up in view (it always
+        // would on a page this short, scrolled or not, which is exactly why
+        // flashedOnArrival below, not this, is the real signal that
+        // scrollToRequestedHighlight() ran rather than the browser's default
+        // landing-at-the-top).
+        const r = mark.getBoundingClientRect();
+        return {
+          markFound: true,
+          markInViewport: r.bottom > 0 && r.top < window.innerHeight,
+          flashedOnArrival: mark.classList.contains('sra-nudge-highlight'),
+        };
+      }, SIDEBAR_HL_ID)),
+    };
+    await destPage.close();
+  }
+
+  await sbPage.close();
+
+  sidebarResult = {
+    attempted: true,
+    openedViaPopupMessage: openResp?.status === 'ok',
+    light: lightState,
+    darkPanelBg,
+    darkModeChangedBackground: darkPanelBg != null && darkPanelBg !== lightState.panelBg,
+    expand: { newTabOpened: expandTabOpened, standalonePage: expandedPageState },
+    clickToExactSpot: { newTabOpened: destOpened, ...landedOnExactSpot },
+  };
+} catch (e) {
+  sidebarResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeHighlightStore({});
+
 // ── Persisted highlight explanations (item 36) ────────────────────────────
 // Item 34 left "Save an explanation with each highlight" as a pure,
 // honestly-worded rename because the underlying explanation was never
@@ -2401,6 +2523,7 @@ console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2
 console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
 console.log('highlight removal affordance + persist toggle:', JSON.stringify(affordanceResult, null, 2));
 console.log('persist toggle-off prompt:', JSON.stringify(persistTogglePromptResult, null, 2));
+console.log('highlights sidebar + click-to-spot:', JSON.stringify(sidebarResult, null, 2));
 console.log('highlight explanations (36):', JSON.stringify(explanationResult, null, 2));
 console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
