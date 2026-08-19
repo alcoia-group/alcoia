@@ -1326,6 +1326,160 @@ try {
 }
 await writeHighlightStore({});
 
+// ── Highlight removal affordance + persistence toggle ────────────────────
+// Double-click already removed a highlight; nothing on the page ever hinted
+// that it was possible. This exercises the new hover/focus-revealed chip
+// (including that it never shifts the paragraph it sits over), the
+// keyboard-only removal path, that chip-driven removal deletes from storage
+// the same way dblclick does, and the new "keep highlights when I leave the
+// page" toggle: off means a highlight still renders for the session but is
+// never written to storage, and turning it off while highlights are already
+// saved prompts rather than silently deleting them.
+async function setHighlightPersist(persistOn) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((on) => new Promise((r) => chrome.storage.local.set({
+    sra_highlight_color: true, sra_highlight_summarize: false, sra_highlight_persist: on,
+  }, r)), persistOn);
+  await helper.close();
+}
+
+let affordanceResult;
+try {
+  await setHighlightPersist(true);
+  await writeHighlightStore({});
+
+  const affPage = await ctx.newPage();
+  await affPage.goto('http://localhost:8731/hl-fixture.html');
+  await affPage.waitForTimeout(600);
+  await selectAndCtrlDrag(affPage, HL_PHRASE);
+  const affPickerVisible = await affPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (affPickerVisible) {
+    await affPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await affPage.waitForTimeout(400);
+  }
+
+  const beforeHoverTop = await affPage.evaluate(() =>
+    document.querySelector('mark[data-sra-hl-id]').closest('p, li, blockquote')?.getBoundingClientRect().top);
+  await affPage.evaluate(() => document.querySelector('mark[data-sra-hl-id]')
+    .dispatchEvent(new MouseEvent('mouseenter', { bubbles: true })));
+  await affPage.waitForTimeout(150);
+  const chipVisibleOnHover = await affPage.evaluate(() => !!document.getElementById('sra-hl-chip'));
+  const afterHoverTop = await affPage.evaluate(() =>
+    document.querySelector('mark[data-sra-hl-id]').closest('p, li, blockquote')?.getBoundingClientRect().top);
+
+  await affPage.evaluate(() => document.querySelector('mark[data-sra-hl-id]')
+    .dispatchEvent(new MouseEvent('mouseleave', { bubbles: true })));
+  await affPage.waitForTimeout(400); // hide is debounced (~220ms)
+  const chipGoneAfterLeave = await affPage.evaluate(() => !document.getElementById('sra-hl-chip'));
+
+  // Removal via the chip's own button deletes from storage exactly like dblclick does.
+  await affPage.evaluate(() => document.querySelector('mark[data-sra-hl-id]')
+    .dispatchEvent(new MouseEvent('mouseenter', { bubbles: true })));
+  await affPage.waitForTimeout(150);
+  await affPage.evaluate(() => document.getElementById('sra-hl-chip')?.querySelector('button')?.click());
+  await affPage.waitForTimeout(400);
+  const afterChipRemoveDom = await affPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+  const storeAfterChipRemove = await readHighlightStore();
+  await affPage.close();
+
+  // Keyboard: focus the mark, press Delete — no mouse involved.
+  await writeHighlightStore({});
+  const kbPage = await ctx.newPage();
+  await kbPage.goto('http://localhost:8731/hl-fixture.html');
+  await kbPage.waitForTimeout(600);
+  await selectAndCtrlDrag(kbPage, HL_PHRASE);
+  const kbPickerVisible = await kbPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (kbPickerVisible) {
+    await kbPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await kbPage.waitForTimeout(400);
+  }
+  await kbPage.evaluate(() => document.querySelector('mark[data-sra-hl-id]').focus());
+  await kbPage.keyboard.press('Delete');
+  await kbPage.waitForTimeout(400);
+  const afterKeyboardDeleteDom = await kbPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
+  const storeAfterKeyboardDelete = await readHighlightStore();
+  await kbPage.close();
+
+  // Persistence off: the mark still renders for the session, but nothing
+  // ever reaches storage — not written then deleted, never written.
+  await setHighlightPersist(false);
+  await writeHighlightStore({});
+  const noPersistPage = await ctx.newPage();
+  await noPersistPage.goto('http://localhost:8731/hl-fixture.html');
+  await noPersistPage.waitForTimeout(600);
+  await selectAndCtrlDrag(noPersistPage, HL_PHRASE);
+  const noPersistPickerVisible = await noPersistPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  if (noPersistPickerVisible) {
+    await noPersistPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await noPersistPage.waitForTimeout(400);
+  }
+  const noPersistMarkRendered = await noPersistPage.evaluate(() =>
+    document.querySelectorAll('mark[data-sra-hl-id]').length > 0);
+  const storeWhilePersistOff = await readHighlightStore();
+  await noPersistPage.close();
+  await setHighlightPersist(true);
+
+  affordanceResult = {
+    attempted: true,
+    hoverChip: {
+      layoutUnchanged: beforeHoverTop === afterHoverTop,
+      shownOnHover: chipVisibleOnHover,
+      goneOnLeave: chipGoneAfterLeave,
+    },
+    chipRemoval: {
+      domClearedImmediately: afterChipRemoveDom === 0,
+      removedFromStorage: (storeAfterChipRemove[HL_URL_KEY]?.length ?? 0) === 0,
+    },
+    keyboardRemoval: {
+      domClearedImmediately: afterKeyboardDeleteDom === 0,
+      removedFromStorage: (storeAfterKeyboardDelete[HL_URL_KEY]?.length ?? 0) === 0,
+    },
+    persistenceOff: {
+      markStillRendersForSession: noPersistMarkRendered,
+      neverWrittenToStorage: (storeWhilePersistOff[HL_URL_KEY]?.length ?? 0) === 0,
+    },
+  };
+} catch (e) {
+  affordanceResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeHighlightStore({});
+
+// Turning persistence off while stored highlights exist must prompt, not
+// silently delete — dismissing the prompt (the default/safe path) keeps them.
+let persistTogglePromptResult;
+try {
+  await writeHighlightStore({
+    [HL_URL_KEY]: [{
+      id: 'sra-hl-prompt-test', text: HL_PHRASE, color: '#FFF59D', colorKey: 'yellow',
+      ctxBefore: '', ctxAfter: '', paragraphIndex: 0,
+      url: 'http://localhost:8731/hl-fixture.html', title: 'test', timestamp: Date.now(),
+    }],
+  });
+  const popupPage = await ctx.newPage();
+  await popupPage.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await popupPage.evaluate(() => new Promise((r) => chrome.storage.local.set({ sra_highlight_persist: true }, r)));
+  await popupPage.reload();
+  await popupPage.waitForTimeout(300);
+
+  let dialogSeen = false;
+  popupPage.once('dialog', (dialog) => { dialogSeen = true; dialog.dismiss(); });
+  await popupPage.evaluate(() => document.getElementById('highlightPersistToggle').click());
+  await popupPage.waitForTimeout(300);
+  const storeAfterDismiss = await readHighlightStore();
+  await popupPage.close();
+
+  persistTogglePromptResult = {
+    attempted: true,
+    promptShown: dialogSeen,
+    keptOnDismiss: (storeAfterDismiss[HL_URL_KEY]?.length ?? 0) > 0,
+  };
+} catch (e) {
+  persistTogglePromptResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeHighlightStore({});
+await setHighlightPersist(true);
+
 // ── Persisted highlight explanations (item 36) ────────────────────────────
 // Item 34 left "Save an explanation with each highlight" as a pure,
 // honestly-worded rename because the underlying explanation was never
@@ -2245,6 +2399,8 @@ console.log('dev tools (item 33)     :', JSON.stringify(devToolsResult));
 console.log('  after delete-token    :', afterDelete, '(expect "Not issued yet")');
 console.log('colour highlights (25)  :', JSON.stringify(highlightResult, null, 2));
 console.log('highlight toggles (26)  :', JSON.stringify(toggleResult, null, 2));
+console.log('highlight removal affordance + persist toggle:', JSON.stringify(affordanceResult, null, 2));
+console.log('persist toggle-off prompt:', JSON.stringify(persistTogglePromptResult, null, 2));
 console.log('highlight explanations (36):', JSON.stringify(explanationResult, null, 2));
 console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
