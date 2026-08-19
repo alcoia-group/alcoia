@@ -299,6 +299,220 @@ describe('fetchGrading (item 43)', () => {
   });
 });
 
+/* Item 44: the epistemic engine wired into host.js. epistemic-engine.js's
+ * own test file (tests/epistemic-engine.test.js) covers the pure selection
+ * logic in isolation; these exercise the actual WIRING — that host.js's
+ * question-generating call sites (handleAsk via onIntervention, runQuiz)
+ * really do read responseSignals.history() and really do pass the computed
+ * level to fetchQuestions, and that the existing AI-call budget still
+ * applies once a level is attached. */
+describe('the epistemic engine wired into host.js (item 44)', () => {
+  // Long enough to pass BOTH fetchQuestions's 120-character floor and
+  // session-recall.js's separate MIN_WORDS=40 floor — the runQuiz-based
+  // tests below need this same paragraph to survive sessionRecall.select(),
+  // which silently drops anything shorter than that from candidates() at
+  // all (session-recall.js's own recordRead()).
+  const LONG_PARAGRAPH = 'A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it, and also enough distinct words in it to pass the separate minimum word count threshold session recall itself enforces before treating this paragraph as something worth asking about again.';
+  const PARAGRAPH_KEY = LONG_PARAGRAPH.slice(0, 80).trim();
+
+  function stubQuestionsEndpoint(captureBody) {
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        if (captureBody) captureBody.body = msg.body;
+        cb({ ok: true, data: { questions: [{ q: 'Q2?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a span for the generated question' }] } });
+      } else {
+        cb({ ok: true, data: { summary: 'a canned summary' } });
+      }
+    };
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+  }
+
+  it('a concept already answered correctly at recognition is asked at free_recall next, in-page', async () => {
+    const captured = {};
+    stubQuestionsEndpoint(captured);
+    const { host, responseSignals } = await createHost(baseDeps());
+
+    responseSignals.present({ q: 'Q1?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: PARAGRAPH_KEY });
+    responseSignals.answer(0, { answerIndex: 0 }, null); // correct
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    const shown = await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+
+    expect(shown).toBe(true);
+    expect(captured.body.level).toBe('free_recall');
+  });
+
+  it('a never-before-seen concept is still asked at recognition, with no level field on the request at all', async () => {
+    const captured = {};
+    stubQuestionsEndpoint(captured);
+    const { host } = await createHost(baseDeps());
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    const shown = await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+
+    expect(shown).toBe(true);
+    // Matches the pre-item-44 request shape exactly for the common case —
+    // "omitted entirely... so a server that has never heard of levels sees
+    // exactly the request shape it always has" (fetchQuestions's own
+    // comment), extended to every caller of pickLevel().
+    expect(captured.body.level).toBeUndefined();
+  });
+
+  it('correct-and-overconfident at scenario climbs to adversarial in-page; correct-and-calibrated does not', async () => {
+    async function requestedLevelAfterScenarioCorrect(overconfident) {
+      const captured = {};
+      stubQuestionsEndpoint(captured);
+      const { host, responseSignals } = await createHost(baseDeps());
+
+      if (overconfident) {
+        // Systematic overconfidence, established on OTHER concepts —
+        // isSystematicallyOverconfident reads the whole session, not just
+        // this one paragraph (epistemic-engine.js's own header).
+        for (let i = 0; i < 2; i++) {
+          responseSignals.present({ q: `other ${i}`, options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: `other-${i}` });
+          responseSignals.answer(1, { answerIndex: 0 }, 'high'); // wrong, high confidence
+        }
+        responseSignals.present({ q: 'other 2', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: 'other-2' });
+        responseSignals.answer(0, { answerIndex: 0 }, 'high'); // correct, high confidence
+      }
+
+      // The target concept's own last attempt: correct at scenario.
+      responseSignals.present({ q: 'scenario Q', span: 'scenario span', level: 'scenario' }, { paragraphKey: PARAGRAPH_KEY });
+      responseSignals.answerGraded('a well-reasoned answer', 'correct', 'high');
+
+      document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+      await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+      return captured.body.level;
+    }
+
+    expect(await requestedLevelAfterScenarioCorrect(false)).toBe('scenario');
+    expect(await requestedLevelAfterScenarioCorrect(true)).toBe('adversarial');
+  });
+
+  it('adversarial gets its own calm evidence line, not the generic detection reasoning', async () => {
+    const captured = {};
+    stubQuestionsEndpoint(captured);
+    const { host, responseSignals, questionCard } = await createHost(baseDeps());
+    const shows = [];
+    const originalShow = questionCard.show;
+    questionCard.show = (q, ctx) => { shows.push(ctx); return originalShow(q, ctx); };
+
+    for (let i = 0; i < 2; i++) {
+      responseSignals.present({ q: `other ${i}`, options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: `other-${i}` });
+      responseSignals.answer(1, { answerIndex: 0 }, 'high');
+    }
+    responseSignals.present({ q: 'other 2', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: 'other-2' });
+    responseSignals.answer(0, { answerIndex: 0 }, 'high');
+    responseSignals.present({ q: 'scenario Q', span: 'scenario span', level: 'scenario' }, { paragraphKey: PARAGRAPH_KEY });
+    responseSignals.answerGraded('a well-reasoned answer', 'correct', 'high');
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    await host.onIntervention({ action: 'ask', evidence: ['You seem to be skimming'] }, {}, document.getElementById('t'));
+
+    expect(captured.body.level).toBe('adversarial');
+    expect(shows[0].evidence).not.toEqual(['You seem to be skimming']);
+    expect(shows[0].evidence[0]).toMatch(/confiden|getting this right/i);
+  });
+
+  it('the AI-call budget still caps in-page questions once a concept has escalated past recognition', async () => {
+    const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a' }] } });
+      else cb({ ok: true, data: {} });
+    };
+    chrome.runtime.sendMessage = sendMessage;
+    const { host, responseSignals } = await createHost(baseDeps());
+
+    responseSignals.present({ q: 'Q1?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: PARAGRAPH_KEY });
+    responseSignals.answer(0, { answerIndex: 0 }, null); // now escalated to free_recall for this concept
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    const target = document.getElementById('t');
+
+    // Each call targets the SAME paragraph on purpose — this test is about
+    // the AI-call budget, not the card's own "don't show an identical
+    // fingerprint twice" reservation behaviour, so it counts network
+    // attempts rather than card/questionCard.show()'s own return value.
+    for (let i = 0; i < 8; i++) {
+      await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, target);
+    }
+    const questionCalls = sendMessage.mock.calls.filter(([msg]) => msg.url?.includes('/api/questions'));
+    // Burst limit is 6 on the 'questions' path — unchanged by escalating the
+    // level, since checkAiCallBudget() runs before the level is ever
+    // attached to the request body.
+    expect(questionCalls.length).toBe(6);
+  });
+
+  it('runQuiz groups picked paragraphs by their own computed level, one call per distinct level', async () => {
+    const bodies = [];
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        bodies.push(msg.body);
+        const count = msg.body.count || 1;
+        cb({ ok: true, data: { questions: Array.from({ length: count }, (_, i) => ({ q: `Q${i}?`, options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: `span ${i}` })) } });
+      } else {
+        cb({ ok: true, data: {} });
+      }
+    };
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    const { setOrchestrator, sessionRecall, responseSignals, runQuiz } = await createHost(baseDeps());
+    setOrchestrator({ documentKey: () => 'doc-1' });
+
+    const escalatedText = 'This paragraph has already been answered correctly at the recognition level earlier in this exact same reading session, by this exact same reader, right here on this page, well before any quiz was generated or requested by anyone reading it at all.';
+    const escalatedKey = escalatedText.slice(0, 80).trim();
+    const freshText = 'This second, completely different paragraph has never once been asked about before this exact moment, by this particular reader, at any point earlier in this reading session, so it should default to plain ordinary recognition when the quiz is generated for the very first time today.';
+
+    // Both paragraphs read long enough and recently enough to be quiz candidates.
+    sessionRecall.recordRead(escalatedText, 5000);
+    sessionRecall.recordRead(freshText, 5000);
+
+    responseSignals.present({ q: 'Q1?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: escalatedKey });
+    responseSignals.answer(0, { answerIndex: 0 }, null); // correct -> escalatedKey is now at free_recall
+
+    await runQuiz();
+
+    // Two distinct levels among the picked paragraphs -> two separate
+    // fetchQuestions calls, not one combined call for everything.
+    expect(bodies.length).toBe(2);
+    const levels = bodies.map((b) => b.level).sort();
+    expect(levels).toEqual([undefined, 'free_recall'].sort());
+  });
+
+  it('card and quiz page request the identical level for the identical concept history', async () => {
+    async function levelRequestedInPage() {
+      const captured = {};
+      stubQuestionsEndpoint(captured);
+      const { host, responseSignals } = await createHost(baseDeps());
+      responseSignals.present({ q: 'Q1?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: PARAGRAPH_KEY });
+      responseSignals.answer(0, { answerIndex: 0 }, null);
+      document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+      await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+      return captured.body.level;
+    }
+
+    async function levelRequestedInQuiz() {
+      const bodies = [];
+      globalThis.__sendMessageImpl = (msg, cb) => {
+        if (msg.url?.includes('/api/questions')) {
+          bodies.push(msg.body);
+          cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a' }] } });
+        } else cb({ ok: true, data: {} });
+      };
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { setOrchestrator, sessionRecall, responseSignals, runQuiz } = await createHost(baseDeps());
+      setOrchestrator({ documentKey: () => 'doc-1' });
+      sessionRecall.recordRead(LONG_PARAGRAPH, 5000);
+      responseSignals.present({ q: 'Q1?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: PARAGRAPH_KEY });
+      responseSignals.answer(0, { answerIndex: 0 }, null);
+      await runQuiz();
+      return bodies[0]?.level;
+    }
+
+    expect(await levelRequestedInPage()).toBe(await levelRequestedInQuiz());
+    expect(await levelRequestedInPage()).toBe('free_recall');
+  });
+});
+
 describe('findParagraphAt() PDF/PPTX/DOM branching', () => {
   it('falls back to the DOM when no handler is set', async () => {
     document.body.innerHTML = '<p id="target">Some prose in a real paragraph.</p>';
