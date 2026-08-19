@@ -150,10 +150,12 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   const dyslexiaModule  = await loadModule('src/content/dyslexia-utils.js');
   const segmentation     = await loadModule('src/content/signals/segmentation.js');
   const mapModule       = await loadModule('src/content/reading-map.js');
+  const hlSidebarModule = await loadModule('src/content/highlights-sidebar.js');
 
   const ttsHandler    = ttsModule.createTTSHandler();
   const dyslexiaUtils = dyslexiaModule;
   const readingMap    = mapModule.createReadingMap();
+  const highlightsSidebar = hlSidebarModule.createHighlightsSidebar();
 
   // ── UI ─────────────────────────────────────────────────────────────────
   const uiModule = await loadModule('src/content/ui-controller.js');
@@ -672,10 +674,6 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   let _hlChipMark   = null;
   let _hlChipHideAt = null;
 
-  function openHighlightsPage() {
-    chrome.runtime.sendMessage({ action: 'openTab', url: chrome.runtime.getURL('src/popup/highlights.html') });
-  }
-
   function positionHighlightChip(mark) {
     if (!_hlChipEl) return;
     const r = mark.getBoundingClientRect();
@@ -730,7 +728,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     viewLink.href = '#';
     viewLink.textContent = 'All highlights →';
     viewLink.style.cssText = 'color:#888;font-size:10px;text-decoration:underline;cursor:pointer;white-space:nowrap;';
-    viewLink.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openHighlightsPage(); });
+    viewLink.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); highlightsSidebar.open(); });
     chip.appendChild(viewLink);
 
     document.body.appendChild(chip);
@@ -756,7 +754,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
         deleteTextHighlight(hlId, mark);
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        openHighlightsPage();
+        highlightsSidebar.open();
       }
     });
 
@@ -782,9 +780,30 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     const urlKey = window.location.hostname + window.location.pathname;
     chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: hl }) => {
       const saved = hl[urlKey] || [];
-      if (!saved.length) return;
-      saved.forEach(entry => { try { restoreSingleHighlight(entry); } catch (_) {} });
+      if (saved.length) saved.forEach(entry => { try { restoreSingleHighlight(entry); } catch (_) {} });
+      scrollToRequestedHighlight();
     });
+  }
+
+  // Must match HIGHLIGHT_ANCHOR_PARAM in src/shared/highlights-render.js —
+  // that is the module that appends this to a highlight card's link.
+  const HIGHLIGHT_ANCHOR_PARAM = 'sra_hl';
+
+  // Clicking a highlight in the Highlights page/sidebar opens its source
+  // with ?sra_hl=<id> appended, so a reader lands on the article and not
+  // just at the top of it — this is what actually gets them to the exact
+  // spot. Silent no-op if the mark cannot be found: the anchoring above
+  // already abstains rather than guess when the text is gone, and a scroll
+  // target that does not exist is the same case.
+  function scrollToRequestedHighlight() {
+    let hlId;
+    try { hlId = new URL(window.location.href).searchParams.get(HIGHLIGHT_ANCHOR_PARAM); } catch (_) { return; }
+    if (!hlId) return;
+    const mark = document.querySelector(`mark[data-sra-hl-id="${CSS.escape(hlId)}"]`);
+    if (!mark) return;
+    mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    mark.classList.add('sra-nudge-highlight');
+    setTimeout(() => mark.classList.remove('sra-nudge-highlight'), 3000);
   }
 
   /* Quote-based anchoring (W3C TextQuoteSelector shape): find every place
@@ -1285,6 +1304,11 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     }
     if (msg.action === 'showReceipt') {
       showReceipt();
+      sendResponse({ status: 'ok' });
+      return true;
+    }
+    if (msg.action === 'openHighlightsSidebar') {
+      highlightsSidebar.toggle();
       sendResponse({ status: 'ok' });
       return true;
     }

@@ -347,7 +347,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
   openPage('notesBtn',          'src/popup/notes.html');
   openPage('sessionReportBtn',  'src/popup/session-report.html');
-  openPage('viewHighlightsBtn', 'src/popup/highlights.html');
+  // Opens as an in-page sidebar on the active tab rather than a new page —
+  // the full standalone page (src/popup/highlights.html) is still one click
+  // away via the sidebar's own Expand button. Falls back to that page
+  // directly when there is no content script on the active tab to ask
+  // (e.g. a chrome:// page), the one case a sidebar cannot exist at all.
+  $('viewHighlightsBtn')?.addEventListener('click', () => {
+    sendToTab({ action: 'openHighlightsSidebar' }, (resp, err) => {
+      if (err) chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/highlights.html') });
+      window.close();
+    });
+  });
   openPage('exportBtn',         'src/popup/export.html');
   openPage('upgradeBtn',        'src/popup/upgrade.html');
   openPage('diagnosticsBtn',    'src/popup/diagnostics.html');

@@ -2,34 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>alcoia — My Highlights</title>
+  <title>My Highlights</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --bg: #F9F7F2; --surface: rgba(255,255,255,0.75); --border: rgba(126,96,174,0.12);
-      --text: #333333; --muted: #6B6862; --accent: #5F4589; --serif: var(--alc-serif);
-    }
-    body { background: var(--bg); color: var(--text); font-family: var(--serif); font-size: 13px;
+    body { background: var(--paper); color: var(--text); font-family: var(--alc-ui); font-size: 13px;
            min-height: 100vh; }
 
     .header {
       position: sticky; top: 0; z-index: 10;
-      background: var(--bg); border-bottom: 1px solid var(--border);
+      background: var(--paper); border-bottom: 1px solid var(--border);
       padding: 16px 22px 12px; display: flex; align-items: center; justify-content: space-between;
     }
-    .brand { font-size: 18px; font-weight: 700; font-style: italic; letter-spacing: -0.5px; }
-    .brand span { color: var(--accent); }
-    .count-badge { font-size: 11px; color: var(--muted); font-style: italic; }
+    .brand { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
+    .count-badge { font-size: 11px; color: var(--muted); }
 
     .controls {
-      padding: 10px 22px; display: flex; gap: 8px; align-items: center;
+      padding: 10px 22px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
       border-bottom: 1px solid var(--border);
     }
     .filter-btn {
       padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border);
-      background: none; cursor: pointer; font-family: var(--serif); font-size: 11px;
+      background: none; cursor: pointer; font-family: var(--alc-ui); font-size: 11px;
       color: var(--muted); transition: all 0.15s;
     }
     .filter-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
@@ -38,24 +33,25 @@
       vertical-align: middle; margin-right: 4px; border: 1px solid rgba(0,0,0,0.1);
     }
     .clear-all {
-      margin-left: auto; background: none; border: none; font-family: var(--serif);
-      font-size: 11px; color: #B4795F; cursor: pointer; font-style: italic;
+      margin-left: auto; background: none; border: none; font-family: var(--alc-ui);
+      font-size: 11px; color: var(--wrong); cursor: pointer;
       padding: 4px 8px; border-radius: 6px; transition: background 0.12s;
     }
-    .clear-all:hover { background: rgba(192,57,43,0.08); }
+    .clear-all:hover { background: rgba(180,121,95,0.1); }
 
-    #list { padding: 14px 22px 40px; display: flex; flex-direction: column; gap: 10px; }
+    [data-hl-list] { padding: 14px 22px 40px; display: flex; flex-direction: column; gap: 10px; }
 
     .hl-card {
       background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-      padding: 13px 16px; position: relative;
+      padding: 13px 16px; position: relative; cursor: pointer;
       border-left: 4px solid #ccc;
       transition: box-shadow 0.15s;
     }
     .hl-card:hover { box-shadow: 0 3px 14px rgba(0,0,0,0.06); }
+    .hl-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .hl-text {
-      font-size: 13px; line-height: 1.65; margin-bottom: 8px;
-      font-style: italic; color: var(--text);
+      font-size: 13px; line-height: 1.6; margin-bottom: 8px;
+      color: var(--text);
     }
     .hl-explanation {
       margin: 0 0 8px;
@@ -69,42 +65,42 @@
     .hl-explanation[open] summary::before { transform: rotate(90deg); }
     .hl-explanation-text {
       font-size: 12px; line-height: 1.6; color: var(--text); margin-top: 6px;
-      padding: 8px 10px; background: rgba(126,96,174,0.05); border-radius: 8px;
+      padding: 8px 10px; background: var(--accent-sf); border-radius: 8px;
     }
     .hl-meta {
       font-size: 10px; color: var(--muted); display: flex; gap: 10px; align-items: center;
       flex-wrap: wrap;
     }
-    .hl-site { font-style: italic; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hl-site { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .hl-date { flex-shrink: 0; }
-    .hl-doc-delete { flex-shrink: 0; color: var(--muted); }
-    .hl-doc-delete:hover { color: #B4795F; }
+    .hl-doc-delete { flex-shrink: 0; color: var(--muted); cursor: pointer; text-decoration: underline; }
+    .hl-doc-delete:hover { color: var(--wrong); }
     .hl-delete {
       position: absolute; top: 10px; right: 12px;
       background: none; border: none; cursor: pointer; font-size: 16px;
-      color: #ccc; transition: color 0.12s; line-height: 1; padding: 2px;
+      color: var(--faint); transition: color 0.12s; line-height: 1; padding: 2px;
     }
-    .hl-delete:hover { color: #B4795F; }
+    .hl-delete:hover { color: var(--wrong); }
 
-    .empty {
-      text-align: center; padding: 60px 22px; color: var(--muted); font-style: italic;
+    .hl-empty {
+      text-align: center; padding: 60px 22px; color: var(--muted);
     }
-    .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
-    .empty p { font-size: 13px; line-height: 1.7; }
-    .empty code {
-      background: rgba(126,96,174,0.08); border-radius: 4px; padding: 1px 6px;
-      font-size: 11px; color: var(--accent); font-style: normal;
+    .hl-empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
+    .hl-empty p { font-size: 13px; line-height: 1.7; }
+    .hl-empty code {
+      background: var(--accent-sf); border-radius: 4px; padding: 1px 6px;
+      font-size: 11px; color: var(--accent);
     }
   </style>
 </head>
 <body>
 
 <div class="header">
-  <div class="brand">TL;<span>DR</span> — My Highlights</div>
-  <span class="count-badge" id="countBadge"></span>
+  <div class="brand">My Highlights</div>
+  <span class="count-badge" data-hl-count></span>
 </div>
 
-<div class="controls" id="controls">
+<div class="controls" data-hl-controls>
   <button class="filter-btn active" data-color="all">All</button>
   <button class="filter-btn" data-color="yellow">
     <span class="filter-swatch" style="background:#FFF59D"></span>Yellow
@@ -121,11 +117,11 @@
   <button class="filter-btn" data-color="orange">
     <span class="filter-swatch" style="background:#FFCC80"></span>Orange
   </button>
-  <button class="clear-all" id="clearAllBtn">Clear all</button>
+  <button class="clear-all" data-hl-clear-all>Clear all</button>
 </div>
 
-<div id="list"></div>
+<div data-hl-list></div>
 
-<script src="highlights.js"></script>
+<script type="module" src="highlights.js"></script>
 </body>
 </html>
