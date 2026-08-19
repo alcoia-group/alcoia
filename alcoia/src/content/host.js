@@ -203,6 +203,21 @@ export async function createHost(deps) {
   const recallModule = await loadModule('src/content/signals/session-recall.js');
   const sessionRecall = recallModule.createSessionRecall();
 
+  // ── Epistemic engine (item 44) ─────────────────────────────────────────
+  // Selects the next question TYPE from demonstrated failure rather than
+  // rotating formats — see that module's own header for the ladder and its
+  // rules. Pure: it only ever reads responseSignals.history(), the same
+  // session-scoped, in-memory record every other consumer of that history
+  // (the receipt, sessionRecall.recordAnswered) already reads — nothing new
+  // is stored or transmitted to make this work. Used identically by every
+  // place a question gets generated below (handleAsk, runSessionRecall,
+  // runQuiz) — "same engine, same rules" is structural, not a convention to
+  // remember, since all three call this one function.
+  const engineModule = await loadModule('src/content/epistemic-engine.js');
+  function pickLevel(paragraphKey) {
+    return engineModule.pickLevelForConcept(paragraphKey, responseSignals.history());
+  }
+
   const questionCard = cardModule.createQuestionCard({
     ui,
     esc,
@@ -238,8 +253,42 @@ export async function createHost(deps) {
       const picked = sessionRecall.select(QUIZ_TARGET_COUNT);
       if (!picked.length) return false;
 
-      const combinedText = picked.map((p) => p.text).join('\n\n');
-      const questions = await fetchQuestions(combinedText, { count: QUIZ_TARGET_COUNT, kind: 'recall' });
+      // Item 44: quiz questions get generated at whatever level each picked
+      // paragraph's session history calls for, not always recognition — but
+      // this stays ONE fetchQuestions call per distinct level needed
+      // (bounded at 4, the ladder's own size), not one per paragraph.
+      // tests/contract/questions.js only accepts one level per call, so
+      // paragraphs that land on the same level are combined into the same
+      // request, same as the un-escalated version of this function always
+      // combined all of them into one. In practice most paragraphs have no
+      // prior attempt this session and land on 'recognition' together, so
+      // this is usually still the same single call it always was.
+      const groups = new Map(); // level -> paragraph texts
+      for (const p of picked) {
+        const paragraphKey = p.text.slice(0, 80).trim();
+        const level = pickLevel(paragraphKey);
+        if (!groups.has(level)) groups.set(level, []);
+        groups.get(level).push(p.text);
+      }
+
+      // `count` requests how many QUESTIONS to write from the combined text,
+      // not how many paragraphs are in it — a single paragraph can and does
+      // yield several questions (this is exactly what the un-escalated
+      // version of this function always asked for: QUIZ_TARGET_COUNT
+      // questions from however many paragraphs got picked). Splitting into
+      // level groups must not silently shrink that request to "one question
+      // per paragraph" — each group's share of QUIZ_TARGET_COUNT is
+      // proportional to how many of the picked paragraphs landed in it, so
+      // the single-group case (the common one — most paragraphs have no
+      // prior attempt yet) asks for exactly QUIZ_TARGET_COUNT, same as before.
+      const questions = [];
+      for (const [level, texts] of groups) {
+        const share = Math.max(1, Math.round((QUIZ_TARGET_COUNT * texts.length) / picked.length));
+        const opts = { count: share, kind: 'recall' };
+        if (level !== 'recognition') opts.level = level;
+        const qs = await fetchQuestions(texts.join('\n\n'), opts);
+        questions.push(...qs);
+      }
       if (questions.length < QUIZ_MIN_QUESTIONS) return false;
 
       await new Promise((resolve) => chrome.storage.local.set({
@@ -299,7 +348,13 @@ export async function createHost(deps) {
     return new Promise((resolve) => {
       const started = Date.now();
       const tick = setInterval(() => {
-        const open = document.querySelector('.sra-popup .sra-q-options');
+        // Item 44: a review question can now render either markup branch
+        // (.sra-q-options for recognition, .sra-q-freetext for the other
+        // three levels) — .sra-q-badge is on the card regardless of level,
+        // so this keeps detecting "still open" correctly whichever the
+        // engine picked, instead of only ever recognising recognition's own
+        // markup and resolving instantly for anything else.
+        const open = document.querySelector('.sra-popup .sra-q-badge');
         if (!open || Date.now() - started > 120000) { clearInterval(tick); resolve(); }
       }, 400);
     });
@@ -316,8 +371,15 @@ export async function createHost(deps) {
     try {
       const questions = [];
       for (const entry of picked) {
-        const qs = await fetchQuestions(entry.text, { count: 1 });
-        if (qs.length) questions.push({ question: qs[0], paragraphKey: entry.text.slice(0, 80).trim() });
+        const paragraphKey = entry.text.slice(0, 80).trim();
+        // Item 44: what level to ask THIS concept at is decided from the
+        // reader's own session history for it, not always recognition —
+        // the same pickLevel() every question-generating path below uses.
+        const level = pickLevel(paragraphKey);
+        const opts = { count: 1 };
+        if (level !== 'recognition') opts.level = level;
+        const qs = await fetchQuestions(entry.text, opts);
+        if (qs.length) questions.push({ question: qs[0], paragraphKey, level });
         if (questions.length >= count) break;
       }
 
@@ -327,8 +389,12 @@ export async function createHost(deps) {
       }
 
       for (const item of questions) {
+        // Item 44: adversarial gets its own calm, non-hostile framing
+        // instead of the generic review line — see epistemic-engine.js's
+        // own header for why that rung specifically needs it spelled out.
+        const evidence = engineModule.evidenceLineForLevel(item.level) || 'Reviewing what you read this session';
         const shown = questionCard.show(item.question, {
-          evidence: ['Reviewing what you read this session'],
+          evidence: [evidence],
           paragraphKey: item.paragraphKey,
         });
         if (!shown) continue;
@@ -345,17 +411,28 @@ export async function createHost(deps) {
     const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
     if (!text) return false;
 
-    const questions = await fetchQuestions(text);
+    const paragraphKey = text.slice(0, 80).trim();
+    // Item 44: same engine, same rule, as every other caller — in practice
+    // this is almost always 'recognition' here, since the interruption
+    // budget already refuses to ask about the same paragraph twice
+    // automatically; a higher rung only comes up if this exact paragraph
+    // was already tested via a review or the quiz earlier this session.
+    const level = pickLevel(paragraphKey);
+    const opts = level !== 'recognition' ? { level } : {};
+
+    const questions = await fetchQuestions(text, opts);
     if (!questions.length) return false;
 
     let anchorRect = null;
     try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
     if (el) highlightElement(el, 4000);
 
+    const evidenceOverride = engineModule.evidenceLineForLevel(level);
+
     return questionCard.show(questions[0], {
-      evidence: decision.evidence,
+      evidence: evidenceOverride ? [evidenceOverride] : decision.evidence,
       anchorRect,
-      paragraphKey: text.slice(0, 80).trim(),
+      paragraphKey,
       wasExplorationSample: decision.wasExplorationSample === true,
     });
   }
