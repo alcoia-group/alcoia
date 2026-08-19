@@ -1960,12 +1960,17 @@ try {
     pageCount: document.querySelectorAll('.page-wrap').length,
     hasMarkerText: [...document.querySelectorAll('.textLayer span')]
       .some((s) => s.textContent.includes('ITEM29-PDF-MARKER')),
-    hasOpenNativeBtn: !!document.getElementById('openNativeBtn'),
     hasPrintBtn: !!document.getElementById('printBtn'),
     nativeSearchFindsText: window.find ? window.find('ITEM29-PDF-MARKER') : null,
   }));
 
-  await pdfPage.click('#openNativeBtn');
+  // Item 39: the escape hatch moved from its own toolbar button into the
+  // kebab menu, where native puts every other secondary action — still
+  // reachable, just one extra click away.
+  await pdfPage.click('#kebabBtn');
+  await pdfPage.waitForTimeout(150);
+  const hasOpenNativeInKebab = await pdfPage.evaluate(() => !!document.querySelector('[data-action="openNative"]'));
+  await pdfPage.click('[data-action="openNative"]');
   await pdfPage.waitForTimeout(500);
   const urlAfterEscape = pdfPage.url();
 
@@ -1976,7 +1981,7 @@ try {
     pdfRendered: rendered.pageCount === 1,
     textLayerHasRealText: rendered.hasMarkerText,
     nativeFindInPageWorks: rendered.nativeSearchFindsText === true,
-    hasEscapeHatchButton: rendered.hasOpenNativeBtn,
+    hasEscapeHatchButton: hasOpenNativeInKebab,
     hasPrintButton: rendered.hasPrintBtn,
     escapeHatchNavigatedWithBypassFragment:
       urlAfterEscape.includes('item29-test.pdf') && urlAfterEscape.includes('#alcoia-open-native'),
@@ -2072,7 +2077,11 @@ try {
 // `documentKey` override option exists specifically to prevent that).
 async function scrollPdfPageTextToReadingLine(pg, pageNum) {
   const target = await pg.evaluate((n) => {
-    const wrap = document.querySelector(`[data-page="${n}"]`);
+    // .page-wrap-scoped: item 39's sidebar thumbnails carry the same
+    // data-page attribute for their own purposes, built eagerly regardless
+    // of whether the sidebar is open, so a bare [data-page] selector can
+    // match a thumbnail button instead of the actual page.
+    const wrap = document.querySelector(`.page-wrap[data-page="${n}"]`);
     const span = wrap && wrap.querySelector('.textLayer span');
     if (!span) return null;
     const r = span.getBoundingClientRect();
@@ -2250,19 +2259,33 @@ try {
     };
   });
 
-  await pPage.click('#fitWidthBtn');
+  // Item 39: fit-width/fit-page collapsed from two toolbar buttons into two
+  // entries in the zoom-percent dropdown (native has no dedicated toolbar
+  // buttons for either — this is the closest native-shaped equivalent).
+  async function pickZoomMenuItem(action) {
+    await pPage.click('#zoomPctBtn');
+    await pPage.waitForTimeout(150);
+    await pPage.click(`[data-action="${action}"]`);
+  }
+  await pickZoomMenuItem('fitWidth');
   await pPage.waitForTimeout(700);
   const afterFitWidth = await pPage.evaluate(readViewerState);
 
-  await pPage.click('#fitPageBtn');
+  await pickZoomMenuItem('fitPage');
   await pPage.waitForTimeout(700);
   const beforeRotate = await pPage.evaluate(readViewerState);
 
-  await pPage.click('#rotateRightBtn');
+  // Item 39: native offers only one rotate direction, not a left/right pair
+  // — matched here by collapsing to a single clockwise #rotateBtn. Four
+  // clicks (360°) returns to the pre-rotation orientation, replacing the
+  // old right-then-left round trip with a same-intent one-button round trip.
+  await pPage.click('#rotateBtn');
   await pPage.waitForTimeout(700);
   const afterRotate = await pPage.evaluate(readViewerState);
 
-  await pPage.click('#rotateLeftBtn');
+  await pPage.click('#rotateBtn');
+  await pPage.click('#rotateBtn');
+  await pPage.click('#rotateBtn');
   await pPage.waitForTimeout(700);
   const afterRotateBack = await pPage.evaluate(readViewerState);
 
@@ -2272,7 +2295,13 @@ try {
   ]);
   const downloadFilename = download.suggestedFilename();
 
-  const escapeHatchStillPresent = await pPage.evaluate(() => !!document.getElementById('openNativeBtn'));
+  // Item 39: the escape hatch lives in the kebab menu now, not its own
+  // toolbar button — see the item 29 check above for the full round trip;
+  // this only confirms it is still present after fit/rotate/download.
+  await pPage.click('#kebabBtn');
+  await pPage.waitForTimeout(150);
+  const escapeHatchStillPresent = await pPage.evaluate(() => !!document.querySelector('[data-action="openNative"]'));
+  await pPage.keyboard.press('Escape');
 
   await pPage.close();
 
@@ -2314,6 +2343,213 @@ try {
   };
 } catch (e) {
   pdfParityResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
+// ── Item 39, problem 1: device-pixel-aware rendering ────────────────────────
+// The bug was invisible at devicePixelRatio 1 — this exercises 1, 2 and 3 via
+// CDP's own device-metrics override (Emulation.setDeviceMetricsOverride),
+// not by eye on one machine. At each ratio: the canvas backing store must
+// equal its CSS size times that ratio (not the plain CSS size — the
+// original bug), and the text layer must stay in CSS pixels regardless,
+// verified by checking canvas and text-layer CSS boxes still exactly agree
+// (same check item 30d's two-column alignment already uses) and that a
+// two-column PDF's spans still fall inside the canvas's own CSS box, not
+// drifted off it.
+let dprResult;
+try {
+  const twoColUrl = 'http://localhost:8731/item30d-two-column.pdf';
+  dprResult = { attempted: true, ratios: {} };
+  for (const testDpr of [1, 2, 3]) {
+    const dPage = await ctx.newPage();
+    const cdp = await ctx.newCDPSession(dPage);
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      width: 1280, height: 900, deviceScaleFactor: testDpr, mobile: false,
+    });
+    const dErrors = [];
+    dPage.on('pageerror', (e) => dErrors.push(String(e)));
+    await dPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(twoColUrl)}`);
+    await dPage.waitForTimeout(1500);
+
+    const state = await dPage.evaluate((expectedDpr) => {
+      const canvas = document.querySelector('.page-wrap canvas');
+      const tl = document.querySelector('.textLayer');
+      if (!canvas || !tl) return { attempted: false };
+      const cr = canvas.getBoundingClientRect();
+      const tr = tl.getBoundingClientRect();
+      const cssW = parseFloat(canvas.style.width);
+      const cssH = parseFloat(canvas.style.height);
+      const spans = [...document.querySelectorAll('.textLayer span')].filter((s) => s.textContent.trim());
+      const spansInsideCanvas = spans.every((s) => {
+        const r = s.getBoundingClientRect();
+        return r.left >= cr.left - 2 && r.right <= cr.right + 2 && r.top >= cr.top - 2 && r.bottom <= cr.bottom + 2;
+      });
+      return {
+        attempted: true,
+        reportedDpr: window.devicePixelRatio,
+        backingStoreW: canvas.width, backingStoreH: canvas.height,
+        cssW, cssH,
+        // Rounding: canvas.width is an integer attribute; cssW * dpr is not necessarily.
+        backingStoreMatchesCssTimesDpr:
+          Math.abs(canvas.width  - Math.round(cssW * expectedDpr)) <= 1 &&
+          Math.abs(canvas.height - Math.round(cssH * expectedDpr)) <= 1,
+        textLayerStaysInCssPixels: Math.abs(tr.width - cr.width) < 1 && Math.abs(tr.height - cr.height) < 1,
+        spanCount: spans.length,
+        spansInsideCanvas,
+      };
+    }, testDpr);
+
+    await dPage.close();
+    dprResult.ratios[testDpr] = { ...state, newPageErrors: dErrors.length };
+  }
+} catch (e) {
+  dprResult = { attempted: true, error: String((e && e.message) || e) };
+}
+
+// ── Item 39, problem 2: highlight overlay geometry ─────────────────────────
+// A real Ctrl+drag-shaped selection spanning all three wrapped lines of
+// item30c-multi.pdf's own real paragraph (the same fixture item 30c already
+// uses — long enough to wrap to three lines at this font size), verifying:
+// one clean rectangle per line (not one per text run), survival across
+// rebuild (zoom, rotate) and resize, persistence to the same
+// sra_text_highlights store the DOM path and the Highlights page/sidebar
+// already read, and that a fresh selection can still be dragged straight
+// through the highlighted region afterwards.
+// Selects from the first span to the last span of the given page's text
+// layer directly by DOM position — item30c-multi.pdf's own paragraph wraps
+// to three lines at this font size (the same fixture item 30c already uses
+// for real reading), so this reliably spans all three regardless of the
+// exact wrapped text. Deliberately not text-matched against the fixture's
+// original unwrapped sentence: pdf.js does not insert a space at a
+// line-wrap point that was not an explicit character in the content
+// stream, so a real Range.toString() across the wrap would not equal that
+// original sentence either — matching that here would test a string this
+// selection could never actually produce, not a real bug.
+async function selectAndCtrlDragPdfWholePage(pg) {
+  return pg.evaluate(() => {
+    const layer = document.querySelector('.textLayer');
+    const spans = Array.from(layer.querySelectorAll('span')).filter((s) => s.firstChild && s.textContent.trim());
+    if (spans.length < 2) return { found: false, spanCount: spans.length };
+    const first = spans[0], last = spans[spans.length - 1];
+    const range = document.createRange();
+    range.setStart(first.firstChild, 0);
+    range.setEnd(last.firstChild, last.firstChild.length);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const text = range.toString();
+    const rects = range.getClientRects();
+    // Dispatch on the middle line's own span, not the bounding box's
+    // midpoint — a multi-line box's vertical centre can land in the gap
+    // between lines rather than on any element.
+    const midRect = rects[Math.floor(rects.length / 2)] || rects[0];
+    const cx = midRect.left + midRect.width / 2, cy = midRect.top + midRect.height / 2;
+    document.elementFromPoint(cx, cy)?.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true, cancelable: true, ctrlKey: true, clientX: cx, clientY: cy, view: window,
+    }));
+    return { found: true, text, lineRectCount: rects.length };
+  });
+}
+
+let pdfHighlightResult;
+try {
+  await writeHighlightStore({});
+  const multiUrl = 'http://localhost:8731/item30c-multi.pdf';
+  const pdfHlKey = `pdf:${multiUrl}`;
+
+  const hPage = await ctx.newPage();
+  const hErrors = [];
+  hPage.on('pageerror', (e) => hErrors.push(String(e)));
+  await hPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent(multiUrl)}`);
+  await hPage.waitForTimeout(1200);
+
+  const dragResult = await selectAndCtrlDragPdfWholePage(hPage);
+  await hPage.waitForTimeout(300);
+  const pickerVisible = await hPage.evaluate(() => !!document.getElementById('pdf-hl-color-picker'));
+  if (pickerVisible) {
+    await hPage.evaluate(() => document.querySelector('#pdf-hl-color-picker button[title="yellow"]').click());
+    await hPage.waitForTimeout(400);
+  }
+
+  const afterCreate = await hPage.evaluate(() => {
+    const bars = document.querySelectorAll('.hl-bar');
+    return { barCount: bars.length, groupCount: document.querySelectorAll('.hl-group').length };
+  });
+  const storeAfterCreate = await readHighlightStore();
+
+  // Selection must still work through the overlay: drag a fresh selection
+  // over the SECOND page's real text (unhighlighted) and confirm it lands.
+  await scrollPdfPageTextToReadingLine(hPage, 2);
+  await hPage.waitForTimeout(300);
+  const secondPageSelectable = await hPage.evaluate((ph) => {
+    const layers = document.querySelectorAll('.textLayer');
+    const layer = layers[1];
+    if (!layer) return false;
+    const span = Array.from(layer.querySelectorAll('span')).find((s) => s.textContent.trim());
+    if (!span) return false;
+    const range = document.createRange();
+    range.selectNodeContents(span.firstChild);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return sel.toString().trim().length > 0;
+  }, ITEM30C_PAGE_TEXTS[1]);
+
+  // Survive a rebuild (zoom) and a rotate.
+  await hPage.click('#zoomInBtn');
+  await hPage.waitForTimeout(700);
+  const afterZoom = await hPage.evaluate(() => document.querySelectorAll('.hl-bar').length);
+
+  await hPage.click('#rotateBtn');
+  await hPage.waitForTimeout(700);
+  const afterRotate = await hPage.evaluate(() => document.querySelectorAll('.hl-bar').length);
+  await hPage.click('#rotateBtn'); await hPage.click('#rotateBtn'); await hPage.click('#rotateBtn');
+  await hPage.waitForTimeout(700);
+
+  // Survive a resize while a fit mode is active (the one case a resize
+  // actually changes page layout — see viewer.js's resize handler).
+  await hPage.click('#zoomPctBtn');
+  await hPage.waitForTimeout(150);
+  await hPage.click('[data-action="fitWidth"]');
+  await hPage.waitForTimeout(500);
+  await hPage.setViewportSize({ width: 900, height: 900 });
+  await hPage.waitForTimeout(500);
+  const afterResize = await hPage.evaluate(() => document.querySelectorAll('.hl-bar').length);
+
+  await hPage.close();
+
+  pdfHighlightResult = {
+    attempted: true,
+    dragCreatedSelection: dragResult.found,
+    pickerVisible,
+    threeLinesProducedThreeCleanRects: afterCreate.barCount === 3 && afterCreate.groupCount === 1,
+    persistedUnderPdfKey: (storeAfterCreate[pdfHlKey]?.length || 0) === 1,
+    selectionStillWorksThroughOverlay: secondPageSelectable,
+    survivesZoom: afterZoom > 0,
+    survivesRotate: afterRotate > 0,
+    survivesResizeInFitMode: afterResize > 0,
+    newPageErrors: hErrors.length,
+  };
+} catch (e) {
+  pdfHighlightResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeHighlightStore({});
+
+// ── Item 39, problem 3: no alcoia wordmark in the PDF viewer chrome ────────
+let pdfBrandResult;
+try {
+  const bPage = await ctx.newPage();
+  await bPage.goto(`chrome-extension://${extId}/src/pdf-viewer/viewer.html?src=${encodeURIComponent('http://localhost:8731/item29-test.pdf')}`);
+  await bPage.waitForTimeout(1000);
+  const toolbarText = await bPage.evaluate(() => document.getElementById('toolbar').textContent);
+  const toolbarHtml = await bPage.evaluate(() => document.getElementById('toolbar').innerHTML);
+  pdfBrandResult = {
+    attempted: true,
+    noWordmarkText: !/alcoia/i.test(toolbarText),
+    noWordmarkInMarkup: !/alcoia/i.test(toolbarHtml),
+  };
+  await bPage.close();
+} catch (e) {
+  pdfBrandResult = { attempted: true, error: String((e && e.message) || e) };
 }
 
 // ── Pin / auto-dismiss exclusivity (item 34) ────────────────────────────────
@@ -2529,6 +2765,9 @@ console.log('SPA route detection (27):', JSON.stringify(spaResult, null, 2));
 console.log('PDF viewer escape hatch (29):', JSON.stringify(pdfViewerResult, null, 2));
 console.log('PDF reading detection (30c):', JSON.stringify(pdfDetectionResult, null, 2));
 console.log('PDF viewer parity (30d)  :', JSON.stringify(pdfParityResult, null, 2));
+console.log('PDF dpr-aware rendering (39.1):', JSON.stringify(dprResult, null, 2));
+console.log('PDF highlight overlay (39.2):', JSON.stringify(pdfHighlightResult, null, 2));
+console.log('PDF viewer no wordmark (39.3):', JSON.stringify(pdfBrandResult, null, 2));
 console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));
 console.log('pin/auto-dismiss (34)   :', JSON.stringify(pinAutohideResult, null, 2));
 console.log('AI-call rate limit (38) :', JSON.stringify(rateLimitResult, null, 2));
