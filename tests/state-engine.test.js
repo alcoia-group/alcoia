@@ -167,6 +167,81 @@ describe('corroborating signals raise confidence but never assert', () => {
   });
 });
 
+/* Item 43: grading authority degrades by level. A model verdict must never
+ * carry the same confidence as a deterministic one — checked here at the
+ * one place that number is actually decided, not just assumed from the
+ * signal's own fields. */
+describe('grading-method-aware confidence (item 43)', () => {
+  it('a model-graded correct verdict at free_recall carries less confidence than a deterministic one', () => {
+    const deterministic = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'correct', correct: true, gradingMethod: 'deterministic', level: 'recognition' },
+    });
+    const modelGraded = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'correct', correct: true, gradingMethod: 'model', level: 'free_recall' },
+    });
+    expect(modelGraded.label).toBe(STATES.ON_PACE);
+    expect(modelGraded.confidence).toBeLessThan(deterministic.confidence);
+  });
+
+  it('a model-graded incorrect verdict at free_recall carries less confidence than a deterministic one', () => {
+    const deterministic = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'incorrect', correct: false, gradingMethod: 'deterministic', level: 'recognition' },
+    });
+    const modelGraded = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'incorrect', correct: false, gradingMethod: 'model', level: 'free_recall' },
+    });
+    expect(modelGraded.label).toBe(STATES.STRUGGLING);
+    expect(modelGraded.confidence).toBeLessThan(deterministic.confidence);
+  });
+
+  it('scenario carries the lowest confidence of any level that can assert on_pace', () => {
+    const freeRecall = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'correct', correct: true, gradingMethod: 'model', level: 'free_recall' },
+    });
+    const scenario = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'correct', correct: true, gradingMethod: 'model', level: 'scenario' },
+    });
+    expect(scenario.confidence).toBeLessThan(freeRecall.confidence);
+  });
+
+  // The core safety property this item exists for: a false "you are wrong"
+  // at scenario is worse than a missed correction, and unrecoverable — the
+  // reader stops trusting the system. This must hold even if the record
+  // arrives with subtype 'incorrect' (i.e. even if whatever produced it
+  // failed to uphold the "never assert wrong" rule upstream).
+  it('never asserts struggling from a scenario-level "incorrect" signal, no matter how it arrived', () => {
+    const s = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'incorrect', correct: false, gradingMethod: 'model', level: 'scenario' },
+    });
+    expect(s.label).toBe(STATES.UNKNOWN);
+    expect(s.confidence).toBe(0);
+  });
+
+  it('an unknown grading verdict asserts nothing, the same as a dismissal', () => {
+    const s = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'unknown', correct: null, gradingMethod: 'model', level: 'scenario' },
+    });
+    expect(s.label).toBe(STATES.UNKNOWN);
+  });
+
+  it('an adversarial (ungraded) response asserts nothing about comprehension', () => {
+    const s = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'ungraded', correct: null, gradingMethod: 'none', level: 'adversarial' },
+    });
+    expect(s.label).toBe(STATES.UNKNOWN);
+  });
+
+  it('a response signal with no gradingMethod at all is treated as deterministic — every record made before this item looked like that', () => {
+    const legacy = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'correct', correct: true },
+    });
+    const deterministic = engineAt(fixedClock()).update({
+      reading: { type: 'response', subtype: 'correct', correct: true, gradingMethod: 'deterministic', level: 'recognition' },
+    });
+    expect(legacy.confidence).toBe(deterministic.confidence);
+  });
+});
+
 describe('subscribers', () => {
   it('fires on change and not on repeats', () => {
     const e = engineAt(fixedClock());

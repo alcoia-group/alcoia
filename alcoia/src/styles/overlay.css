@@ -294,6 +294,32 @@
 }
 .sra-q-conf-skip:hover { color: inherit; }
 
+/* Item 43: free_recall/scenario/adversarial's free-text input, alongside
+   the same confidence control above — same paper/border language as
+   .sra-q-option so it reads as "the answer area" rather than a foreign
+   control dropped into the card. */
+.sra-q-freetext { display: flex; flex-direction: column; gap: 5px; }
+.sra-q-answer-input {
+  font-family: var(--alc-serif);
+  font-size: 13.5px;
+  line-height: 1.55;
+  padding: 9px 12px;
+  border-radius: var(--alc-radius-sm);
+  border: 1px solid var(--alc-border);
+  background: rgba(255,255,255,0.55);
+  color: inherit;
+  resize: vertical;
+  min-height: 64px;
+}
+.sra-q-answer-input:focus-visible { outline: 2px solid var(--alc-accent); outline-offset: 1px; }
+.sra-q-answer-input:disabled { opacity: 0.7; resize: none; }
+.sra-q-answer-count {
+  align-self: flex-end;
+  font-family: var(--alc-ui);
+  font-size: 11px;
+  color: var(--alc-faint);
+}
+
 /* Snooze (item 18): a quiet text control on the card itself — the moment a
    reader most wants to pause reminders is the moment one has just appeared.
    Deliberately styled like sra-q-conf-skip's "Rather not say", not like a
@@ -334,6 +360,14 @@
    explanation ships alongside it, so there is nothing here to style beyond
    the checkmark and the one line of text. */
 .sra-q-result-correct { color: var(--alc-sage-2); }
+/* Item 43: an inconclusive model grade (scenario can only ever land here or
+   on sra-q-result-correct, never sra-q-result-wrong — see question-card.js)
+   and adversarial's fixed acknowledgement both read as neutral asides, not
+   as a correction — same muted tone as sra-q-span. sra-q-result-wrong itself
+   carries no distinct color either (plain text, same as this) — this system
+   never uses alarming styling for a wrong or inconclusive answer, at any
+   level. */
+.sra-q-result-unknown, .sra-q-result-responded { color: var(--alc-muted); }
 .sra-q-check { margin-right: 5px; font-weight: 700; }
 .sra-q-span {
   margin-top: 9px;

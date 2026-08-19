@@ -147,6 +147,105 @@ describe('response-signals', () => {
   });
 });
 
+/* Item 43: grading authority degrades by level. answer() (recognition)
+ * keeps working exactly as it always has — asserted again here, not just
+ * assumed, since the whole point is that this path is unchanged. */
+describe('level-dependent grading (item 43)', () => {
+  const FREE_RECALL_Q = { ...QUESTION, level: 'free_recall' };
+  const SCENARIO_Q = { ...QUESTION, level: 'scenario' };
+  const ADVERSARIAL_Q = { ...QUESTION, level: 'adversarial' };
+
+  it('answer() still records recognition as deterministic, unchanged', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION); // no level — defaults to recognition
+    const rec = r.answer(0, QUESTION);
+    expect(rec.gradingMethod).toBe('deterministic');
+    expect(rec.level).toBe('recognition');
+    expect(rec.correct).toBe(true);
+  });
+
+  it('answerGraded() records a model verdict at free_recall', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(FREE_RECALL_Q);
+    const rec = r.answerGraded('the link is weak', 'correct', 'high');
+    expect(rec.type).toBe('response');
+    expect(rec.subtype).toBe('correct');
+    expect(rec.correct).toBe(true);
+    expect(rec.gradingMethod).toBe('model');
+    expect(rec.level).toBe('free_recall');
+    expect(rec.confidence).toBe('high');
+    expect(rec.answerText).toBe('the link is weak');
+  });
+
+  it('answerGraded() records an incorrect verdict at free_recall', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(FREE_RECALL_Q);
+    const rec = r.answerGraded('totally unrelated guess', 'incorrect', null);
+    expect(rec.subtype).toBe('incorrect');
+    expect(rec.correct).toBe(false);
+  });
+
+  it('answerGraded() normalises anything other than correct/incorrect to unknown, never a guess', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    for (const bogus of [undefined, null, '', 'maybe', 'CORRECT', 42]) {
+      r.present(SCENARIO_Q);
+      const rec = r.answerGraded('an answer', bogus, null);
+      expect(rec.subtype).toBe('unknown');
+      expect(rec.correct).toBeNull();
+    }
+  });
+
+  it('answerGraded() at scenario carries level "scenario" so state-engine.js can refuse to assert wrong from it', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(SCENARIO_Q);
+    const rec = r.answerGraded('my reasoning', 'incorrect', null);
+    // response-signals.js itself does not refuse this shape — the refusal
+    // is state-engine.js's job (see state-engine.test.js) — but the record
+    // must carry enough for that refusal to be possible at all.
+    expect(rec.level).toBe('scenario');
+    expect(rec.subtype).toBe('incorrect');
+  });
+
+  it('respond() at adversarial is never graded — no verdict, correct stays null', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(ADVERSARIAL_Q);
+    const rec = r.respond('here is my counter-argument');
+    expect(rec.subtype).toBe('ungraded');
+    expect(rec.correct).toBeNull();
+    expect(rec.gradingMethod).toBe('none');
+    expect(rec.level).toBe('adversarial');
+    expect(rec.answerText).toBe('here is my counter-argument');
+  });
+
+  it('respond() is distinct from dismiss() — the reader engaged, they did not decline', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(ADVERSARIAL_Q);
+    const rec = r.respond('an argument');
+    expect(rec.subtype).not.toBe('dismissed');
+  });
+
+  it('truncates an overlong answer text defensively, even though the real cap is enforced upstream', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(FREE_RECALL_Q);
+    const huge = 'x'.repeat(10000);
+    const rec = r.answerGraded(huge, 'unknown', null);
+    expect(rec.answerText.length).toBeLessThanOrEqual(500);
+  });
+
+  it('answerGraded()/respond() ignore the call when nothing was asked, like answer()/dismiss() already do', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    expect(r.answerGraded('x', 'correct', null)).toBeNull();
+    expect(r.respond('x')).toBeNull();
+  });
+
+  it('an unrecognised level in the question falls back to recognition rather than inventing a fifth', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present({ ...QUESTION, level: 'omniscient' });
+    const rec = r.answer(0, QUESTION);
+    expect(rec.level).toBe('recognition');
+  });
+});
+
 /* The signal hierarchy from the project notes, made testable: reader responses are
  * the only ground truth and outrank everything else. */
 describe('responses outrank reading signals in the engine', () => {

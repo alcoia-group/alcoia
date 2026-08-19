@@ -62,6 +62,22 @@ before it goes into a published policy — treat these as leads, not findings:**
   ratings — no paragraph text, no page title, no URL beyond a hostname+pathname key. Confirm
   this against the actual code (`src/content/quiz-store.js`, `src/content/content.js`'s
   `runQuiz()`) before it goes in a published policy, same as every other line here.
+- **New as of free-text answer grading (item 43) — a genuinely new data flow, not a variant
+  of an existing one, because for the first time something the reader TYPES THEMSELVES, not
+  a system-selected passage excerpt, leaves the device.** Two of the four question difficulty
+  levels (`free_recall`, `scenario`) accept a typed answer instead of multiple choice; that
+  answer text (capped at 500 characters) is sent to the backend (`POST /api/grade`) — along
+  with the question's own already-cited `span` and question text, never the surrounding
+  paragraph — to be graded, and the verdict it returns is what gets stored locally alongside
+  the answer, the same way a multiple-choice `correct`/`incorrect` already is. This happens
+  from both the floating question card and the quiz page. A third level (`adversarial`) also
+  collects typed free-text but is a deliberate exception: that text is never sent anywhere for
+  grading — see `src/content/question-card.js` and `src/popup/quiz.js`, both of which refuse to
+  call the grading endpoint for it structurally, not just by convention. Confirm the 500-
+  character cap, the field list actually sent, and the adversarial exception against
+  `src/shared/grading-client.js` before this goes in a published policy. **Flag this bullet for
+  a legal review before publishing** — it is the first place reader-authored prose (as opposed
+  to passage text the system itself selected) is transmitted at all.
 
 ## 3. What is not collected
 
@@ -120,3 +136,10 @@ section and a DPA both become blockers, not niceties.
    anything touching payments or PII.
 5. Which jurisdictions are in scope at launch? Determines whether GDPR, UK GDPR, CCPA, or
    several apply.
+6. **Item 43 (free-text answer grading):** does the backend (or Groq, as its sub-processor —
+   see §5) retain the reader-authored answer text sent to `/api/grade`, and for how long? This
+   is reader-composed prose, not a passage excerpt the system chose, so the retention answer
+   here may need different, more explicit user-facing disclosure than paragraph-text calls get
+   — a reader typing their own reasoning is a meaningfully different privacy expectation than
+   the system quoting text back at itself. Needs a legal brief before this feature ships
+   publicly, not just before this document is published.
