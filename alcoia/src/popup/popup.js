@@ -44,6 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const selToggle           = $('selToggle');
   const highlightToggle     = $('highlightToggle');
   const highlightColorToggle      = $('highlightColorToggle');
+  const highlightPersistToggle    = $('highlightPersistToggle');
   const highlightSummarizeToggle  = $('highlightSummarizeToggle');
   const autohideToggle      = $('autohideToggle');
   const autohideTimeout     = $('autohideTimeout');
@@ -86,6 +87,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // colour is a free, client-only display preference; summarising spends
     // an assist, so it defaults off regardless of what colour defaults to.
     sra_highlight_color: true, sra_highlight_summarize: false,
+    // On by default — losing a highlight silently on navigation would be
+    // the surprising behaviour, not keeping it.
+    sra_highlight_persist: true,
     sra_autohide: false, sra_autohide_timeout: 12,
     sra_pin_default: false, sra_debug: false, sra_enabled: true,
     sra_comprehension: true, sra_current_state: '',
@@ -107,6 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
     selToggle.checked           = res.sra_selection !== false;
     highlightToggle.checked     = res.sra_highlight_para !== false;
     highlightColorToggle.checked     = res.sra_highlight_color !== false;
+    highlightPersistToggle.checked   = res.sra_highlight_persist !== false;
     highlightSummarizeToggle.checked = !!res.sra_highlight_summarize;
     autohideToggle.checked      = !!res.sra_autohide;
     autohideTimeout.value       = res.sra_autohide_timeout;
@@ -188,6 +193,7 @@ document.addEventListener('DOMContentLoaded', () => {
       sra_selection:        selToggle.checked,
       sra_highlight_para:   highlightToggle.checked,
       sra_highlight_color:      highlightColorToggle.checked,
+      sra_highlight_persist:    highlightPersistToggle.checked,
       sra_highlight_summarize:  highlightSummarizeToggle.checked,
       sra_autohide:         autohideToggle.checked,
       sra_autohide_timeout: Number(autohideTimeout.value) || 12,
@@ -214,6 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
         selection: s.sra_selection,
         highlightPara: s.sra_highlight_para,
         highlightColor: s.sra_highlight_color,
+        highlightPersist: s.sra_highlight_persist,
         highlightSummarize: s.sra_highlight_summarize,
         autohide: s.sra_autohide, autohideTimeout: s.sra_autohide_timeout,
         pinDefault: s.sra_pin_default, debug: s.sra_debug,
@@ -272,6 +279,25 @@ document.addEventListener('DOMContentLoaded', () => {
   dyslexiaToggle.addEventListener('change', () => {
     dyslexiaOptions.style.display = dyslexiaToggle.checked ? 'block' : 'none';
     saveAndBroadcast();
+  });
+  // Turning persistence off must never silently delete highlights already
+  // saved from when it was on — ask once, default to keeping them. Turning
+  // it on needs no such check: it only changes what happens to highlights
+  // made from here on, nothing retroactive.
+  highlightPersistToggle.addEventListener('change', () => {
+    if (highlightPersistToggle.checked) { saveAndBroadcast(); return; }
+    chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: store }) => {
+      const hasStored = Object.values(store).some((entries) => entries?.length);
+      if (hasStored) {
+        const clear = confirm(
+          'Turning this off does not delete highlights you already saved.\n\n' +
+          'Delete all saved highlights now instead? This cannot be undone.\n\n' +
+          '(Cancel keeps them.)'
+        );
+        if (clear) chrome.storage.local.set({ sra_text_highlights: {} });
+      }
+      saveAndBroadcast();
+    });
   });
   [selToggle, highlightToggle, highlightColorToggle, highlightSummarizeToggle,
    debugTogglePopup,

@@ -49,6 +49,11 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   // other setting here, so a change takes effect without a page reload.
   let highlightColorEnabled     = true;
   let highlightSummarizeEnabled = false;
+  // "Keep highlights when I leave the page" — on by default, since silently
+  // losing a deliberate highlight is the surprising behaviour. Off does not
+  // delete anything already saved; it only stops applyTextHighlight() below
+  // from writing new ones.
+  let highlightPersistEnabled   = true;
   let autohideEnabled    = false;
   let autohideTimeoutSec = 12;
   let pinDefault         = false;
@@ -277,6 +282,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
     sra_baseline_wpm: null, sra_dark_mode: false,
     sra_highlight_color: true, sra_highlight_summarize: false,
+    sra_highlight_persist: true,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     assistantEnabled   = res.sra_enabled !== false;
@@ -284,6 +290,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     highlightEnabled   = res.sra_highlight_para !== false;
     highlightColorEnabled     = res.sra_highlight_color !== false;
     highlightSummarizeEnabled = !!res.sra_highlight_summarize;
+    highlightPersistEnabled   = res.sra_highlight_persist !== false;
     autohideEnabled    = !!res.sra_autohide;
     autohideTimeoutSec = res.sra_autohide_timeout || 12;
     pinDefault         = !!res.sra_pin_default;
@@ -566,7 +573,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     mark.dataset.sraHlId    = hlId;
     mark.dataset.sraHlColor = colorKey;
     mark.style.cssText = `background:${bgColor};border-radius:3px;padding:0 1px;mix-blend-mode:multiply;cursor:default;`;
-    mark.title = 'Double-click to remove highlight';
+    mark.title = 'Double-click, or focus and press Delete, to remove this highlight.';
 
     try {
       range.surroundContents(mark);
@@ -578,35 +585,44 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     }
 
     mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
-
-    // Context for restoration — the W3C Web Annotation TextQuoteSelector
-    // shape: the exact text plus a short prefix and suffix of surrounding
-    // context. This, not position, is the primary anchor at restore time.
-    const bodyText = document.body.innerText || '';
-    const pos = bodyText.indexOf(text);
-    const ctxBefore = pos > 0 ? bodyText.slice(Math.max(0, pos - 40), pos).trim() : '';
-    const ctxAfter  = pos >= 0 ? bodyText.slice(pos + text.length, pos + text.length + 40).trim() : '';
-    const paragraphIndex = blockIndexOf(mark);
+    wireHighlightRemovalAffordance(mark, hlId);
 
     const urlKey = window.location.hostname + window.location.pathname;
-    chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: hl }) => {
-      if (!hl[urlKey]) hl[urlKey] = [];
-      hl[urlKey].push({
-        id: hlId, text: text.slice(0, 300), color: bgColor, colorKey,
-        ctxBefore, ctxAfter, paragraphIndex,
-        url: window.location.href, title: document.title, timestamp: Date.now(),
+
+    // "Keep highlights when I leave the page", off by default's opposite —
+    // on by default, off means the mark above still renders for this
+    // reading session but nothing below this line ever reaches
+    // chrome.storage. Not written then deleted on toggle-off; never written
+    // in the first place.
+    if (highlightPersistEnabled) {
+      // Context for restoration — the W3C Web Annotation TextQuoteSelector
+      // shape: the exact text plus a short prefix and suffix of surrounding
+      // context. This, not position, is the primary anchor at restore time.
+      const bodyText = document.body.innerText || '';
+      const pos = bodyText.indexOf(text);
+      const ctxBefore = pos > 0 ? bodyText.slice(Math.max(0, pos - 40), pos).trim() : '';
+      const ctxAfter  = pos >= 0 ? bodyText.slice(pos + text.length, pos + text.length + 40).trim() : '';
+      const paragraphIndex = blockIndexOf(mark);
+
+      chrome.storage.local.get({ sra_text_highlights: {} }, ({ sra_text_highlights: hl }) => {
+        if (!hl[urlKey]) hl[urlKey] = [];
+        hl[urlKey].push({
+          id: hlId, text: text.slice(0, 300), color: bgColor, colorKey,
+          ctxBefore, ctxAfter, paragraphIndex,
+          url: window.location.href, title: document.title, timestamp: Date.now(),
+        });
+        if (hl[urlKey].length > MAX_HIGHLIGHTS_PER_DOC) hl[urlKey].shift();
+
+        const keys = Object.keys(hl);
+        if (keys.length > MAX_HIGHLIGHT_DOCS) {
+          const lastTouched = (k) => hl[k].reduce((max, e) => Math.max(max, e.timestamp || 0), 0);
+          const oldest = keys.reduce((a, b) => (lastTouched(a) <= lastTouched(b) ? a : b));
+          if (oldest !== urlKey) delete hl[oldest];
+        }
+
+        chrome.storage.local.set({ sra_text_highlights: hl });
       });
-      if (hl[urlKey].length > MAX_HIGHLIGHTS_PER_DOC) hl[urlKey].shift();
-
-      const keys = Object.keys(hl);
-      if (keys.length > MAX_HIGHLIGHT_DOCS) {
-        const lastTouched = (k) => hl[k].reduce((max, e) => Math.max(max, e.timestamp || 0), 0);
-        const oldest = keys.reduce((a, b) => (lastTouched(a) <= lastTouched(b) ? a : b));
-        if (oldest !== urlKey) delete hl[oldest];
-      }
-
-      chrome.storage.local.set({ sra_text_highlights: hl });
-    });
+    }
 
     // Item 26: the AI-calling half of "what a highlight does", off by
     // default and independent of the colour toggle above — a reader can
@@ -620,8 +636,9 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       const summary = await fetchSummary(text, mode);
       if (summary) {
         renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source: 'highlight', mode });
-        // Item 36: persisted alongside the highlight, not just shown once.
-        saveHighlightExplanation(urlKey, hlId, summary);
+        // Item 36: persisted alongside the highlight, not just shown once —
+        // only meaningful if the highlight itself was persisted above.
+        if (highlightPersistEnabled) saveHighlightExplanation(urlKey, hlId, summary);
       }
       // A failed fetch degrades to silence here, same as every other AI call
       // in this file (invariant 9) — the colour mark itself already landed
@@ -631,6 +648,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   }
 
   function deleteTextHighlight(hlId, markEl) {
+    hideHighlightRemovalChip();
     const parent = markEl.parentNode;
     if (!parent) return;
     while (markEl.firstChild) parent.insertBefore(markEl.firstChild, markEl);
@@ -644,6 +662,121 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       }
     });
   }
+
+  // ── Highlight removal affordance ────────────────────────────────────────
+  // Double-click removes a highlight, but nothing on the page ever hinted
+  // that. This gives the same removal a discoverable, hover/focus-revealed
+  // control that never occupies layout space, plus a keyboard path and a
+  // way to find the Highlights page from the highlight itself.
+  let _hlChipEl     = null;
+  let _hlChipMark   = null;
+  let _hlChipHideAt = null;
+
+  function openHighlightsPage() {
+    chrome.runtime.sendMessage({ action: 'openTab', url: chrome.runtime.getURL('src/popup/highlights.html') });
+  }
+
+  function positionHighlightChip(mark) {
+    if (!_hlChipEl) return;
+    const r = mark.getBoundingClientRect();
+    const chipW = _hlChipEl.offsetWidth || 160;
+    const chipH = _hlChipEl.offsetHeight || 26;
+    const left = Math.min(Math.max(r.left, 4), window.innerWidth - chipW - 4);
+    const top  = r.top - chipH - 6 >= 0 ? r.top - chipH - 6 : r.bottom + 6;
+    _hlChipEl.style.left = `${left}px`;
+    _hlChipEl.style.top  = `${top}px`;
+  }
+
+  function hideHighlightRemovalChip() {
+    clearTimeout(_hlChipHideAt);
+    if (_hlChipEl) { _hlChipEl.remove(); _hlChipEl = null; }
+    _hlChipMark = null;
+  }
+
+  function scheduleHideHighlightChip() {
+    clearTimeout(_hlChipHideAt);
+    _hlChipHideAt = setTimeout(hideHighlightRemovalChip, 220);
+  }
+
+  function showHighlightRemovalChip(mark, hlId) {
+    clearTimeout(_hlChipHideAt);
+    if (_hlChipMark === mark && _hlChipEl) { positionHighlightChip(mark); return; }
+    hideHighlightRemovalChip();
+    _hlChipMark = mark;
+
+    const chip = document.createElement('div');
+    chip.id = 'sra-hl-chip';
+    Object.assign(chip.style, {
+      position: 'fixed', zIndex: '2147483644',
+      background: 'white',
+      border: '1px solid rgba(0,0,0,0.10)',
+      borderRadius: '8px',
+      padding: '4px 6px',
+      display: 'flex', alignItems: 'center', gap: '8px',
+      boxShadow: '0 6px 20px rgba(0,0,0,0.16)',
+      fontFamily: "var(--alc-serif, Georgia, serif)",
+    });
+    chip.addEventListener('mouseenter', () => clearTimeout(_hlChipHideAt));
+    chip.addEventListener('mouseleave', scheduleHideHighlightChip);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.textContent = 'Remove highlight';
+    removeBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#a33;font-size:11px;padding:2px 4px;white-space:nowrap;';
+    removeBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteTextHighlight(hlId, mark); });
+    chip.appendChild(removeBtn);
+
+    const viewLink = document.createElement('a');
+    viewLink.href = '#';
+    viewLink.textContent = 'All highlights →';
+    viewLink.style.cssText = 'color:#888;font-size:10px;text-decoration:underline;cursor:pointer;white-space:nowrap;';
+    viewLink.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openHighlightsPage(); });
+    chip.appendChild(viewLink);
+
+    document.body.appendChild(chip);
+    _hlChipEl = chip;
+    positionHighlightChip(mark);
+  }
+
+  // Attached to every highlight <mark>, freshly made or restored. Purely
+  // additive to the existing dblclick handler — that keeps working exactly
+  // as it did.
+  function wireHighlightRemovalAffordance(mark, hlId) {
+    mark.tabIndex = 0;
+    mark.setAttribute('aria-label', 'Highlighted text. Press Delete to remove it, or Enter to open your saved highlights.');
+
+    mark.addEventListener('mouseenter', () => showHighlightRemovalChip(mark, hlId));
+    mark.addEventListener('mouseleave', scheduleHideHighlightChip);
+    mark.addEventListener('focus', () => showHighlightRemovalChip(mark, hlId));
+    mark.addEventListener('blur', scheduleHideHighlightChip);
+
+    mark.addEventListener('keydown', (e) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        deleteTextHighlight(hlId, mark);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        openHighlightsPage();
+      }
+    });
+
+    // Touch has no hover — a long-press reveals the same chip so the remove
+    // button and the highlights-page link are reachable there too.
+    let touchTimer = null;
+    const cancelTouch = () => clearTimeout(touchTimer);
+    mark.addEventListener('touchstart', () => {
+      cancelTouch();
+      touchTimer = setTimeout(() => showHighlightRemovalChip(mark, hlId), 500);
+    }, { passive: true });
+    mark.addEventListener('touchend', cancelTouch);
+    mark.addEventListener('touchmove', cancelTouch);
+    mark.addEventListener('touchcancel', cancelTouch);
+  }
+
+  // The chip is position:fixed against the viewport, so it goes stale the
+  // instant the page scrolls under it — hiding beats drawing a control that
+  // now points at the wrong text.
+  window.addEventListener('scroll', () => { if (_hlChipEl) hideHighlightRemovalChip(); }, { passive: true, capture: true });
 
   function restoreTextHighlights() {
     const urlKey = window.location.hostname + window.location.pathname;
@@ -719,8 +852,9 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     const mark = document.createElement('mark');
     mark.dataset.sraHlId = hlId;
     mark.style.cssText = `background:${color};border-radius:3px;padding:0 1px;mix-blend-mode:multiply;cursor:default;`;
-    mark.title = 'Double-click to remove highlight';
+    mark.title = 'Double-click, or focus and press Delete, to remove this highlight.';
     mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
+    wireHighlightRemovalAffordance(mark, hlId);
 
     try {
       range.surroundContents(mark);
@@ -1086,6 +1220,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       if (msg.highlightPara !== undefined) highlightEnabled   = !!msg.highlightPara;
       if (msg.highlightColor     !== undefined) highlightColorEnabled     = !!msg.highlightColor;
       if (msg.highlightSummarize !== undefined) highlightSummarizeEnabled = !!msg.highlightSummarize;
+      if (msg.highlightPersist   !== undefined) highlightPersistEnabled   = !!msg.highlightPersist;
       if (msg.autohide      !== undefined) autohideEnabled    = !!msg.autohide;
       if (msg.autohideTimeout !== undefined) autohideTimeoutSec = Number(msg.autohideTimeout) || 12;
       if (msg.pinDefault    !== undefined) pinDefault         = !!msg.pinDefault;
