@@ -34,6 +34,24 @@ const RESPONSE_CONFIDENCE = Object.freeze({
   correct:   0.90,
 });
 
+/* Item 43: grading authority degrades as the difficulty ladder climbs.
+ * recognition is deterministic (unchanged, uses RESPONSE_CONFIDENCE above).
+ * free_recall and scenario are graded by a model instead — an LLM's
+ * judgement must never outrank the client's own deterministic measurement,
+ * so a model verdict is capped well below RESPONSE_CONFIDENCE at every
+ * level, enforced HERE rather than trusted from whatever produced the
+ * signal (see fromSignal() below, which reads sig.gradingMethod/sig.level
+ * and never a caller-supplied confidence number). scenario's answer is
+ * legitimately outside the passage, so its judgement is the least
+ * trustworthy of the two graded levels and sits below free_recall, which at
+ * least has the span to compare against. Mirrors (and must stay in sync
+ * with) tests/contract/grading.js's own GRADING_CONFIDENCE — that file
+ * documents the contract, this one is what actually gets applied. */
+const MODEL_RESPONSE_CONFIDENCE = Object.freeze({
+  free_recall: 0.75,
+  scenario:    0.55,
+});
+
 const SIGNAL_CONFIDENCE = Object.freeze({
   too_slow:     0.70,
   too_fast:     0.55,
@@ -93,26 +111,53 @@ function fromSignal(sig) {
    * they have just read — not an inference about it. A correct answer says
    * the reading that triggered the question was fine, and is exactly as
    * informative; it resolves to on_pace, which earns no interruption and
-   * stops the system pressing. */
+   * stops the system pressing.
+   *
+   * Item 43: sig.gradingMethod distinguishes a deterministic verdict
+   * (recognition — client-side index comparison, RESPONSE_CONFIDENCE) from
+   * a model-graded one (free_recall/scenario — MODEL_RESPONSE_CONFIDENCE,
+   * always lower). A signal that never says gradingMethod is treated as
+   * deterministic — every response-signal record made before this item
+   * looked like that, and still does. */
   if (sig.type === 'response') {
+    const isModelGraded = sig.gradingMethod === 'model';
+
+    // Belt-and-suspenders: scenario must never assert "wrong" on model
+    // judgement alone (a false correction there is worse than a missed one,
+    // and it is unrecoverable — the reader stops trusting the system).
+    // tests/contract/grading.js's validateGradingResponse() already refuses
+    // to produce this combination, but the cost of a false "wrong" here is
+    // high enough that this file does not rely solely on the caller having
+    // upheld that upstream — a scenario-level 'incorrect' signal, however it
+    // arrived, asserts nothing rather than STRUGGLING.
+    if (sig.subtype === 'incorrect' && sig.level === 'scenario') return null;
+
     if (sig.subtype === 'incorrect') {
       return {
         label: STATES.STRUGGLING,
-        confidence: RESPONSE_CONFIDENCE.incorrect,
-        evidence: ['You picked a different answer to the one in the passage'],
+        confidence: isModelGraded
+          ? (MODEL_RESPONSE_CONFIDENCE[sig.level] ?? MODEL_RESPONSE_CONFIDENCE.free_recall)
+          : RESPONSE_CONFIDENCE.incorrect,
+        evidence: [isModelGraded
+          ? 'The grader thinks that answer misses something in the passage'
+          : 'You picked a different answer to the one in the passage'],
         signal: sig,
       };
     }
     if (sig.subtype === 'correct') {
       return {
         label: STATES.ON_PACE,
-        confidence: RESPONSE_CONFIDENCE.correct,
-        evidence: ['You answered that correctly'],
+        confidence: isModelGraded
+          ? (MODEL_RESPONSE_CONFIDENCE[sig.level] ?? MODEL_RESPONSE_CONFIDENCE.free_recall)
+          : RESPONSE_CONFIDENCE.correct,
+        evidence: [isModelGraded ? 'The grader thinks that answer is right' : 'You answered that correctly'],
         signal: sig,
       };
     }
-    // Dismissed without answering. A refusal to be tested is the reader's
-    // right and says nothing about their comprehension, so it asserts nothing.
+    // Dismissed without answering (asserts nothing — the reader's right);
+    // 'unknown' (the grader could not decide — unknown never interrupts,
+    // invariants 5/9); or 'ungraded' (adversarial — the system responds, it
+    // does not mark). None of these assert anything about comprehension.
     return null;
   }
 

@@ -11,6 +11,10 @@
        here and in the floating card — same commit-time-confidence flow, same
        calibration copy, same "never an explanation on a correct answer". -->
   <link rel="stylesheet" href="../styles/overlay.css">
+  <!-- Item 43: quiz.js grades free_recall/scenario answers itself, via its
+       own small backend-client.js/grading-client.js instances — it needs
+       the backend origin config.js defines, same as popup.html loads it. -->
+  <script src="../shared/config.js"></script>
   <style>
     body { padding-bottom: 48px; }
 
@@ -75,6 +79,10 @@
     .result-mark { font-weight: 700; flex: none; }
     .result-mark.correct { color: var(--alc-sage-2); }
     .result-mark.wrong { color: var(--alc-wrong); }
+    /* Item 43: an inconclusive grade or an ungraded (adversarial) response —
+       neither counted as wrong, so it gets neither the wrong-mark color nor
+       a wrong-styled row below it. */
+    .result-mark.unknown { color: var(--alc-muted); }
     .result-q { font-size: 12.5px; line-height: 1.5; }
     .result-explain { margin: 6px 0 0 20px; font-size: 12px; color: var(--alc-muted); line-height: 1.6; }
     .result-span {
@@ -125,8 +133,12 @@
   <div id="quizRoot"></div>
 
   <p class="privacy-note">
-    This quiz is yours. Your answers and confidence are saved on this device only, never sent
-    anywhere — and the passage text itself isn't kept, only the questions.
+    This quiz is yours. Your answers and confidence are saved on this device only — and the
+    passage text itself isn't kept, only the questions. Most questions are graded right here, on
+    your device, and never sent anywhere. A few ask you to write your own answer instead of
+    picking one; for those, what you write is sent to the grading server to be checked. Some
+    questions are never graded at all — those are marked as such and, like everything else here,
+    stay on this device only.
   </p>
 </div>
 

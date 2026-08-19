@@ -18,6 +18,19 @@
  * without passage text. Deletable per document and all at once, and
  * deletion actually deletes (delete() removes the record, not a tombstone).
  *
+ * Item 43 — an answer can now be free-text (`answerText`) with a
+ * model-assigned `verdict`/`gradingMethod`, alongside the original
+ * multiple-choice shape. This file's own promise is unchanged: what
+ * recordAnswer() is given is written here, locally, and nowhere else. What
+ * DOES change with this item is what happens to `answerText` a moment
+ * BEFORE it reaches this function — for free_recall/scenario questions,
+ * quiz.js's own commit() sends it to the grading server first (see that
+ * file, and src/shared/grading-client.js) to get the verdict this store
+ * then persists. That transient send is new as of this item and is not
+ * this module's concern or this module's transmission — by the time
+ * anything reaches recordAnswer(), grading (if any) has already happened
+ * and this store, as always, only writes it to disk.
+ *
  * DB access is behind a small injectable `backend` — {put, get, getAll,
  * delete}, all Promise-returning — so this module is unit-testable with a
  * plain in-memory fake instead of a real IndexedDB, which jsdom does not
