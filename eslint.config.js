@@ -71,7 +71,7 @@ export default [
   // pdf-viewer's viewer.js became a real module in item 30c (it statically
   // imports reading-bridge.js), matching viewer.html's own `type="module"`.
   {
-    files: ['alcoia/src/pdf-viewer/viewer.js'],
+    files: ['alcoia/src/pdf-viewer/viewer.js', 'alcoia/src/pdf-viewer/render.js', 'alcoia/src/pdf-viewer/sidebar.js'],
     languageOptions: { sourceType: 'module', globals: { ...browserExtension, pdfjsLib: 'readonly' } },
   },
   {

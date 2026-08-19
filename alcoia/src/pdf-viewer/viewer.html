@@ -2,53 +2,165 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>alcoia — PDF Viewer</title>
+  <title>PDF Viewer</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
-  <!-- Item 30c: alcoia's own question card / nudge popups now render on
-       this page — overlay.css is what styles them, the same stylesheet
-       every ordinary DOM page gets from content.js. -->
+  <!-- Item 30c: alcoia's own question card / nudge popups render on this
+       page — overlay.css is what styles them, the same stylesheet every
+       ordinary DOM page gets from content.js. Its --alc-* tokens are also
+       reused below for the highlight overlay and the arrival-flash
+       animation, so a colour highlight looks and behaves identically to
+       the one content.js draws on an ordinary page. -->
   <link rel="stylesheet" href="../styles/overlay.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --accent: #5F4589;
-      --bg:     #3a3a3a;
-      --bar-h:  44px;
-    }
-    body { background: var(--bg); font-family: var(--alc-serif); min-height: 100vh; }
+    :root { --bar-h: 48px; --sidebar-w: 200px; }
+
+    /* Item 39, problem 4: viewer CHROME (toolbar, sidebar, dialogs) uses the
+       system UI font, matching Chrome's own PDF viewer — never Literata
+       (alcoia's reading serif) or Plus Jakarta Sans (alcoia's own UI voice).
+       This is a deliberate, scoped exception to alcoia's normal type policy
+       (the project notes §8) that applies to this file's chrome only. Text actually
+       read from the document itself is pdf.js's own rendered glyphs (the
+       canvas bitmap), never CSS type, so nothing here touches the reading
+       experience anywhere else in the extension. */
+    :root { --sys-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+
+    /* Native's viewer chrome is a fixed dark theme regardless of the
+       browser's own light/dark setting (confirmed against a real
+       screenshot with the OS forced to light mode while building this) —
+       so this page always wears alcoia's dark-mode tokens for its chrome,
+       independent of the reader's own sra_dark_mode preference. Every
+       colour below is one of panel.css's existing --paper/--surface/
+       --border/--text/--muted/--accent tokens; nothing here is a new hex
+       value. */
+    body { background: var(--paper-2); font-family: var(--sys-ui); min-height: 100vh; }
 
     /* ── Toolbar ── */
     #toolbar {
       position: fixed; top: 0; left: 0; right: 0; height: var(--bar-h);
-      background: #222; color: #ddd; display: flex; align-items: center;
-      gap: 10px; padding: 0 14px; z-index: 999; box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+      background: var(--paper); color: var(--text); display: flex; align-items: center;
+      gap: 4px; padding: 0 8px; z-index: 999; border-bottom: 1px solid var(--border);
+      font-family: var(--sys-ui); font-size: 13px;
     }
-    #toolbar .brand { font-size: 13px; font-weight: 700; font-style: italic; color: var(--accent); margin-right: 6px; }
-    #toolbar button {
-      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
-      color: #ccc; border-radius: 6px; padding: 4px 10px; cursor: pointer;
-      font-family: var(--alc-serif); font-size: 12px;
+    .tb-group { display: flex; align-items: center; gap: 2px; }
+    .tb-left  { flex: 1 1 0; min-width: 0; }
+    .tb-right { flex: 1 1 0; justify-content: flex-end; }
+    .tb-title {
+      font-weight: 600; font-size: 13px; margin-left: 6px; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; color: var(--text);
     }
-    #toolbar button:hover { background: rgba(255,255,255,0.15); }
-    #page-info { font-size: 12px; color: #aaa; margin-left: auto; }
-    #filename  { font-size: 11px; color: #888; font-style: italic; max-width: 260px;
-                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tb-divider { width: 1px; align-self: stretch; margin: 10px 4px; background: var(--border-2); }
 
-    /* ── Canvas area ── */
+    .tb-icon-btn {
+      background: none; border: none; color: var(--text); cursor: pointer;
+      width: 32px; height: 32px; border-radius: 6px; display: flex;
+      align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .tb-icon-btn:hover:not(:disabled) { background: rgba(230,227,219,0.10); }
+    .tb-icon-btn:disabled { opacity: 0.35; cursor: default; }
+    .tb-icon-btn.active { background: var(--accent); color: white; }
+
+    .tb-pagenum { display: flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; font-size: 13px; }
+    #pageInput {
+      width: 34px; text-align: center; background: rgba(230,227,219,0.10); border: 1px solid transparent;
+      border-radius: 4px; color: var(--text); font: inherit; padding: 3px 2px;
+    }
+    #pageInput:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+    #pageCount { color: var(--muted); }
+
+    .tb-pct-btn {
+      background: rgba(230,227,219,0.10); border: none; color: var(--text); cursor: pointer;
+      border-radius: 4px; padding: 5px 8px; font: inherit; font-variant-numeric: tabular-nums; min-width: 48px;
+    }
+    .tb-pct-btn:hover { background: rgba(230,227,219,0.18); }
+
+    /* ── Dropdown / kebab menus ── */
+    .pdf-menu {
+      position: fixed; background: var(--surface); border: 1px solid var(--border-2);
+      border-radius: 8px; padding: 6px; min-width: 200px; box-shadow: var(--shadow);
+      z-index: 1200; font-family: var(--sys-ui);
+    }
+    .pdf-menu button {
+      display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+      background: none; border: none; color: var(--text); font: inherit; font-size: 13px;
+      padding: 8px 10px; border-radius: 6px; cursor: pointer;
+    }
+    .pdf-menu button:hover { background: var(--accent-sf); }
+    .pdf-menu button svg { flex-shrink: 0; color: var(--muted); }
+    .pdf-menu button .menu-check { margin-left: auto; color: var(--accent); visibility: hidden; }
+    .pdf-menu button[aria-checked="true"] .menu-check { visibility: visible; }
+    .pdf-menu hr { border: none; border-top: 1px solid var(--border); margin: 6px 2px; }
+    .pdf-zoom-menu button { justify-content: space-between; }
+
+    /* ── Layout: sidebar + page area ──
+       The whole DOCUMENT scrolls (window.scrollY), not a nested container —
+       comprehension-monitor.js (alcoia's primary reading sensor) reads
+       window.scrollY directly, same as it does on an ordinary DOM page, so
+       the page area cannot become its own separate scrollbox without
+       silently breaking dwell/pace tracking for every PDF. The sidebar is
+       fixed-positioned over the page instead of a flex sibling, and #viewer
+       shifts over via margin-left when it opens rather than being resized
+       by a shared flex layout. */
+    #pdfSidebar {
+      position: fixed; top: var(--bar-h); left: 0; bottom: 0; width: 0; overflow: hidden;
+      background: var(--paper); border-right: 1px solid var(--border);
+      transition: width 0.16s ease; display: flex; flex-direction: column; z-index: 500;
+    }
+    #pdfSidebar.open { width: var(--sidebar-w); }
+    .pdf-sidebar-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .pdf-sidebar-tabs[hidden] { display: none; } /* an author display rule otherwise beats the UA [hidden] rule it shares a specificity tier with */
+    .pdf-sidebar-tab {
+      flex: 1; background: none; border: none; color: var(--muted); padding: 8px 0;
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
+    }
+    .pdf-sidebar-tab.active { color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+    .pdf-sidebar-body { flex: 1; overflow-y: auto; padding: 10px; }
+    .pdf-sidebar-empty { color: var(--muted); font-size: 12px; padding: 10px 2px; }
+
+    .pdf-thumb {
+      display: block; width: 100%; background: none; border: 2px solid transparent; border-radius: 6px;
+      padding: 8px 0 4px; cursor: pointer; text-align: center; margin-bottom: 4px;
+    }
+    .pdf-thumb:hover { background: var(--accent-sf); }
+    .pdf-thumb.current { border-color: var(--accent); background: var(--accent-sf); }
+    .pdf-thumb canvas { display: block; margin: 0 auto 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.5); background: white; }
+    .pdf-thumb span { font-size: 11px; color: var(--muted); }
+
+    .pdf-outline-list, .pdf-outline-list ul { list-style: none; padding-left: 14px; }
+    .pdf-outline-list { padding-left: 0; }
+    .pdf-outline-item {
+      display: block; padding: 5px 4px; font-size: 12.5px; color: var(--text);
+      text-decoration: none; border-radius: 5px; line-height: 1.35;
+    }
+    .pdf-outline-item:hover { background: var(--accent-sf); color: var(--accent); }
+
+    /* ── Page area ──
+       scroll-snap-type sits on html, not #viewer — the document itself is
+       the scrolling element (see the sidebar comment above); .page-wrap's
+       scroll-snap-align applies against whichever scrolling ancestor it
+       finds, which is now correctly the document. */
+    html { scroll-snap-type: y proximity; } /* momentum is the browser's own; this adds native's page-snap feel on top of it */
     #viewer {
-      padding-top: calc(var(--bar-h) + 16px);
-      padding-bottom: 40px;
+      padding: calc(var(--bar-h) + 16px) 24px 40px;
+      margin-left: 0; transition: margin-left 0.16s ease;
       display: flex; flex-direction: column; align-items: center; gap: 14px;
     }
+    #viewer.sidebar-open { margin-left: var(--sidebar-w); }
     .page-wrap {
-      position: relative;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      position: relative; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+      scroll-snap-align: start; flex-shrink: 0;
     }
     .page-wrap canvas { display: block; }
+    /* justify-content centers the (at most two, via #viewer's own JS-set
+       max-width) pages within whatever width #viewer has — including while
+       the sidebar is open, since that only changes margin-left above, not
+       #viewer's own content width. */
+    #viewer.two-page { flex-direction: row; flex-wrap: wrap; justify-content: center; }
 
     /* Text layer — transparent overlay so the reader can select the page's
-       text, the same as any other selectable page in the extension. */
+       text, unchanged from before this item except for the selection
+       colour below (native-parity, problem 4's "also close these gaps"). */
     .textLayer {
       position: absolute; inset: 0; overflow: hidden;
       line-height: 1; pointer-events: none;
@@ -57,51 +169,114 @@
       color: transparent; position: absolute; white-space: pre;
       cursor: text; pointer-events: all; transform-origin: 0% 0%;
     }
-    .textLayer ::selection { background: rgba(126,96,174,0.25); }
+    /* Native's own selection tint, not alcoia's lilac — this is inside the
+       PDF page itself, standing in for the document's own paper, the one
+       part of this view that is not "chrome". */
+    .textLayer ::selection { background: rgba(0,100,255,0.30); }
+
+    /* ── Highlight overlay (item 39, problem 2) — see pdf-highlights.js ── */
+    .hl-overlay { position: absolute; inset: 0; pointer-events: none; }
+    .hl-bar { position: absolute; border-radius: 2px; mix-blend-mode: multiply; pointer-events: none; }
+    .hl-chip {
+      position: fixed; z-index: 2147483000; background: var(--surface); color: var(--text);
+      border: 1px solid var(--border-2); border-radius: 8px; padding: 4px 6px; box-shadow: var(--shadow);
+      font-family: var(--sys-ui);
+    }
+    .hl-chip button {
+      background: none; border: none; cursor: pointer; color: var(--wrong); font: inherit; font-size: 11px; padding: 2px 4px;
+    }
 
     /* ── Loading / error ── */
     #status {
       position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
-      color: #aaa; font-size: 15px; font-style: italic; text-align: center;
+      color: var(--muted); font-size: 14px; text-align: center; font-family: var(--sys-ui);
     }
     #error-box {
       display: none;
       background: rgba(180,40,40,0.12); border: 1px solid rgba(180,40,40,0.3);
       border-radius: 10px; padding: 18px 24px; color: #f88; font-size: 13px;
-      max-width: 480px; text-align: center; margin: 80px auto;
+      max-width: 480px; text-align: center; margin: 80px auto; font-family: var(--sys-ui);
     }
 
-    /* Print: the toolbar and its fixed positioning have no place on paper,
-       and each rendered page should start its own printed page rather than
-       splitting across one. */
+    /* ── Password / properties dialogs ── */
+    .pdf-dialog-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1300;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .pdf-dialog {
+      background: var(--surface); color: var(--text); border-radius: 10px; padding: 20px;
+      width: 340px; max-width: 90vw; font-family: var(--sys-ui); box-shadow: var(--shadow);
+    }
+    .pdf-dialog h2 { font-size: 15px; font-weight: 700; margin-bottom: 12px; }
+    .pdf-dialog p.dialog-note { font-size: 12px; color: var(--muted); margin: -6px 0 12px; }
+    .pdf-dialog input[type="password"] {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-2);
+      background: var(--paper); color: var(--text); font: inherit; margin-bottom: 10px;
+    }
+    .pdf-dialog .dialog-error { color: #ff8a8a; font-size: 12px; margin-bottom: 8px; min-height: 1em; }
+    .pdf-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+    .pdf-dialog button.primary {
+      background: var(--accent); color: white; border: none; border-radius: 6px; padding: 7px 14px; font: inherit; cursor: pointer;
+    }
+    .pdf-dialog button.secondary {
+      background: none; border: 1px solid var(--border-2); color: var(--text); border-radius: 6px; padding: 7px 14px; font: inherit; cursor: pointer;
+    }
+    .pdf-props-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .pdf-props-table tr + tr td { border-top: 1px solid var(--border); }
+    .pdf-props-table td { padding: 6px 0; vertical-align: top; }
+    .pdf-props-table td:first-child { color: var(--muted); width: 40%; padding-right: 10px; }
+    .pdf-props-table td:last-child { word-break: break-word; }
+
+    /* ── Presentation mode ── */
+    body.presenting #toolbar, body.presenting #pdfSidebar { display: none; }
+    body.presenting { background: black; }
+    body.presenting #viewer { padding: 0; margin-left: 0 !important; justify-content: center; }
+    body.presenting .page-wrap { box-shadow: none; }
+
+    /* Print: unchanged in spirit from before this item — the toolbar/sidebar
+       have no place on paper, and each rendered page starts its own printed
+       page rather than splitting across one. */
     @media print {
-      #toolbar, #status, #error-box { display: none !important; }
-      #viewer { padding-top: 0; }
+      #toolbar, #pdfSidebar, #status, #error-box { display: none !important; }
+      #viewer { padding: 0; margin-left: 0 !important; }
       .page-wrap { break-inside: avoid; break-after: page; box-shadow: none; }
       .page-wrap:last-child { break-after: auto; }
     }
   </style>
 </head>
-<body>
+<body class="dark-mode">
 
 <div id="toolbar">
-  <span class="brand">alcoia</span>
-  <button id="prevBtn">&#8592; Prev</button>
-  <button id="nextBtn">Next &#8594;</button>
-  <button id="zoomOutBtn" title="Zoom out">&#8722;</button>
-  <button id="zoomInBtn" title="Zoom in">&#43;</button>
-  <button id="fitWidthBtn" title="Fit page width">Fit width</button>
-  <button id="fitPageBtn" title="Fit whole page">Fit page</button>
-  <button id="rotateLeftBtn" title="Rotate left">&#8634;</button>
-  <button id="rotateRightBtn" title="Rotate right">&#8635;</button>
-  <button id="printBtn">Print</button>
-  <button id="downloadBtn">Download</button>
-  <span id="filename">loading…</span>
-  <span id="page-info"></span>
-  <button id="openNativeBtn" title="Open this document in your browser's own PDF viewer — full search, print and every other browser feature, no alcoia detection">Open in browser viewer</button>
+  <div class="tb-group tb-left">
+    <button id="sidebarToggleBtn" class="tb-icon-btn" title="Show/hide sidebar" aria-pressed="false"></button>
+    <span id="filename" class="tb-title">loading…</span>
+  </div>
+
+  <div class="tb-group tb-center">
+    <span class="tb-pagenum">
+      <input id="pageInput" type="text" inputmode="numeric" value="1" aria-label="Page number">
+      <span>/</span>
+      <span id="pageCount"></span>
+    </span>
+    <span class="tb-divider"></span>
+    <button id="zoomOutBtn" class="tb-icon-btn" title="Zoom out"></button>
+    <button id="zoomPctBtn" class="tb-pct-btn" title="Zoom level">100%</button>
+    <button id="zoomInBtn" class="tb-icon-btn" title="Zoom in"></button>
+    <span class="tb-divider"></span>
+    <button id="fitBtn" class="tb-icon-btn" title="Fit width"></button>
+    <button id="rotateBtn" class="tb-icon-btn" title="Rotate clockwise"></button>
+  </div>
+
+  <div class="tb-group tb-right">
+    <button id="downloadBtn" class="tb-icon-btn" title="Download"></button>
+    <button id="printBtn" class="tb-icon-btn" title="Print"></button>
+    <button id="kebabBtn" class="tb-icon-btn" title="More actions"></button>
+  </div>
 </div>
 
+<div id="pdfSidebar"></div>
 <div id="viewer"></div>
+
 <div id="status">Loading PDF…</div>
 <div id="error-box"></div>
 
