@@ -32,6 +32,20 @@ const LICENSE = path.join(HERE, 'LICENSE');
 
 export const TARGETS = ['chrome', 'firefox'];
 
+/* manifests/base.json's `externally_connectable.matches` — JSON cannot hold
+ * a comment, so the explanation lives here instead. It is currently
+ * 'http://localhost:5173/*', a DEV VALUE: the Phase 1 landing page
+ * (alcoiaWeb, a separate repo) that hands this extension a magic-link
+ * sign-in code via chrome.runtime.sendMessage(). alcoia.app does not
+ * resolve yet — the whole roadmap is designed to work without it — so this
+ * MUST be swapped to 'https://alcoia.app/*' before any real launch, and
+ * src/shared/config.js's WEB_APP_ORIGIN constant (the runtime origin check
+ * background.js's onMessageExternal listener does, independent of this
+ * manifest entry) must be swapped to match at the same time — the two are
+ * not wired together and a mismatch would make one of them wrong silently.
+ * The port here is Vite's default and a GUESS at what alcoiaWeb actually
+ * runs on locally; confirm against that repo's own dev server output. */
+
 /* Excluded from the shipped package.
  *
  * `server/` used to be the entry that mattered most here — it lived inside

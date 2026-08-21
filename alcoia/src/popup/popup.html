@@ -578,6 +578,25 @@
   <!-- ════════════════════ TAB 3 — SESSION ════════════════════ -->
   <div class="tab-panel" id="tab-session">
 
+    <!-- Item S3. Free features (retrieval questions, reading signals,
+         snooze) never need this — it gates only the paid ones. -->
+    <div class="section">
+      <div class="section-label">Account</div>
+      <div id="accountSignedOut">
+        <p class="section-note">Sign in for the paid features — your own documents, portable
+          receipts, sync. Everything else works without an account.</p>
+        <div class="btn-row">
+          <button class="btn btn-ghost" id="signInBtn">Sign in</button>
+        </div>
+      </div>
+      <div id="accountSignedIn" hidden>
+        <p class="section-note">Signed in as <strong id="accountEmail"></strong></p>
+        <div class="btn-row">
+          <button class="btn btn-ghost" id="signOutBtn">Sign out</button>
+        </div>
+      </div>
+    </div>
+
     <div class="section">
       <div class="section-label">This page</div>
       <div class="btn-row">
