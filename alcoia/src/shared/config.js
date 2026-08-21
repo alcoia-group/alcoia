@@ -31,7 +31,7 @@
  * entry, by hand, together.
  */
 (function (root) {
-  const BACKEND_ORIGIN = 'https://api.alcoia.invalid';
+  const BACKEND_ORIGIN = 'http://localhost:3000';
 
   // *** DEV VALUE — NOT LIVE. *** alcoia.app does not resolve yet; this
   // whole roadmap is designed to work without it. The port is Vite's
