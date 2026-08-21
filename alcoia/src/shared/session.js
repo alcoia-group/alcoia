@@ -101,15 +101,13 @@ export function createSessionManager(opts = {}) {
   }
 
   /* Exchanges a one-time code (handed off from the landing page) for a real
-   * session, and stores it. Returns { ok: true } on success, { ok: false,
-   * error } on any failure — expired code, already-used code, network
-   * failure, or a response that fails shape validation. No email comes
-   * back from this endpoint (see the CONFIRMED shape note below) — this
-   * file has never had one to return. Never throws, never retries: a
-   * rejected code is reported honestly, once (the project notes invariant 8's
-   * "every failure degrades to silence" pattern, applied to sign-in — the
-   * difference here is a rejection surfaces as an explicit `ok:false`, not
-   * silence, since a reader trying to sign in
+   * session, and stores it. Returns { ok: true, email } on success,
+   * { ok: false, error } on any failure — expired code, already-used code,
+   * network failure, or a response that fails shape validation. Never
+   * throws, never retries: a rejected code is reported honestly, once
+   * (the project notes invariant 8's "every failure degrades to silence" pattern,
+   * applied to sign-in — the difference here is a rejection surfaces as an
+   * explicit `ok:false`, not silence, since a reader trying to sign in
    * needs to know it failed). */
   async function exchangeCode(code, urlOverride) {
     const url = urlOverride;
@@ -135,22 +133,22 @@ export function createSessionManager(opts = {}) {
       // reference, that repo is not built here): src/http/routes/
       // extension-session.js, createExtensionSessionRouter's POST
       // /api/auth/extension-session/exchange success path —
-      // `res.status(200).json({ sessionToken, kind: 'extension',
-      // expiresAt: expiresAt.toISOString() })`. Two things the earlier
-      // ASSUMED shape got wrong: the token field is named `sessionToken`,
-      // not `token`; and there is NO email field anywhere in this
-      // response — the exchange mints a session keyed to an account id
-      // server-side and never echoes the account's email back here.
-      // Stored/returned shape below keeps this file's OWN field names
-      // (`token`, no `email`) unchanged from what getSession() already
-      // expects — only the SOURCE property read from `data` is corrected.
-      if (!data || typeof data.sessionToken !== 'string' || !data.sessionToken) {
+      // `res.status(200).json({ sessionToken, email, kind: 'extension',
+      // expiresAt: expiresAt.toISOString() })`. The token field is named
+      // `sessionToken`, not `token` — that part was already fixed in an
+      // earlier pass. `email` WAS missing from that route's response at
+      // that time (confirmed absent, not just unread) — this route now
+      // looks the account up by the handoff's account_id and includes it,
+      // fixed at the source rather than papered over here. Restored to
+      // required-field status accordingly, this time confirmed real.
+      if (!data || typeof data.sessionToken !== 'string' || !data.sessionToken
+        || typeof data.email !== 'string' || !data.email) {
         return { ok: false, error: 'malformed_response' };
       }
 
-      const session = { token: data.sessionToken, expiresAt: normaliseExpiry(data.expiresAt, now) };
+      const session = { token: data.sessionToken, email: data.email, expiresAt: normaliseExpiry(data.expiresAt, now) };
       await storageSet({ [STORAGE_KEY]: session });
-      return { ok: true };
+      return { ok: true, email: session.email };
     } catch (e) {
       return { ok: false, error: 'network_error' };
     }
