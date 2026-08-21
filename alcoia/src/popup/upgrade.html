@@ -6,10 +6,28 @@
   <title>Plans · alcoia</title>
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
+  <!-- Item E3: upgrade.js needs the confirmed backend URLs (checkout,
+       portal, entitlements) — loaded first, as a classic script, same as
+       account.html/quiz.html. -->
+  <script src="../shared/config.js"></script>
   <!--
     TODO (owner): these figures are provisional, carried across from
     WEBSITE-BRIEF.md §12. Confirm before anything ships or takes payment.
-    No checkout is wired up — every button here is inert on purpose.
+
+    Item E3: checkout IS wired up now, for the Reader tier only — the
+    server (src/http/routes/billing.js) validates exactly 'reader' or
+    'student' as a plan key, but this page has never had a separate
+    Student button (see the "Students: 40% off" note-row below; that
+    reads as an on-request discount, not a second self-serve checkout).
+    Teams/classrooms and Institution stay inert — there is no self-serve
+    checkout for either on the server today.
+
+    The Annual/Monthly toggle below is DISPLAY ONLY. The confirmed
+    checkout request carries a plan key alone, no billing-period field —
+    src/billing/plans.js maps 'reader' to exactly one Creem product_id,
+    full stop. Whichever toggle state is showing does not change what
+    gets purchased. Flagged, not solved here — see upgrade.js's own
+    header.
   -->
   <style>
     body { padding-bottom: 72px; }
@@ -91,6 +109,23 @@
     }
     .tier-note { font-size: 11px; color: var(--faint); margin-top: 6px; min-height: 15px; }
     .tier .btn { width: 100%; margin: 18px 0 16px; }
+
+    /* Item E3: the Reader tier's action area — a plain state note under
+       its button. Neutral colour by default (checking, processing);
+       .current for "you already have this" and .error both get their own
+       — never alarming red for a failed checkout attempt, matching this
+       product's own "never accuse" tone elsewhere. */
+    .plan-state-note {
+      font-size: 11.5px; line-height: 1.5; margin: -8px 0 16px; min-height: 15px;
+    }
+    .plan-state-note.current { color: var(--sage-2); }
+    .plan-state-note.error { color: var(--muted); }
+    .manage-link {
+      background: none; border: none; padding: 0; margin: -8px 0 16px;
+      font-family: var(--alc-ui); font-size: 11.5px; font-weight: 600;
+      color: var(--accent-2); cursor: pointer; text-decoration: underline;
+      display: block;
+    }
 
     .tier-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .tier-list li {
@@ -197,7 +232,9 @@
       <div class="tier-for">For anyone who finishes long things and wants to keep them.</div>
       <div class="tier-price" id="readerPrice">$4.92<span class="unit">/mo</span></div>
       <div class="tier-note" id="readerNote">$59 billed annually</div>
-      <button class="btn btn-primary" disabled>Coming soon</button>
+      <button class="btn btn-primary" id="readerBtn">Subscribe</button>
+      <p class="plan-state-note" id="readerStateNote" hidden></p>
+      <button class="manage-link" id="manageBtn" hidden>Manage subscription</button>
       <ul class="tier-list">
         <li>Everything in Free, unlimited</li>
         <li>Retrieval questions when you slow down</li>
@@ -309,6 +346,6 @@
 
 </div>
 
-<script src="upgrade.js"></script>
+<script type="module" src="upgrade.js"></script>
 </body>
 </html>
