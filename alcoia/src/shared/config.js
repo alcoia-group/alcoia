@@ -65,5 +65,9 @@
     // cannot import an ES module, still reads the same literal every other
     // context does. If you change one, change both.
     SESSION_STORAGE_KEY: 'sra_session',
+    // Item E1 — src/shared/entitlements.js. Named explicitly in
+    // SERVER-ARCHITECTURE.md §4: "GET /api/entitlements returns
+    // { tier, features[], expires }."
+    ENTITLEMENTS_URL: BACKEND_ORIGIN + '/api/entitlements',
   });
 })(typeof self !== 'undefined' ? self : this);
