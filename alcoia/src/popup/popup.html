@@ -10,10 +10,19 @@
     /* Popup-specific layout. Shared primitives — pills, buttons, fields, key
        caps, the colour tokens — live in panel.css. */
 
-    /* Chrome sizes the toolbar popup to content up to 800x600. Safari on
-       iOS presents it as a sheet at the device width instead, so a fixed
-       400px would be clipped on a phone and stranded on an iPad. */
-    body { width: min(400px, 100vw); max-width: 400px; }
+    /* Chrome and Firefox (build.mjs's only two targets — there is no
+       Safari build here despite the comment this replaced) both size the
+       toolbar popup TO this content, up to ~800x600. `100vw` inside that
+       popup resolves against the popup's OWN width — which the browser is
+       simultaneously trying to derive FROM this content's measured size.
+       That circular dependency is what caused a real, reproduced bug: the
+       popup flickering open/closed and changing size continuously, with no
+       console error, confirmed via bisection to have started on the exact
+       commit that introduced `100vw` here. A plain fixed width has no such
+       loop to fall into. If a narrower host ever needs supporting, that is
+       a `max-width` added deliberately later, not a viewport unit reached
+       for by default in a context that has no real viewport of its own. */
+    body { width: 400px; }
 
     /* ── Header ── */
     .header {
