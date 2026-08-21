@@ -69,5 +69,11 @@
     // SERVER-ARCHITECTURE.md §4: "GET /api/entitlements returns
     // { tier, features[], expires }."
     ENTITLEMENTS_URL: BACKEND_ORIGIN + '/api/entitlements',
+    // Item E3 — src/shared/billing.js. Both confirmed by reading
+    // alcoiaServer's src/http/routes/billing.js directly, not assumed:
+    // POST here with { plan: 'reader' | 'student' } -> { checkout_url };
+    // GET the portal one -> { portal_url }.
+    BILLING_CHECKOUT_URL: BACKEND_ORIGIN + '/api/billing/checkout',
+    BILLING_PORTAL_URL: BACKEND_ORIGIN + '/api/billing/portal',
   });
 })(typeof self !== 'undefined' ? self : this);
