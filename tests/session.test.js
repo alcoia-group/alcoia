@@ -72,19 +72,25 @@ describe('exchangeCode — the full receive-code -> exchange -> session-stored p
     const storage = fakeStorage();
     const fetchImpl = vi.fn(async () => ({
       ok: true,
-      json: async () => ({ token: 'sess-abc', email: 'reader@example.com', expires: '2099-01-01T00:00:00Z' }),
+      // The CONFIRMED real shape (alcoiaServer's src/http/routes/
+      // extension-session.js, createExtensionSessionRouter's success
+      // response): { sessionToken, kind: 'extension', expiresAt: <ISO> }.
+      // No `email` field exists in this response at all.
+      json: async () => ({ sessionToken: 'sess-abc', kind: 'extension', expiresAt: '2099-01-01T00:00:00Z' }),
     }));
     const m = createSessionManager({ storage, fetchImpl });
 
     const result = await m.exchangeCode('one-time-code', EXCHANGE_URL);
-    expect(result).toEqual({ ok: true, email: 'reader@example.com' });
+    expect(result).toEqual({ ok: true });
     expect(fetchImpl).toHaveBeenCalledWith(EXCHANGE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: 'one-time-code' }),
     });
+    // Stored shape keeps THIS file's own field names (token/expiresAt) —
+    // only the source property read off the response is `sessionToken`.
     expect(storage._dump()[STORAGE_KEY]).toEqual({
-      token: 'sess-abc', email: 'reader@example.com', expiresAt: Date.parse('2099-01-01T00:00:00Z'),
+      token: 'sess-abc', expiresAt: Date.parse('2099-01-01T00:00:00Z'),
     });
   });
 
@@ -93,6 +99,18 @@ describe('exchangeCode — the full receive-code -> exchange -> session-stored p
     const m = createSessionManager({ storage: fakeStorage(), fetchImpl });
     expect(await m.exchangeCode('', EXCHANGE_URL)).toEqual({ ok: false, error: 'no_code' });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('the OLD assumed shape ({ token, email }) is correctly rejected as malformed now — regression guard for this fix', async () => {
+    const storage = fakeStorage();
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ token: 'sess-abc', email: 'reader@example.com' }),
+    }));
+    const m = createSessionManager({ storage, fetchImpl });
+
+    expect(await m.exchangeCode('c', EXCHANGE_URL)).toEqual({ ok: false, error: 'malformed_response' });
+    expect(storage._dump()).toEqual({});
   });
 });
 
@@ -112,7 +130,7 @@ describe('exchangeCode — an expired or already-used code fails cleanly, never 
   it('an already-used code (a second exchange attempt) is rejected the same honest way', async () => {
     const storage = fakeStorage();
     const fetchImpl = vi.fn()
-      .mockImplementationOnce(async () => ({ ok: true, json: async () => ({ token: 't', email: 'a@b.com' }) }))
+      .mockImplementationOnce(async () => ({ ok: true, json: async () => ({ sessionToken: 't', kind: 'extension', expiresAt: '2099-01-01T00:00:00Z' }) }))
       .mockImplementationOnce(async () => ({ ok: false, status: 409 }));
     const m = createSessionManager({ storage, fetchImpl });
 
@@ -122,7 +140,7 @@ describe('exchangeCode — an expired or already-used code fails cleanly, never 
     expect(second).toEqual({ ok: false, error: 'code_rejected', status: 409 });
   });
 
-  it('a malformed success response (missing token/email) is rejected, not trusted', async () => {
+  it('a malformed success response (missing sessionToken) is rejected, not trusted', async () => {
     const storage = fakeStorage();
     const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ oops: true }) }));
     const m = createSessionManager({ storage, fetchImpl });
@@ -143,10 +161,10 @@ describe('exchangeCode — an expired or already-used code fails cleanly, never 
     await expect(m.exchangeCode('c', EXCHANGE_URL)).resolves.toEqual({ ok: false, error: 'malformed_response' });
   });
 
-  it('a missing expires field still stores the session, with a generous fallback expiry rather than an immediate one', async () => {
+  it('a missing expiresAt field still stores the session, with a generous fallback expiry rather than an immediate one', async () => {
     const storage = fakeStorage();
     const now = () => 1_000_000;
-    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ token: 't', email: 'a@b.com' }) }));
+    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ sessionToken: 't', kind: 'extension' }) }));
     const m = createSessionManager({ storage, fetchImpl, now });
 
     await m.exchangeCode('c', EXCHANGE_URL);

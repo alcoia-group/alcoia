@@ -40,7 +40,7 @@
   // own dev server output. Swap to 'https://alcoia.app' (and
   // manifests/base.json's matching entry to 'https://alcoia.app/*')
   // before any real launch.
-  const WEB_APP_ORIGIN = 'http://localhost:5173';
+  const WEB_APP_ORIGIN = 'http://localhost:8080';
 
   root.ALCOIA_CONFIG = Object.freeze({
     BACKEND_ORIGIN: BACKEND_ORIGIN,
