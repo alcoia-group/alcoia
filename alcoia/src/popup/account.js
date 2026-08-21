@@ -10,6 +10,7 @@
 // exists, including reactively noticing when the handoff completes while
 // this tab happens to still be open.
 import { createSessionManager } from '../shared/session.js';
+import { createEntitlementsManager } from '../shared/entitlements.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,6 +22,12 @@ chrome.storage.local.get({ sra_dark_mode: false }, (res) => {
 $('closeBtn').addEventListener('click', () => window.close());
 
 const session = createSessionManager();
+// Item E1 — reuses this page's own session manager rather than
+// constructing a second one; see entitlements.js's own header.
+const entitlements = createEntitlementsManager({
+  getSession: session.getSession,
+  entitlementsUrl: self.ALCOIA_CONFIG.ENTITLEMENTS_URL,
+});
 
 const signInForm = $('signInForm');
 const checkEmailState = $('checkEmailState');
@@ -88,6 +95,12 @@ $('signOutBtn').addEventListener('click', async () => {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
   if (!(self.ALCOIA_CONFIG.SESSION_STORAGE_KEY in changes)) return;
+  // Item E1: "refresh on sign-in" — the session key just changed (a fresh
+  // sign-in landed, or a sign-out cleared it); either way the cached
+  // entitlements from before this change are no longer trustworthy.
+  // refresh() itself resolves a cleared/absent session to free, so this is
+  // correct for sign-out too, not just sign-in.
+  entitlements.refresh();
   render();
 });
 
