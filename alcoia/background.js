@@ -163,18 +163,20 @@ chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
       // reference, that repo is not built here): src/http/routes/
       // extension-session.js, createExtensionSessionRouter's POST
       // /api/auth/extension-session/exchange success path —
-      // `res.status(200).json({ sessionToken, kind: 'extension',
+      // `res.status(200).json({ sessionToken, email, kind: 'extension',
       // expiresAt: expiresAt.toISOString() })`. Mirrors session.js's own
-      // exchangeCode() fix exactly: the token field is `sessionToken`, not
-      // `token`, and there is NO email field in this response at all — the
-      // exchange never echoes the account's email back here.
-      if (!data || typeof data.sessionToken !== 'string' || !data.sessionToken) {
+      // exchangeCode() exactly, including its second correction: `email`
+      // WAS confirmed absent from this response in an earlier pass; that
+      // route now looks the account up server-side and includes it, so
+      // this is restored to a required field here too, this time real.
+      if (!data || typeof data.sessionToken !== 'string' || !data.sessionToken
+        || typeof data.email !== 'string' || !data.email) {
         sendResponse({ ok: false, error: 'malformed_response' });
         return;
       }
-      const session = { token: data.sessionToken, expiresAt: normaliseSessionExpiry(data.expiresAt) };
+      const session = { token: data.sessionToken, email: data.email, expiresAt: normaliseSessionExpiry(data.expiresAt) };
       chrome.storage.local.set({ [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: session }, () => {
-        sendResponse({ ok: true });
+        sendResponse({ ok: true, email: session.email });
       });
     })
     .catch(() => {
