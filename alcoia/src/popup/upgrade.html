@@ -126,6 +126,18 @@
       color: var(--accent-2); cursor: pointer; text-decoration: underline;
       display: block;
     }
+    /* Item E3 follow-up: the Student plan's checkout trigger, inline
+       inside the existing note-row sentence rather than its own tier
+       card — the project notes/ALCOIA-PLATFORM-SPEC.md are explicit that Reader
+       and Student are ONE entitlement, never a feature difference, so a
+       full second pricing card here would visually claim a distinction
+       that does not exist. */
+    .link-btn {
+      background: none; border: none; padding: 0; margin: 0;
+      font: inherit; color: var(--accent-2); cursor: pointer;
+      text-decoration: underline;
+    }
+    .link-btn:disabled { color: var(--faint); cursor: default; text-decoration: none; }
 
     .tier-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
     .tier-list li {
@@ -290,10 +302,17 @@
   </div>
 
   <p class="note-row">
-    <strong>Students:</strong> 40% off Reader with an academic email address, on request.
+    <strong>Students:</strong> 40% off Reader with an academic email address —
+    <button class="link-btn" id="studentBtn" type="button">start checkout</button>.
     Regional pricing is available for Africa, South Asia and Latin America — the cost of a year
     should not be a week's income.
   </p>
+  <!-- Item E3 follow-up: same entitlement as Reader (the project notes,
+       ALCOIA-PLATFORM-SPEC.md — "never a feature difference"), so once
+       either checkout succeeds, the Reader tier's own action area above
+       already reflects it correctly; this note only ever needs to cover
+       the checkout attempt itself, not a separate "current plan" state. -->
+  <p class="plan-state-note" id="studentStateNote" hidden></p>
 
   <div class="faq">
     <h2>Questions</h2>
