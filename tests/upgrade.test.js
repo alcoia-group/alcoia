@@ -215,3 +215,68 @@ describe('resuming checkout after signing in (account.js -> upgrade.html handoff
     expect(document.getElementById('readerBtn').disabled).toBe(true);
   });
 });
+
+describe('Student checkout — same entitlement as Reader, confirmed server-side before wiring', () => {
+  it('a signed-out click on "start checkout" stores plan: student and routes to account.html, same as Reader', async () => {
+    loadUpgradeBody();
+    const chrome = fakeChrome();
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', vi.fn());
+
+    await importFreshUpgradeJs();
+    document.getElementById('studentBtn').click();
+
+    await vi.waitFor(() => expect(chrome._store.sra_pending_checkout).toBeTruthy());
+    expect(chrome._store.sra_pending_checkout.plan).toBe('student');
+  });
+
+  it('a signed-in click POSTs plan: student (never reader) and opens the returned checkout_url in a real tab', async () => {
+    loadUpgradeBody();
+    const chrome = fakeChrome({ sra_session: VALID_SESSION });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([
+      [ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => FREE_RESPONSE })],
+      [CHECKOUT_URL, async (url, init) => {
+        expect(JSON.parse(init.body)).toEqual({ plan: 'student' });
+        return { ok: true, json: async () => ({ checkout_url: 'https://creem.test/session/student-abc' }) };
+      }],
+    ]));
+
+    await importFreshUpgradeJs();
+    await vi.waitFor(() => expect(document.getElementById('studentBtn').hidden).toBe(false));
+
+    document.getElementById('studentBtn').click();
+
+    await vi.waitFor(() => expect(chrome._tabsCreated.length).toBe(1));
+    expect(chrome._tabsCreated[0]).toEqual({ url: 'https://creem.test/session/student-abc' });
+  });
+
+  it('once entitled (by EITHER checkout), the Student action hides too — same entitlement, no second "current plan" state', async () => {
+    loadUpgradeBody('?checkout=pending');
+    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    await vi.waitFor(() => expect(document.getElementById('readerBtn').hidden).toBe(true));
+
+    expect(document.getElementById('studentBtn').hidden).toBe(true);
+    expect(document.getElementById('studentStateNote').hidden).toBe(true);
+    expect(document.getElementById('manageBtn').hidden).toBe(false);
+  });
+
+  it('while a checkout is processing (from either button), the Student action is disabled too, not just Reader\'s', async () => {
+    loadUpgradeBody('?checkout=pending');
+    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => FREE_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    await vi.waitFor(() => expect(document.getElementById('studentStateNote').hidden).toBe(false));
+
+    expect(document.getElementById('studentStateNote').textContent).toMatch(/processing/i);
+    expect(document.getElementById('studentBtn').disabled).toBe(true);
+  });
+});

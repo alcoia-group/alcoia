@@ -1,12 +1,12 @@
-/* upgrade.js — the plans page (item E3 turns the Reader tier's buttons on)
+/* upgrade.js — the plans page (item E3 turns the Reader tier's buttons on;
+ * a same-day follow-up adds Student once confirmed server-side)
  *
  * Every disabled button here used to say, honestly, "no checkout is wired
  * up yet — a page that looks like it can take money before it can is the
  * one kind of bug here that costs somebody else something." This wires up
- * exactly the Reader tier (the only one the server has a self-serve
- * checkout for — see upgrade.html's own comment on why Teams/Institution
- * stay inert) against the CONFIRMED alcoiaServer contract, read directly
- * from src/http/routes/billing.js before any of this was written:
+ * the Reader tier, and — confirmed separately, see below — the Student
+ * plan, against the CONFIRMED alcoiaServer contract, read directly from
+ * src/http/routes/billing.js before any of this was written:
  *
  *   POST /api/billing/checkout   { plan: 'reader' | 'student' } -> { checkout_url }
  *   GET  /api/billing/portal                                    -> { portal_url }
@@ -15,6 +15,19 @@
  * established. Neither takes a billing-period field — the Annual/Monthly
  * toggle below is cosmetic only; src/billing/plans.js maps 'reader' to
  * exactly one Creem product_id. Not invented here, flagged in the PR.
+ *
+ * STUDENT IS THE SAME ENTITLEMENT AS READER, NEVER A SECOND TIER —
+ * confirmed both ways before wiring its button: src/billing/plans.js maps
+ * 'student' to CREEM_PRODUCT_ID_STUDENT exactly like 'reader' maps to
+ * CREEM_PRODUCT_ID_READER (both set in the real .env, not just documented
+ * in .env.example), and src/entitlements/resolve.js always returns the
+ * literal `tier: 'reader'` for ANY account with an active plan — the
+ * stored plan key ('reader' or 'student') never resurfaces in the
+ * entitlements response at all. So hasFeature() needed zero changes: a
+ * Student subscriber is indistinguishable from a Reader one the moment
+ * checkout completes, which is why the Student action below has no
+ * "current plan" state of its own — the Reader tier's own action area
+ * already shows it once either checkout succeeds.
  *
  * WHY "RETURN FROM CHECKOUT" IS A REFOCUS EVENT, NOT A MESSAGE: Creem's
  * hosted checkout redirects the browser to a fixed, server-configured web
@@ -90,6 +103,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const readerBtn = $('readerBtn');
   const stateNote = $('readerStateNote');
   const manageBtn = $('manageBtn');
+  const studentBtn = $('studentBtn');
+  const studentStateNote = $('studentStateNote');
 
   function setPeriod(period) {
     const p = PRICES[period];
@@ -110,21 +125,24 @@ document.addEventListener('DOMContentLoaded', () => {
   // just because a session exists or a click happened.
   let checkoutInFlight = new URL(location.href).searchParams.get('checkout') === 'pending';
 
-  function showStateNote(text, kind) {
-    if (!stateNote) return;
-    stateNote.textContent = text || '';
-    stateNote.className = 'plan-state-note' + (kind ? ' ' + kind : '');
-    stateNote.hidden = !text;
+  function showStateNote(el, text, kind) {
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = 'plan-state-note' + (kind ? ' ' + kind : '');
+    el.hidden = !text;
   }
 
-  /* The one render function for the Reader tier's action area. Reads
-   * entitlements via hasFeature() ONLY — never a bare tier comparison
-   * (the project notes, and entitlements.js's own header: "no other module reads
-   * chrome.storage for plan state directly... everything goes through
-   * hasFeature()"). own_documents stands in for "on the Reader plan" —
-   * every reader-tier feature arrives together (entitlements.js's own
+  /* The one render function for BOTH checkout actions — Reader's own
+   * button and Student's inline one — since they lead to the identical
+   * entitlement (see this file's own header). Reads entitlements via
+   * hasFeature() ONLY — never a bare tier comparison (the project notes, and
+   * entitlements.js's own header: "no other module reads chrome.storage
+   * for plan state directly... everything goes through hasFeature()").
+   * own_documents stands in for "on the Reader-or-Student plan" — every
+   * reader-tier feature arrives together (entitlements.js's own
    * READER_FEATURES), so any one of them is representative; this never
-   * reads or branches on the tier NAME itself. */
+   * reads or branches on the tier NAME itself, and never needs to tell
+   * apart which of the two checkouts got them there. */
   async function renderReaderTier() {
     if (!readerBtn) return;
 
@@ -134,7 +152,8 @@ document.addEventListener('DOMContentLoaded', () => {
       readerBtn.disabled = false;
       readerBtn.textContent = 'Sign in to subscribe';
       if (manageBtn) manageBtn.hidden = true;
-      if (!checkoutInFlight) showStateNote('', null);
+      if (studentBtn) { studentBtn.hidden = false; studentBtn.disabled = false; }
+      if (!checkoutInFlight) { showStateNote(stateNote, '', null); showStateNote(studentStateNote, '', null); }
       return;
     }
 
@@ -143,46 +162,59 @@ document.addEventListener('DOMContentLoaded', () => {
       checkoutInFlight = false;
       readerBtn.hidden = true;
       if (manageBtn) manageBtn.hidden = false;
-      showStateNote("You're on the Reader plan.", 'current');
+      showStateNote(stateNote, "You're on the Reader plan.", 'current');
+      // Same entitlement, so the Student action has nothing left to do —
+      // hidden rather than shown alongside a manage link that already
+      // covers it, avoiding two competing "you already have this"
+      // moments.
+      if (studentBtn) studentBtn.hidden = true;
+      showStateNote(studentStateNote, '', null);
       return;
     }
 
     readerBtn.hidden = false;
     if (manageBtn) manageBtn.hidden = true;
+    if (studentBtn) studentBtn.hidden = false;
     if (checkoutInFlight) {
       readerBtn.disabled = true;
       readerBtn.textContent = 'Waiting…';
-      showStateNote(
-        "Processing — this can take a few seconds after you finish on Creem's page. Come back to this tab once you're done there.",
-        null,
-      );
+      if (studentBtn) studentBtn.disabled = true;
+      const processing = "Processing — this can take a few seconds after you finish on Creem's page. Come back to this tab once you're done there.";
+      showStateNote(stateNote, processing, null);
+      showStateNote(studentStateNote, processing, null);
     } else {
       readerBtn.disabled = false;
       readerBtn.textContent = 'Subscribe';
-      showStateNote('', null);
+      if (studentBtn) studentBtn.disabled = false;
+      showStateNote(stateNote, '', null);
+      showStateNote(studentStateNote, '', null);
     }
   }
 
-  async function startReaderCheckout() {
+  /* Shared by the Reader button and the Student link — same
+   * startCheckoutSession() call, only the plan key and which button/note
+   * pair reflects it differ. Signed-out click: remember the plan, route
+   * to sign-in, resume there (see account.js) — generic over `plan`
+   * already, no changes needed there for a second plan key. */
+  async function startCheckout(plan, btn, noteEl, busyLabel, idleLabel) {
     const signedIn = await session.getSession();
     if (!signedIn) {
-      // Signed-out click: remember the plan, route to sign-in, resume
-      // there — see account.js.
       await new Promise((resolve) => chrome.storage.local.set(
-        { sra_pending_checkout: { plan: 'reader', at: Date.now() } }, resolve,
+        { sra_pending_checkout: { plan, at: Date.now() } }, resolve,
       ));
       location.href = 'account.html';
       return;
     }
 
-    readerBtn.disabled = true;
-    readerBtn.textContent = 'Opening checkout…';
-    const result = await billing.startCheckoutSession('reader');
+    const restoreLabel = btn.textContent;
+    btn.disabled = true;
+    if (busyLabel) btn.textContent = busyLabel;
+    const result = await billing.startCheckoutSession(plan);
 
     if (!result.ok) {
-      readerBtn.disabled = false;
-      readerBtn.textContent = 'Subscribe';
-      showStateNote(checkoutErrorMessage(result.error), 'error');
+      btn.disabled = false;
+      btn.textContent = idleLabel ?? restoreLabel;
+      showStateNote(noteEl, checkoutErrorMessage(result.error), 'error');
       return;
     }
 
@@ -193,14 +225,16 @@ document.addEventListener('DOMContentLoaded', () => {
     checkoutInFlight = true;
     renderReaderTier();
   }
-  readerBtn?.addEventListener('click', startReaderCheckout);
+
+  readerBtn?.addEventListener('click', () => startCheckout('reader', readerBtn, stateNote, 'Opening checkout…', 'Subscribe'));
+  studentBtn?.addEventListener('click', () => startCheckout('student', studentBtn, studentStateNote, 'Opening checkout…', 'start checkout'));
 
   manageBtn?.addEventListener('click', async () => {
     manageBtn.disabled = true;
     const result = await billing.getManagePortalUrl();
     manageBtn.disabled = false;
     if (result.ok) chrome.tabs.create({ url: result.portalUrl });
-    else showStateNote(checkoutErrorMessage(result.error), 'error');
+    else showStateNote(stateNote, checkoutErrorMessage(result.error), 'error');
   });
 
   // The only "return from checkout" signal available — see this file's
