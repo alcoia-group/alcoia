@@ -254,6 +254,27 @@ POST /api/receipt/sign   signs a reader-built receipt
 `/api/token` and stored locally; a 401/403 clears it and a fresh one is requested on the next call.
 See `../the project notes`'s Access control section for the full mechanism.
 
+### Magic-link sign-in (item S3, paid tier)
+
+```
+POST /api/auth/magic-link                      { email, kind: 'extension' } -> sends the email
+POST /api/auth/extension-session/exchange       { code } -> { token, email, expires }
+```
+
+The install token above is unrelated to this and unaffected by it — free features never need an
+account. `POST /api/auth/magic-link`'s exact request shape is ASSUMED (see
+`src/shared/session.js`'s own header); the exchange endpoint's path is the one thing
+`SERVER-ARCHITECTURE.md` §4 names explicitly.
+
+The reader never types a code into this extension. The Phase 1 landing page (`alcoiaWeb`, a
+separate repo) verifies the emailed link, gets a one-time code from the exchange flow above, and
+hands it to this extension via `chrome.runtime.sendMessage(EXTENSION_ID, { code })` —
+`background.js`'s `chrome.runtime.onMessageExternal` listener is the only thing that can receive
+that, and only from the origin declared in `manifests/base.json`'s `externally_connectable`
+(currently a **dev value**, `http://localhost:5173` — see `build.mjs`'s own comment on that entry
+and `src/shared/config.js`'s `WEB_APP_ORIGIN` for what has to change together before a real
+launch).
+
 ---
 
 ## Usage Guide

@@ -104,6 +104,89 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
   });
 });
 
+// ── Magic-link sign-in handoff (item S3) ────────────────────────────────
+// The Phase 1 landing page (alcoiaWeb, a separate repo) verifies an emailed
+// magic link, gets a short-lived one-time CODE from the server, and hands
+// it to this extension via chrome.runtime.sendMessage(EXTENSION_ID,
+// { code }). Only background.js can ever receive that —
+// chrome.runtime.onMessageExternal does not fire in content scripts or
+// extension pages at all, a Chrome platform fact, not a design choice.
+//
+// The exchange logic below mirrors src/shared/session.js's own,
+// independently-tested exchangeCode() by hand — it cannot be imported here.
+// See that file's own header for the full reasoning (this is a classic,
+// non-`"type":"module"` service worker, and dynamic import() is disallowed
+// in one regardless). tests/background-session.test.js exercises THIS copy
+// directly, not just the one in session.js, since the two are not
+// mechanically kept in sync.
+//
+// Two independent things stop a forged code from an arbitrary page:
+//  1. manifests/base.json's `externally_connectable.matches` — Chrome
+//     itself never delivers this event from a page that does not match.
+//  2. The explicit sender.origin check below. This one is NOT a backstop
+//     the way the AI-call rate limiter is (the project notes: "not a security
+//     control... the check is removable in a minute") — it is a real,
+//     independent gate: if the manifest entry is ever accidentally
+//     widened (a stray wildcard, a forgotten dev value left in), this is
+//     what still catches it, since Chrome's own enforcement and this
+//     file's are two separate pieces of code that could each be wrong on
+//     their own.
+chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
+  const allowedOrigin = self.ALCOIA_CONFIG.WEB_APP_ORIGIN;
+  if (!sender || sender.origin !== allowedOrigin) {
+    sendResponse({ ok: false, error: 'origin_not_allowed' });
+    return false;
+  }
+
+  const code = msg && typeof msg.code === 'string' ? msg.code.trim() : '';
+  if (!code) {
+    sendResponse({ ok: false, error: 'no_code' });
+    return false;
+  }
+
+  const url = self.ALCOIA_CONFIG.EXTENSION_SESSION_EXCHANGE_URL;
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  })
+    .then(async (resp) => {
+      if (!resp.ok) {
+        // Expired, unknown, or already-consumed all collapse to the same
+        // honest "rejected" outcome, reported once — never silently
+        // retried. Mirrors session.js's exchangeCode() exactly.
+        sendResponse({ ok: false, error: 'code_rejected', status: resp.status });
+        return;
+      }
+      const data = await resp.json().catch(() => null);
+      if (!data || typeof data.token !== 'string' || !data.token
+        || typeof data.email !== 'string' || !data.email) {
+        sendResponse({ ok: false, error: 'malformed_response' });
+        return;
+      }
+      const session = { token: data.token, email: data.email, expiresAt: normaliseSessionExpiry(data.expires) };
+      chrome.storage.local.set({ [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: session }, () => {
+        sendResponse({ ok: true, email: session.email });
+      });
+    })
+    .catch(() => {
+      sendResponse({ ok: false, error: 'network_error' });
+    });
+  return true; // keep the message channel open for the async response
+});
+
+// Mirrors src/shared/session.js's own normaliseExpiry() — see this
+// listener's own comment, and that file's header, for why this cannot just
+// import it.
+function normaliseSessionExpiry(raw) {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const parsed = Date.parse(raw);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return Date.now() + 90 * 24 * 60 * 60 * 1000;
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.action) return;
 

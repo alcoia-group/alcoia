@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Sign in · alcoia</title>
+  <link rel="stylesheet" href="../styles/fonts.css">
+  <link rel="stylesheet" href="../styles/panel.css">
+  <!-- account.js is a real ES module (imports src/shared/session.js
+       directly) — see that file's own header for why background.js, a
+       classic service worker, cannot do the same. -->
+  <script src="../shared/config.js"></script>
+  <style>
+    body { padding-bottom: 48px; }
+
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; padding: 16px 24px;
+      background: var(--paper-2); border-bottom: 1px solid var(--border);
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .logo-img { display: block; flex: none; height: 22px; width: auto; }
+    body.dark-mode .logo-img.on-paper { display: none; }
+    .logo-img.on-dark { display: none; }
+    body.dark-mode .logo-img.on-dark { display: block; }
+    .logo-sub {
+      font-family: var(--alc-serif); font-size: 15px; color: var(--muted);
+      padding-left: 14px; border-left: 1px solid var(--border);
+    }
+
+    .wrap { max-width: 420px; margin: 0 auto; padding: 40px 24px 0; }
+
+    .account-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 24px 22px;
+    }
+    .account-title {
+      font-family: var(--alc-serif); font-size: 19px; font-weight: 600;
+      margin: 0 0 6px;
+    }
+    .account-sub { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0 0 20px; }
+
+    .field-row { margin-bottom: 14px; }
+
+    .account-error {
+      margin: 0 0 14px; padding: 10px 12px;
+      border: 1px solid rgba(180,121,95,0.35); border-radius: var(--radius-sm);
+      background: rgba(180,121,95,0.08);
+      color: var(--wrong); font-size: 12px; line-height: 1.5;
+    }
+
+    /* "Check your email" and "you're signed in" both replace the form
+       entirely — there is nothing left to submit once either is true. */
+    .account-state { text-align: center; padding: 8px 4px 4px; }
+    .account-state-title {
+      font-family: var(--alc-serif); font-size: 16px; font-weight: 600;
+      margin: 0 0 8px;
+    }
+    .account-state-sub { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0; }
+    .account-check {
+      display: inline-block; margin-bottom: 6px;
+      font-size: 20px; color: var(--sage-2);
+    }
+
+    .signed-in-email {
+      font-family: var(--alc-serif); font-size: 15px; font-weight: 600;
+      margin: 0 0 4px;
+    }
+
+    @media (max-width: 480px) {
+      .header, .wrap { padding-left: 16px; padding-right: 16px; }
+      .logo-sub { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <img id="logo-img" class="logo-img on-paper" src="../../assets/alcoia-wordmark.png" alt="alcoia">
+    <img id="logo-img-dark" class="logo-img on-dark" src="../../assets/alcoia-wordmark-white.png" alt="">
+    <div class="logo-sub">Sign in</div>
+  </div>
+  <button class="btn btn-ghost" id="closeBtn">Close</button>
+</header>
+
+<div class="wrap">
+  <div class="account-card" id="accountCard">
+
+    <!-- ── Sign-in form (default state) ── -->
+    <div id="signInForm">
+      <h1 class="account-title">Sign in</h1>
+      <p class="account-sub">
+        No password — we'll email you a link. Free features (retrieval questions, the reading
+        signals, snooze) never require an account; this is only for the paid features (your own
+        documents, portable receipts, sync).
+      </p>
+
+      <div class="account-error" id="formError" hidden></div>
+
+      <form id="signInFormEl">
+        <div class="field-row">
+          <label class="field-label" for="emailInput">Email</label>
+          <input class="field-input" id="emailInput" type="email" placeholder="you@example.com" required autocomplete="email">
+        </div>
+        <button class="btn btn-primary" type="submit" id="sendLinkBtn" style="width:100%">Send magic link</button>
+      </form>
+    </div>
+
+    <!-- ── "Check your email" state ── -->
+    <div id="checkEmailState" class="account-state" hidden>
+      <p class="account-state-title">Check your email</p>
+      <p class="account-state-sub" id="checkEmailSub"></p>
+    </div>
+
+    <!-- ── Already signed in ── -->
+    <div id="signedInState" class="account-state" hidden>
+      <span class="account-check" aria-hidden="true">&#10003;</span>
+      <p class="account-state-title">Signed in</p>
+      <p class="signed-in-email" id="signedInEmail"></p>
+      <p class="account-state-sub">Your LMS knows who you are, if you arrived here through Canvas
+        — alcoia's own class aggregates still do not; see the reporting-mode notice for what an
+        instructor can and can't see.</p>
+      <div class="btn-row" style="margin-top:16px">
+        <button class="btn btn-ghost" id="signOutBtn">Sign out</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script type="module" src="account.js"></script>
+</body>
+</html>

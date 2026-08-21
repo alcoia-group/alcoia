@@ -361,6 +361,34 @@ document.addEventListener('DOMContentLoaded', () => {
   openPage('exportBtn',         'src/popup/export.html');
   openPage('upgradeBtn',        'src/popup/upgrade.html');
   openPage('diagnosticsBtn',    'src/popup/diagnostics.html');
+  openPage('signInBtn',         'src/popup/account.html');
+
+  // ── Account status (item S3) ─────────────────────────────────────────
+  // popup.js is a classic script, not an ES module (see
+  // src/shared/session.js's own header for why that file — the real,
+  // tested definition of "is there a valid session right now" — cannot be
+  // imported here). This duplicates only the minimal read+expiry check,
+  // the same way this file already reads every other sra_* key straight
+  // out of storage with no shared module. Never treats mere PRESENCE of
+  // sra_session as signed-in — an expired entry reads as signed-out here
+  // too, same as session.js's own getSession().
+  function refreshAccountStatus() {
+    chrome.storage.local.get({ sra_session: null }, (res) => {
+      const s = res.sra_session;
+      const valid = !!(s && typeof s.token === 'string' && s.token
+        && (typeof s.expiresAt !== 'number' || s.expiresAt > Date.now()));
+      const signedOutEl = $('accountSignedOut');
+      const signedInEl  = $('accountSignedIn');
+      if (signedOutEl) signedOutEl.hidden = valid;
+      if (signedInEl)  signedInEl.hidden  = !valid;
+      if (valid) { const emailEl = $('accountEmail'); if (emailEl) emailEl.textContent = s.email || ''; }
+    });
+  }
+  refreshAccountStatus();
+
+  $('signOutBtn')?.addEventListener('click', () => {
+    chrome.storage.local.remove('sra_session', refreshAccountStatus);
+  });
 
   /* ── Quiz gate ─────────────────────────────────────────────────────────
    * Reads the exact same function (content.js's checkQuizCoverage, which
