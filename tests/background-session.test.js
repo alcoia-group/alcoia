@@ -99,7 +99,11 @@ describe('the full receive-code -> exchange -> session-stored path, mocked at th
     vi.stubGlobal('fetch', vi.fn(async (url, init) => {
       expect(url).toBe(EXCHANGE_URL);
       expect(JSON.parse(init.body)).toEqual({ code: 'good-code' });
-      return { ok: true, json: async () => ({ token: 'sess-1', email: 'reader@example.com', expires: '2099-01-01T00:00:00Z' }) };
+      // The CONFIRMED real shape (alcoiaServer's src/http/routes/
+      // extension-session.js, createExtensionSessionRouter's success
+      // response): { sessionToken, kind: 'extension', expiresAt: <ISO> }.
+      // No `email` field exists in this response at all.
+      return { ok: true, json: async () => ({ sessionToken: 'sess-1', kind: 'extension', expiresAt: '2099-01-01T00:00:00Z' }) };
     }));
     const sendResponse = vi.fn();
 
@@ -107,10 +111,26 @@ describe('the full receive-code -> exchange -> session-stored path, mocked at th
     expect(keepChannelOpen).toBe(true);
 
     await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
-    expect(sendResponse).toHaveBeenCalledWith({ ok: true, email: 'reader@example.com' });
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true });
+    // Stored shape keeps this listener's own field names (token/expiresAt)
+    // — only the source property read off the response is `sessionToken`.
     expect(chrome.storage.local._store.sra_session).toEqual({
-      token: 'sess-1', email: 'reader@example.com', expiresAt: Date.parse('2099-01-01T00:00:00Z'),
+      token: 'sess-1', expiresAt: Date.parse('2099-01-01T00:00:00Z'),
     });
+  });
+
+  it('the OLD assumed shape ({ token, email }) is correctly rejected as malformed now — regression guard for this fix', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ token: 'sess-1', email: 'reader@example.com' }),
+    })));
+    const sendResponse = vi.fn();
+
+    capturedListener({ code: 'good-code' }, sender(WEB_APP_ORIGIN), sendResponse);
+    await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
+
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'malformed_response' });
+    expect(chrome.storage.local._store.sra_session).toBeUndefined();
   });
 });
 
@@ -144,5 +164,30 @@ describe('an expired or already-used code fails cleanly and visibly', () => {
     expect(() => capturedListener({ code: 'c' }, sender(WEB_APP_ORIGIN), sendResponse)).not.toThrow();
     await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
     expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'network_error' });
+  });
+
+  it('a response body that is not JSON at all is rejected, not thrown — same as session.js\'s exchangeCode()', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => { throw new SyntaxError('bad json'); } })));
+    const sendResponse = vi.fn();
+
+    expect(() => capturedListener({ code: 'c' }, sender(WEB_APP_ORIGIN), sendResponse)).not.toThrow();
+    await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'malformed_response' });
+  });
+});
+
+describe('a missing expiresAt still stores the session, with the same generous fallback session.js uses', () => {
+  it('falls forward by more than 30 days rather than expiring almost immediately', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ sessionToken: 't', kind: 'extension' }) })));
+    const sendResponse = vi.fn();
+    const before = Date.now();
+
+    capturedListener({ code: 'c' }, sender(WEB_APP_ORIGIN), sendResponse);
+    await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
+
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true });
+    const stored = chrome.storage.local._store.sra_session;
+    expect(stored.expiresAt).toBeGreaterThan(before);
+    expect(stored.expiresAt - before).toBeGreaterThan(30 * 24 * 60 * 60 * 1000);
   });
 });

@@ -28,7 +28,7 @@
  * exchangeCode() below is still exported and still fully unit-tested
  * (tests/session.test.js) — it is the CANONICAL, verified definition of
  * what a correct exchange does: validate the response shape, never trust a
- * token/email pair that doesn't come back looking exactly right, store the
+ * session token that doesn't come back looking exactly right, store the
  * result, never silently retry a rejected code. background.js's own
  * onMessageExternal listener mirrors this exact shape by hand, out of
  * necessity, not carelessness — see that file's own comment at the point it
@@ -101,13 +101,15 @@ export function createSessionManager(opts = {}) {
   }
 
   /* Exchanges a one-time code (handed off from the landing page) for a real
-   * session, and stores it. Returns { ok: true, email } on success,
-   * { ok: false, error } on any failure — expired code, already-used code,
-   * network failure, or a response that fails shape validation. Never
-   * throws, never retries: a rejected code is reported honestly, once
-   * (the project notes invariant 8's "every failure degrades to silence" pattern,
-   * applied to sign-in — the difference here is a rejection surfaces as an
-   * explicit `ok:false`, not silence, since a reader trying to sign in
+   * session, and stores it. Returns { ok: true } on success, { ok: false,
+   * error } on any failure — expired code, already-used code, network
+   * failure, or a response that fails shape validation. No email comes
+   * back from this endpoint (see the CONFIRMED shape note below) — this
+   * file has never had one to return. Never throws, never retries: a
+   * rejected code is reported honestly, once (the project notes invariant 8's
+   * "every failure degrades to silence" pattern, applied to sign-in — the
+   * difference here is a rejection surfaces as an explicit `ok:false`, not
+   * silence, since a reader trying to sign in
    * needs to know it failed). */
   async function exchangeCode(code, urlOverride) {
     const url = urlOverride;
@@ -129,21 +131,26 @@ export function createSessionManager(opts = {}) {
         return { ok: false, error: 'code_rejected', status: resp.status };
       }
       const data = await resp.json().catch(() => null);
-      // ASSUMED response shape — SERVER-ARCHITECTURE.md §4 names this
-      // endpoint but not its success payload. Modelled on this server's
-      // other credential responses (install-token.js's own
-      // `{ token: string }`; GET /api/entitlements's `{ tier, features[],
-      // expires }`): `{ token: string, email: string, expires?:
-      // string|number }`. Confirm against the real route before relying on
-      // this in production.
-      if (!data || typeof data.token !== 'string' || !data.token
-        || typeof data.email !== 'string' || !data.email) {
+      // CONFIRMED against alcoiaServer's real route handler (read-only
+      // reference, that repo is not built here): src/http/routes/
+      // extension-session.js, createExtensionSessionRouter's POST
+      // /api/auth/extension-session/exchange success path —
+      // `res.status(200).json({ sessionToken, kind: 'extension',
+      // expiresAt: expiresAt.toISOString() })`. Two things the earlier
+      // ASSUMED shape got wrong: the token field is named `sessionToken`,
+      // not `token`; and there is NO email field anywhere in this
+      // response — the exchange mints a session keyed to an account id
+      // server-side and never echoes the account's email back here.
+      // Stored/returned shape below keeps this file's OWN field names
+      // (`token`, no `email`) unchanged from what getSession() already
+      // expects — only the SOURCE property read from `data` is corrected.
+      if (!data || typeof data.sessionToken !== 'string' || !data.sessionToken) {
         return { ok: false, error: 'malformed_response' };
       }
 
-      const session = { token: data.token, email: data.email, expiresAt: normaliseExpiry(data.expires, now) };
+      const session = { token: data.sessionToken, expiresAt: normaliseExpiry(data.expiresAt, now) };
       await storageSet({ [STORAGE_KEY]: session });
-      return { ok: true, email: session.email };
+      return { ok: true };
     } catch (e) {
       return { ok: false, error: 'network_error' };
     }
