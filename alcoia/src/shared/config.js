@@ -75,5 +75,12 @@
     // GET the portal one -> { portal_url }.
     BILLING_CHECKOUT_URL: BACKEND_ORIGIN + '/api/billing/checkout',
     BILLING_PORTAL_URL: BACKEND_ORIGIN + '/api/billing/portal',
+    // Item S6 — src/shared/invites.js. Both confirmed by reading
+    // alcoiaServer's src/http/routes/invites.js and seats.js directly:
+    // POST invites/accept with { token } -> { classId, seatId, role };
+    // POST seats/:id/release -> { released: true }. SEATS_URL is a base —
+    // invites.js appends "/:id/release" itself.
+    INVITE_ACCEPT_URL: BACKEND_ORIGIN + '/api/invites/accept',
+    SEATS_URL: BACKEND_ORIGIN + '/api/seats',
   });
 })(typeof self !== 'undefined' ? self : this);

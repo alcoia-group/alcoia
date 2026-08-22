@@ -194,3 +194,82 @@ describe('resuming a checkout started while signed out (item E3)', () => {
     expect(chrome._tabsCreated.length).toBe(0);
   });
 });
+
+describe('redirecting to a pending class invite after sign-in (item S6)', () => {
+  it('a pending invite, once a session appears, redirects to join-class.html WITHOUT calling accept or checkout itself', async () => {
+    const chrome = fakeChrome({
+      sra_pending_invite: { invite: 'some-code', at: Date.now() },
+    });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    const fetchImpl = vi.fn(async (url) => {
+      if (url.includes('/api/entitlements')) return { ok: true, json: async () => ({ tier: 'free', features: [], expires: null }) };
+      throw new Error('unexpected fetch to ' + url + ' — account.js must never call accept/checkout itself for a pending invite');
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    await importFreshAccountJs();
+    chrome._store.sra_session = { token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 };
+    await chrome.storage.onChanged._fire({ sra_session: { newValue: chrome._store.sra_session } });
+
+    await new Promise((r) => setTimeout(r, 20));
+    // The disclosure guarantee lives entirely in join-class.js — this file
+    // must never open a tab (that's the checkout path) or leave the
+    // pending record for anything other than join-class.js's own boot() to
+    // consume.
+    expect(chrome._tabsCreated.length).toBe(0);
+    const acceptCalls = fetchImpl.mock.calls.filter(([url]) => url.includes('/invites/accept'));
+    expect(acceptCalls.length).toBe(0);
+  });
+
+  it('a pending invite takes precedence over a pending checkout — only one redirect fires, and checkout is not resumed', async () => {
+    const chrome = fakeChrome({
+      sra_pending_invite: { invite: 'some-code', at: Date.now() },
+      sra_pending_checkout: { plan: 'reader', at: Date.now() },
+    });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    const fetchImpl = vi.fn(async (url) => {
+      if (url.includes('/api/entitlements')) return { ok: true, json: async () => ({ tier: 'free', features: [], expires: null }) };
+      throw new Error('unexpected fetch to ' + url);
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    await importFreshAccountJs();
+    chrome._store.sra_session = { token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 };
+    await chrome.storage.onChanged._fire({ sra_session: { newValue: chrome._store.sra_session } });
+
+    await new Promise((r) => setTimeout(r, 20));
+    // Checkout must not have been resumed (no tab opened, no checkout
+    // fetch) — the invite redirect ran first and the caller skipped the
+    // checkout-resume check for this event, exactly as account.js's own
+    // listener comment describes.
+    expect(chrome._tabsCreated.length).toBe(0);
+    const checkoutCalls = fetchImpl.mock.calls.filter(([url]) => url.includes('/billing/checkout'));
+    expect(checkoutCalls.length).toBe(0);
+  });
+
+  it('no pending invite at all: a session appearing falls through to the checkout-resume check unaffected', async () => {
+    const chrome = fakeChrome({
+      sra_pending_checkout: { plan: 'reader', at: Date.now() },
+    });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    const fetchImpl = vi.fn(async (url, init) => {
+      if (url.includes('/api/entitlements')) return { ok: true, json: async () => ({ tier: 'free', features: [], expires: null }) };
+      if (url.includes('/billing/checkout')) {
+        expect(JSON.parse(init.body)).toEqual({ plan: 'reader' });
+        return { ok: true, json: async () => ({ checkout_url: 'https://creem.test/session/still-works' }) };
+      }
+      throw new Error('unexpected fetch to ' + url);
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    await importFreshAccountJs();
+    chrome._store.sra_session = { token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 };
+    await chrome.storage.onChanged._fire({ sra_session: { newValue: chrome._store.sra_session } });
+
+    await vi.waitFor(() => expect(chrome._tabsCreated.length).toBe(1));
+    expect(chrome._tabsCreated[0]).toEqual({ url: 'https://creem.test/session/still-works' });
+  });
+});
