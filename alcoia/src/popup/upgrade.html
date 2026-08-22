@@ -247,6 +247,14 @@
       <button class="btn btn-primary" id="readerBtn">Subscribe</button>
       <p class="plan-state-note" id="readerStateNote" hidden></p>
       <button class="manage-link" id="manageBtn" hidden>Manage subscription</button>
+      <!-- Item S6 follow-up: a second, always-secondary line — never
+           replaces readerStateNote above it. Covers two distinct cases:
+           entitled via a seat alone (no subscription to manage, so
+           manageBtn stays hidden and this line carries the real message),
+           and entitled via both at once (readerStateNote stays the
+           subscriber message, this line just adds "a seat is also
+           active" rather than hiding that fact). -->
+      <p class="plan-state-note" id="readerSeatNote" hidden></p>
       <ul class="tier-list">
         <li>Everything in Free, unlimited</li>
         <li>Retrieval questions when you slow down</li>
@@ -264,7 +272,15 @@
       <div class="tier-for">For a cohort, where students submit evidence rather than being watched.</div>
       <div class="tier-price">$5<span class="unit">/seat/mo</span></div>
       <div class="tier-note">25 seats minimum · annual only</div>
-      <button class="btn btn-ghost" disabled>Coming soon</button>
+      <!-- Item S6 follow-up: no self-serve checkout exists for this tier
+           (upgrade.js's own header, confirmed against billing.js) — this
+           button stays "Coming soon" and disabled for everyone EXCEPT a
+           reader who already holds an active class seat, where it instead
+           reflects that real membership and links to the existing
+           leave/manage flow in join-class.html. Not a Teams console —
+           scoped to reflecting state on this page only. -->
+      <button class="btn btn-ghost" id="teamsBtn" disabled>Coming soon</button>
+      <p class="plan-state-note" id="teamsStateNote" hidden></p>
       <ul class="tier-list">
         <li>Everything in Reader</li>
         <li>Which paragraphs the class struggled with, anonymous</li>
