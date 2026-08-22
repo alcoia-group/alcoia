@@ -2721,6 +2721,143 @@ try {
 await setHighlightToggles(true, false); // restore the default combo for anything after this block
 await writeHighlightStore({});
 
+// ── Upgrade page: the Reader/Student buttons actually get REPLACED once
+// entitled, not left showing a stale label on top of the correct
+// confirmation text (a real bug, found and fixed this session).
+//
+// The bug: panel.css's `.btn { display: inline-flex }` and the browser's
+// own built-in `[hidden] { display: none }` default have the SAME CSS
+// specificity (a class selector and an attribute selector are both
+// (0,0,1,0)). Author stylesheets apply after the UA stylesheet, so `.btn`
+// won every tie — `readerBtn.hidden = true` set the ATTRIBUTE correctly
+// (confirmed — that was never the bug) but had NO VISUAL EFFECT on a
+// `.btn`-classed element, so the button stayed fully visible showing
+// whatever "Waiting…"/disabled state a prior checkout attempt had left it
+// in, sitting right above the correct "You're on the Reader plan" text.
+// studentBtn (class="link-btn", no competing `display`) was never hit by
+// this specific collision, but shared the same never-reset label/disabled
+// gap.
+//
+// jsdom-based unit tests (tests/upgrade.test.js) CANNOT catch this: jsdom
+// does not reproduce the collision at all (verified directly — a `.btn`
+// rule with a conflicting `display` never beats `[hidden]` in jsdom's own
+// getComputedStyle, unlike a real browser). This block is the only thing
+// in this whole checklist that can actually prove the fix, since it is the
+// only place code runs in a genuine Chromium layout/cascade engine.
+async function readUpgradeButtonState(pg) {
+  return pg.evaluate(() => {
+    const el = (id) => document.getElementById(id);
+    const state = (btn) => ({
+      hiddenAttr: btn.hidden,
+      computedDisplay: getComputedStyle(btn).display,
+      actuallyHidden: getComputedStyle(btn).display === 'none',
+      disabled: btn.disabled,
+      text: btn.textContent,
+    });
+    return {
+      reader: state(el('readerBtn')),
+      student: state(el('studentBtn')),
+      manageBtn: { hiddenAttr: el('manageBtn').hidden, actuallyVisible: getComputedStyle(el('manageBtn')).display !== 'none' },
+      stateNoteText: el('readerStateNote').textContent,
+    };
+  });
+}
+
+let upgradeButtonResult = { attempted: false };
+try {
+  const entitlementsCallCounts = { free: 0, reader: 0 };
+  let entitlementsShouldReturnReader = false;
+
+  // Intercepts whatever origin config.js's ENTITLEMENTS_URL/
+  // BILLING_CHECKOUT_URL actually resolve to — entitlements.js/billing.js
+  // do not honour the sra_backend_url dev override the way
+  // fetchSummary/fetchQuestions do (a separate, pre-existing gap, not this
+  // bug), so this mock server cannot simply serve those paths itself the
+  // way it already does for /api/summarize and /api/questions.
+  const routePage = await ctx.newPage();
+  await routePage.route('**/api/entitlements', (route) => {
+    if (entitlementsShouldReturnReader) entitlementsCallCounts.reader++;
+    else entitlementsCallCounts.free++;
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(entitlementsShouldReturnReader
+        ? { tier: 'reader', features: ['own_documents', 'portable_receipt', 'sync'], expires: null }
+        : { tier: 'free', features: [], expires: null }),
+    });
+  });
+  await routePage.route('**/api/billing/checkout', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ checkout_url: 'https://creem.test/session/smoke' }),
+  }));
+
+  // `chrome` does not exist on a blank about:blank page — navigate to an
+  // extension page FIRST so storage can be seeded at all, same as every
+  // other helper page in this file already has to.
+  await routePage.goto(`chrome-extension://${extId}/src/popup/upgrade.html`);
+  // Seed a signed-in session directly — sign-in itself is covered
+  // separately (tests/account.test.js); this block is scoped to the
+  // button-replacement bug specifically.
+  await routePage.evaluate(() => new Promise((r) => chrome.storage.local.set(
+    { sra_session: { token: 'smoke-token', email: 'smoke@example.com', expiresAt: Date.now() + 999_999 } }, r,
+  )));
+
+  // Case A: return-from-checkout in the SAME tab — the exact scenario in
+  // the bug report (a stuck "Waiting…" button).
+  await routePage.goto(`chrome-extension://${extId}/src/popup/upgrade.html?checkout=pending`);
+  const beforeWebhook = await readUpgradeButtonState(routePage);
+  entitlementsShouldReturnReader = true; // the webhook "landed" server-side
+  await routePage.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await routePage.waitForFunction(
+    () => document.getElementById('readerStateNote').textContent.includes("Reader plan"),
+    { timeout: 5000 },
+  );
+  const afterReturnFromCheckout = await readUpgradeButtonState(routePage);
+
+  // Case B: a normal page load where the account was ALREADY entitled
+  // from a previous session — no checkout ever attempted in this tab, no
+  // "Waiting…" label ever set. Fresh page, not a client-side reset, so a
+  // genuinely new navigation.
+  await routePage.goto(`chrome-extension://${extId}/src/popup/upgrade.html`);
+  await routePage.waitForFunction(
+    () => document.getElementById('readerStateNote').textContent.includes("Reader plan"),
+    { timeout: 5000 },
+  );
+  const alreadyEntitledOnLoad = await readUpgradeButtonState(routePage);
+
+  await routePage.close();
+
+  upgradeButtonResult = {
+    attempted: true,
+    beforeWebhook: {
+      readerVisible: !beforeWebhook.reader.actuallyHidden,
+      readerText: beforeWebhook.reader.text,
+    },
+    returnFromCheckout: {
+      readerHiddenAttrTrue: afterReturnFromCheckout.reader.hiddenAttr,
+      readerActuallyHiddenInRealChromium: afterReturnFromCheckout.reader.actuallyHidden,
+      readerLabelReset: afterReturnFromCheckout.reader.text === 'Subscribe',
+      readerNotDisabled: afterReturnFromCheckout.reader.disabled === false,
+      studentActuallyHidden: afterReturnFromCheckout.student.actuallyHidden,
+      studentLabelReset: afterReturnFromCheckout.student.text === 'start checkout',
+      manageBtnActuallyVisible: afterReturnFromCheckout.manageBtn.actuallyVisible,
+      confirmationText: afterReturnFromCheckout.stateNoteText,
+    },
+    alreadyEntitledOnNormalLoad: {
+      readerActuallyHiddenInRealChromium: alreadyEntitledOnLoad.reader.actuallyHidden,
+      readerLabelReset: alreadyEntitledOnLoad.reader.text === 'Subscribe',
+      readerNotDisabled: alreadyEntitledOnLoad.reader.disabled === false,
+      studentActuallyHidden: alreadyEntitledOnLoad.student.actuallyHidden,
+      manageBtnActuallyVisible: alreadyEntitledOnLoad.manageBtn.actuallyVisible,
+      confirmationText: alreadyEntitledOnLoad.stateNoteText,
+    },
+    entitlementsCallCounts,
+  };
+} catch (e) {
+  upgradeButtonResult = { attempted: true, error: String((e && e.message) || e) };
+}
+await writeHighlightStore({}); // harmless if unrelated; keeps the pattern consistent with the rest of this file
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -2771,6 +2908,8 @@ console.log('PDF viewer no wordmark (39.3):', JSON.stringify(pdfBrandResult, nul
 console.log('web PDF takeover (31)   :', JSON.stringify(webPdfResult, null, 2));
 console.log('pin/auto-dismiss (34)   :', JSON.stringify(pinAutohideResult, null, 2));
 console.log('AI-call rate limit (38) :', JSON.stringify(rateLimitResult, null, 2));
+console.log('upgrade page button fix :', JSON.stringify(upgradeButtonResult, null, 2),
+  '(expect readerActuallyHiddenInRealChromium/readerLabelReset/readerNotDisabled/studentActuallyHidden/manageBtnActuallyVisible all true, in BOTH returnFromCheckout and alreadyEntitledOnNormalLoad)');
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));
