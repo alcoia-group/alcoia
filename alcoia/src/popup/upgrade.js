@@ -160,14 +160,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const entitled = await entitlements.hasFeature('own_documents');
     if (entitled) {
       checkoutInFlight = false;
+      // Bug found here: hiding alone left the button showing whatever
+      // label/disabled state a prior "Opening checkout…"/"Waiting…" had
+      // set, because nothing ever reset it once entitled — genuinely
+      // visible in-browser (a `.btn { display: inline-flex }` rule beats
+      // `[hidden]`'s equal-specificity UA default; see panel.css's own
+      // comment on the CSS half of this fix). Resetting label/disabled
+      // HERE, not just .hidden, means the button is correct even if it is
+      // ever shown again later (a downgrade), not just invisible while
+      // secretly stale.
       readerBtn.hidden = true;
+      readerBtn.disabled = false;
+      readerBtn.textContent = 'Subscribe';
       if (manageBtn) manageBtn.hidden = false;
       showStateNote(stateNote, "You're on the Reader plan.", 'current');
       // Same entitlement, so the Student action has nothing left to do —
       // hidden rather than shown alongside a manage link that already
       // covers it, avoiding two competing "you already have this"
       // moments.
-      if (studentBtn) studentBtn.hidden = true;
+      if (studentBtn) {
+        studentBtn.hidden = true;
+        studentBtn.disabled = false;
+        studentBtn.textContent = 'start checkout';
+      }
       showStateNote(studentStateNote, '', null);
       return;
     }
