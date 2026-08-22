@@ -17,6 +17,17 @@
 // upgrade.html with ?checkout=pending so that page shows the processing
 // state immediately instead of waiting for a refocus event that already
 // happened before it existed.
+//
+// Item S6: a reader who pasted a class invite while signed out lands here
+// with sra_pending_invite set (by join-class.js). UNLIKE checkout, this
+// file does NOT complete the join itself — it only redirects back to
+// join-class.html, leaving the pending record in storage for that page to
+// consume. The disclosure ("what your instructor can see") is a hard
+// requirement on every join, no exceptions, and this file has no
+// disclosure screen of its own — auto-completing the join here would
+// silently skip it on exactly the path most likely to be used (an
+// instructor's invite link, clicked signed-out, is the common case, not
+// the rare one).
 import { createSessionManager } from '../shared/session.js';
 import { createEntitlementsManager } from '../shared/entitlements.js';
 import { createBillingManager } from '../shared/billing.js';
@@ -26,6 +37,7 @@ const PENDING_CHECKOUT_KEY = 'sra_pending_checkout';
 // abandoned days ago cannot silently resume as a surprise checkout tab on
 // some unrelated later visit to this page.
 const PENDING_CHECKOUT_MAX_AGE_MS = 10 * 60 * 1000;
+const PENDING_INVITE_KEY = 'sra_pending_invite';
 
 const $ = (id) => document.getElementById(id);
 
@@ -137,6 +149,24 @@ async function resumePendingCheckoutIfAny() {
   location.href = 'upgrade.html?checkout=pending';
 }
 
+/* Item S6: redirects to join-class.html if a pending invite is waiting —
+ * deliberately does NOT call acceptInvite() here, does NOT clear the
+ * stored record, and does NOT show any disclosure of its own. See this
+ * file's own header for why: join-class.js's own load logic is what
+ * consumes sra_pending_invite, checks its freshness, and — critically —
+ * still renders the disclosure screen before ever calling accept, exactly
+ * as if the reader had just pasted the invite fresh. Returns true if a
+ * redirect was issued, so the caller can skip the checkout-resume check
+ * below it (avoids issuing two conflicting navigations from one sign-in
+ * event). */
+async function redirectToPendingInviteIfAny() {
+  const stored = await new Promise((resolve) =>
+    chrome.storage.local.get({ [PENDING_INVITE_KEY]: null }, (res) => resolve(res[PENDING_INVITE_KEY])));
+  if (!stored) return false;
+  location.href = 'join-class.html';
+  return true;
+}
+
 // The handoff (background.js) can complete while this tab is still open —
 // e.g. the reader clicked the emailed link in a second tab in the same
 // browser. Reacting to the storage write directly is simpler and more
@@ -154,7 +184,9 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
   render();
 
   const current = await session.getSession();
-  if (current) await resumePendingCheckoutIfAny();
+  if (!current) return;
+  const redirectedToInvite = await redirectToPendingInviteIfAny();
+  if (!redirectedToInvite) await resumePendingCheckoutIfAny();
 });
 
 render();
