@@ -62,7 +62,77 @@ describe('hasFeature returns correctly for each tier\'s feature set', () => {
       storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1'),
     });
 
-    expect(await m.getEntitlements()).toEqual({ tier: 'reader', features: READER_FEATURES, expires: '2099-01-01T00:00:00Z' });
+    expect(await m.getEntitlements()).toEqual({
+      tier: 'reader', features: READER_FEATURES, expires: '2099-01-01T00:00:00Z', hasActiveSeat: false,
+    });
+  });
+
+  it('getEntitlements exposes hasActiveSeat (item S6 follow-up) as its own bit, independent of tier', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ tier: 'reader', features: READER_FEATURES, expires: null, hasActiveSeat: true }),
+    }));
+    const m = createEntitlementsManager({
+      storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1'),
+    });
+
+    expect(await m.getEntitlements()).toEqual({
+      tier: 'reader', features: READER_FEATURES, expires: null, hasActiveSeat: true,
+    });
+  });
+
+  it('a missing or non-boolean hasActiveSeat from the server degrades to false, never trusted as true', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ tier: 'reader', features: READER_FEATURES, expires: null, hasActiveSeat: 'yes' }),
+    }));
+    const m = createEntitlementsManager({
+      storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1'),
+    });
+
+    expect((await m.getEntitlements()).hasActiveSeat).toBe(false);
+  });
+});
+
+describe('getEntitlementSource (item S6 follow-up)', () => {
+  it('free tier: source free, hasActiveSeat false', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ tier: 'free', features: [], expires: null, hasActiveSeat: false }) }));
+    const m = createEntitlementsManager({ storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1') });
+    expect(await m.getEntitlementSource()).toEqual({ source: 'free', hasActiveSeat: false });
+  });
+
+  it('subscription active, no seat: source subscription', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ tier: 'reader', features: READER_FEATURES, expires: '2099-01-01T00:00:00Z', hasActiveSeat: false }),
+    }));
+    const m = createEntitlementsManager({ storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1') });
+    expect(await m.getEntitlementSource()).toEqual({ source: 'subscription', hasActiveSeat: false });
+  });
+
+  it('seat active, no subscription: source seat', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ tier: 'reader', features: READER_FEATURES, expires: null, hasActiveSeat: true }),
+    }));
+    const m = createEntitlementsManager({ storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1') });
+    expect(await m.getEntitlementSource()).toEqual({ source: 'seat', hasActiveSeat: true });
+  });
+
+  it('both active: source is subscription (it is what persists after leaving the class), but hasActiveSeat is NOT hidden', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ tier: 'reader', features: READER_FEATURES, expires: '2099-01-01T00:00:00Z', hasActiveSeat: true }),
+    }));
+    const m = createEntitlementsManager({ storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1') });
+    expect(await m.getEntitlementSource()).toEqual({ source: 'subscription', hasActiveSeat: true });
+  });
+
+  it('signed out: source free, no fetch', async () => {
+    const fetchImpl = vi.fn();
+    const m = createEntitlementsManager({ storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf(null) });
+    expect(await m.getEntitlementSource()).toEqual({ source: 'free', hasActiveSeat: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 
@@ -73,7 +143,7 @@ describe('signed-out resolves to free, without ever calling fetch', () => {
       storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf(null),
     });
 
-    expect(await m.getEntitlements()).toEqual({ tier: 'free', features: [], expires: null });
+    expect(await m.getEntitlements()).toEqual({ tier: 'free', features: [], expires: null, hasActiveSeat: false });
     expect(await m.hasFeature('own_documents')).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -95,7 +165,7 @@ describe('a failed fetch resolves to free, not a stale cached reader state past 
     });
 
     const result = await m.getEntitlements();
-    expect(result).toEqual({ tier: 'free', features: [], expires: null });
+    expect(result).toEqual({ tier: 'free', features: [], expires: null, hasActiveSeat: false });
     expect(await m.hasFeature('own_documents')).toBe(false);
     expect(fetchImpl).toHaveBeenCalled();
   });
@@ -105,7 +175,7 @@ describe('a failed fetch resolves to free, not a stale cached reader state past 
     const m = createEntitlementsManager({
       storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1'),
     });
-    await expect(m.getEntitlements()).resolves.toEqual({ tier: 'free', features: [], expires: null });
+    await expect(m.getEntitlements()).resolves.toEqual({ tier: 'free', features: [], expires: null, hasActiveSeat: false });
   });
 
   it('a malformed response (missing features array) resolves to free, not partially trusted', async () => {
@@ -113,7 +183,7 @@ describe('a failed fetch resolves to free, not a stale cached reader state past 
     const m = createEntitlementsManager({
       storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1'),
     });
-    await expect(m.getEntitlements()).resolves.toEqual({ tier: 'free', features: [], expires: null });
+    await expect(m.getEntitlements()).resolves.toEqual({ tier: 'free', features: [], expires: null, hasActiveSeat: false });
   });
 
   it('a response body that is not JSON at all resolves to free, not thrown', async () => {
@@ -121,7 +191,7 @@ describe('a failed fetch resolves to free, not a stale cached reader state past 
     const m = createEntitlementsManager({
       storage: fakeStorage(), fetchImpl, entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1'),
     });
-    await expect(m.getEntitlements()).resolves.toEqual({ tier: 'free', features: [], expires: null });
+    await expect(m.getEntitlements()).resolves.toEqual({ tier: 'free', features: [], expires: null, hasActiveSeat: false });
   });
 });
 
@@ -160,7 +230,7 @@ describe('caching — within the TTL and scoped to the current session', () => {
     });
 
     const result = await m.getEntitlements();
-    expect(result).toEqual({ tier: 'free', features: [], expires: null });
+    expect(result).toEqual({ tier: 'free', features: [], expires: null, hasActiveSeat: false });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -179,7 +249,7 @@ describe('caching — within the TTL and scoped to the current session', () => {
     resolveFetch({ ok: true, json: async () => ({ tier: 'reader', features: READER_FEATURES, expires: null }) });
 
     const [e1, has, e3] = await Promise.all([p1, p2, p3]);
-    expect(e1).toEqual({ tier: 'reader', features: READER_FEATURES, expires: null });
+    expect(e1).toEqual({ tier: 'reader', features: READER_FEATURES, expires: null, hasActiveSeat: false });
     expect(has).toBe(true);
     expect(e3).toEqual(e1);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -208,10 +278,10 @@ describe('refresh — reflected without a full extension reload', () => {
     // Phase 4) triggers an explicit refresh.
     plan = { tier: 'free', features: [], expires: null };
     const refreshed = await m.refresh();
-    expect(refreshed).toEqual({ tier: 'free', features: [], expires: null });
+    expect(refreshed).toEqual({ tier: 'free', features: [], expires: null, hasActiveSeat: false });
 
     expect(await m.hasFeature('sync')).toBe(false);
-    expect(storage._dump()[STORAGE_KEY].entitlements).toEqual({ tier: 'free', features: [], expires: null });
+    expect(storage._dump()[STORAGE_KEY].entitlements).toEqual({ tier: 'free', features: [], expires: null, hasActiveSeat: false });
   });
 
   it('refresh() with no session clears any leftover cached entry rather than leaving a stale one', async () => {
@@ -224,7 +294,7 @@ describe('refresh — reflected without a full extension reload', () => {
     });
 
     const result = await m.refresh();
-    expect(result).toEqual({ tier: 'free', features: [], expires: null });
+    expect(result).toEqual({ tier: 'free', features: [], expires: null, hasActiveSeat: false });
     expect(storage._dump()[STORAGE_KEY]).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
