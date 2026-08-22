@@ -362,6 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
   openPage('upgradeBtn',        'src/popup/upgrade.html');
   openPage('diagnosticsBtn',    'src/popup/diagnostics.html');
   openPage('signInBtn',         'src/popup/account.html');
+  openPage('joinClassBtn',      'src/popup/join-class.html');
 
   // ── Account status (item S3) ─────────────────────────────────────────
   // popup.js is a classic script, not an ES module (see

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Join a class · alcoia</title>
+  <link rel="stylesheet" href="../styles/fonts.css">
+  <link rel="stylesheet" href="../styles/panel.css">
+  <!-- join-class.js is a real ES module (imports src/shared/session.js,
+       entitlements.js and invites.js directly) — see session.js's own
+       header for why background.js, a classic service worker, cannot do
+       the same. -->
+  <script src="../shared/config.js"></script>
+  <style>
+    body { padding-bottom: 48px; }
+
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; padding: 16px 24px;
+      background: var(--paper-2); border-bottom: 1px solid var(--border);
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .logo-img { display: block; flex: none; height: 22px; width: auto; }
+    body.dark-mode .logo-img.on-paper { display: none; }
+    .logo-img.on-dark { display: none; }
+    body.dark-mode .logo-img.on-dark { display: block; }
+    .logo-sub {
+      font-family: var(--alc-serif); font-size: 15px; color: var(--muted);
+      padding-left: 14px; border-left: 1px solid var(--border);
+    }
+
+    .wrap { max-width: 460px; margin: 0 auto; padding: 40px 24px 0; }
+
+    .join-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 24px 22px;
+    }
+    .join-title {
+      font-family: var(--alc-serif); font-size: 19px; font-weight: 600;
+      margin: 0 0 6px;
+    }
+    .join-sub { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0 0 20px; }
+
+    .field-row { margin-bottom: 14px; }
+
+    .join-error {
+      margin: 0 0 14px; padding: 10px 12px;
+      border: 1px solid rgba(180,121,95,0.35); border-radius: var(--radius-sm);
+      background: rgba(180,121,95,0.08);
+      color: var(--wrong); font-size: 12px; line-height: 1.5;
+    }
+
+    /* ── The disclosure — the highest-stakes trust surface in the product
+       (ALCOIA-PLATFORM-SPEC.md §6). Sage border, not a warning colour: this
+       is reassurance, not a caution the reader should hesitate at. No
+       checkbox to tick past quickly — the text itself IS the gate, and the
+       "Join" button lives inside this same block, never reachable without
+       it having rendered first. */
+    .disclosure {
+      border: 1px solid rgba(111,128,112,0.32); background: var(--sage-sf);
+      border-radius: var(--radius-sm); padding: 14px 15px; margin-bottom: 18px;
+    }
+    .disclosure h2 {
+      font-family: var(--alc-serif); font-size: 14px; font-weight: 600;
+      margin: 0 0 8px; color: var(--text);
+    }
+    .disclosure p { font-size: 12.5px; line-height: 1.65; color: var(--text); margin: 0 0 8px; }
+    .disclosure p:last-child { margin-bottom: 0; }
+    .disclosure-class-name { font-weight: 600; }
+
+    .join-state { text-align: center; padding: 8px 4px 4px; }
+    .join-state-title {
+      font-family: var(--alc-serif); font-size: 16px; font-weight: 600;
+      margin: 0 0 8px;
+    }
+    .join-state-sub { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0; }
+    .join-check {
+      display: inline-block; margin-bottom: 6px;
+      font-size: 20px; color: var(--sage-2);
+    }
+
+    .member-class-id {
+      font-family: var(--alc-serif); font-size: 15px; font-weight: 600;
+      margin: 0 0 4px;
+    }
+    /* The gap this page is honest about: no server endpoint resolves a
+       classId/orgId into a name a student would recognise — see
+       src/shared/invites.js's own header. Shown plainly rather than
+       inventing a name. */
+    .member-gap-note {
+      font-size: 11px; color: var(--faint); line-height: 1.6; margin: 4px 0 0;
+    }
+
+    .leave-consequence {
+      text-align: left; font-size: 12px; color: var(--muted); line-height: 1.6;
+      margin: 16px 0 0; padding: 12px 13px;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+    }
+
+    @media (max-width: 480px) {
+      .header, .wrap { padding-left: 16px; padding-right: 16px; }
+      .logo-sub { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <img id="logo-img" class="logo-img on-paper" src="../../assets/alcoia-wordmark.png" alt="alcoia">
+    <img id="logo-img-dark" class="logo-img on-dark" src="../../assets/alcoia-wordmark-white.png" alt="">
+    <div class="logo-sub">Join a class</div>
+  </div>
+  <button class="btn btn-ghost" id="closeBtn">Close</button>
+</header>
+
+<div class="wrap">
+  <div class="join-card" id="joinCard">
+
+    <!-- ── Step 1: enter the invite (default state) ── -->
+    <div id="inputState">
+      <h1 class="join-title">Join a class</h1>
+      <p class="join-sub">
+        Paste the invite link or code your instructor sent you. Holding a seat gives you the
+        Reader plan automatically, for as long as you're in the class.
+      </p>
+
+      <div class="join-error" id="inputError" hidden></div>
+
+      <form id="inputFormEl">
+        <div class="field-row">
+          <label class="field-label" for="inviteInput">Invite link or code</label>
+          <input class="field-input" id="inviteInput" type="text" placeholder="https://... or a bare code" required>
+        </div>
+        <button class="btn btn-primary" type="submit" id="continueBtn" style="width:100%">Continue</button>
+      </form>
+    </div>
+
+    <!-- ── Step 2: the disclosure — MUST render before "Join" exists at
+         all. See join-class.js's own guard: the join call is structurally
+         unreachable without this element having been inserted first. ── -->
+    <div id="disclosureState" hidden>
+      <h1 class="join-title">Before you join</h1>
+
+      <div class="disclosure" id="disclosureBlock">
+        <h2>What your instructor can see</h2>
+        <p>
+          Your instructor sees <strong>aggregate results only</strong> — things like "most of the
+          class understood section 2." Nothing about <em>your own</em> reading, individually, is
+          ever visible to them.
+        </p>
+        <p>
+          The one exception: if <strong>you</strong> choose to submit a reading receipt for a
+          specific assignment, your instructor sees that one receipt. Nothing else, and never
+          automatically.
+        </p>
+      </div>
+
+      <div class="join-error" id="disclosureError" hidden></div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="confirmJoinBtn">Join this class</button>
+        <button class="btn btn-ghost" id="backBtn">Back</button>
+      </div>
+    </div>
+
+    <!-- ── Joined — already a member, or just joined ── -->
+    <div id="memberState" class="join-state" hidden>
+      <span class="join-check" aria-hidden="true">&#10003;</span>
+      <p class="join-state-title">You're in</p>
+      <p class="member-class-id" id="memberClassId"></p>
+      <p class="member-gap-note">
+        (alcoia can't show the class's name here yet — only its id. See this build's own notes.)
+      </p>
+
+      <div class="leave-consequence">
+        Leaving releases your seat immediately and reverts you to the free plan. Your highlights,
+        notes and quizzes stay on this device either way — leaving never deletes anything local.
+      </div>
+
+      <div class="join-error" id="leaveError" hidden></div>
+
+      <div class="btn-row" style="margin-top:16px">
+        <button class="btn btn-ghost" id="leaveBtn">Leave this class</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script type="module" src="join-class.js"></script>
+</body>
+</html>
