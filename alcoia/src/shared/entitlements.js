@@ -50,13 +50,27 @@
  * that is no longer current, and fetches fresh automatically. Adding an
  * eager refresh on top would only spend a network call on installs that
  * never end up checking a paid feature that session at all.
+ *
+ * hasActiveSeat (item S6 follow-up): the server now echoes back, as its
+ * own field, whether the account also holds an active class seat right
+ * now — independent of whether that seat is what actually granted `tier`.
+ * Confirmed by reading alcoiaServer's src/entitlements/resolve.js directly
+ * before adding this: previously the field did not exist on the wire at
+ * all, and a subscriber-with-a-seat was byte-for-byte indistinguishable
+ * from a subscriber-without-one, because the resolution order (subscription
+ * wins) discarded the seat fact once a subscription made it irrelevant to
+ * `tier`. This is DISPLAY-ONLY — it never gates a feature and hasFeature()
+ * does not consult it. A malformed/missing value degrades to `false`,
+ * matching this field's own worst case: a reader who does hold a seat
+ * would see a subscriber-only upgrade page (mildly wrong copy, no
+ * capability lost or gained), never the reverse.
  */
 import { createSessionManager } from './session.js';
 
 export const STORAGE_KEY = 'sra_entitlements';
 export const CACHE_TTL_MS = 15 * 60 * 1000;
 
-const FREE = Object.freeze({ tier: 'free', features: Object.freeze([]), expires: null });
+const FREE = Object.freeze({ tier: 'free', features: Object.freeze([]), expires: null, hasActiveSeat: false });
 
 export function createEntitlementsManager(opts = {}) {
   const storage   = opts.storage   || (typeof chrome !== 'undefined' ? chrome.storage.local : null);
@@ -100,6 +114,7 @@ export function createEntitlementsManager(opts = {}) {
         tier: data.tier,
         features: data.features,
         expires: typeof data.expires === 'string' ? data.expires : null,
+        hasActiveSeat: data.hasActiveSeat === true,
       };
     } catch (e) {
       return { ...FREE };
@@ -154,6 +169,25 @@ export function createEntitlementsManager(opts = {}) {
     return features.includes(name);
   }
 
+  /* The one narrow, deliberate exception to "never branch on tier" (see
+   * this module's own header): the upgrade page needs to tell a
+   * subscription apart from a class seat, because the action available
+   * differs (manage billing vs. manage class membership), not because a
+   * capability differs — features[] is identical either way. Derived from
+   * two facts already on the response: `expires` is only ever set (by the
+   * server's own resolution order) when the subscription branch is what
+   * granted `tier`, so `expires !== null` means "subscription active" with
+   * no further guessing needed; hasActiveSeat is the independent, honest
+   * bit for "is a seat ALSO active right now," regardless of which one
+   * decided `tier`. When both are true, source is 'subscription' (it is
+   * what persists after any class is left — ALCOIA-PLATFORM-SPEC.md §6)
+   * and hasActiveSeat stays true alongside it, rather than being hidden. */
+  async function getEntitlementSource() {
+    const { tier, expires, hasActiveSeat } = await getEntitlements();
+    if (tier !== 'reader') return { source: 'free', hasActiveSeat: false };
+    return { source: expires !== null ? 'subscription' : 'seat', hasActiveSeat: hasActiveSeat === true };
+  }
+
   /* Bypasses the cache/TTL entirely and fetches fresh — for the two
    * triggers that cannot wait: a sign-in just completed, or the reader
    * explicitly asked (the upgrade page's manual refresh, Phase 4). A
@@ -170,5 +204,5 @@ export function createEntitlementsManager(opts = {}) {
     return entitlements;
   }
 
-  return { hasFeature, getEntitlements, refresh };
+  return { hasFeature, getEntitlements, getEntitlementSource, refresh };
 }

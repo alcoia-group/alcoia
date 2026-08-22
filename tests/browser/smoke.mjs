@@ -2781,9 +2781,17 @@ try {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
+      // Item S6 follow-up: expires must be a real date here, not null — per
+      // alcoiaServer's src/entitlements/resolve.js (confirmed by reading it
+      // directly), the subscription branch is the only one that ever sets
+      // a non-null expires, and upgrade.js's getEntitlementSource() now
+      // reads `expires !== null` as "via subscription" specifically. This
+      // block models a completed CREEM CHECKOUT (a subscription), so
+      // expires:null here would misrepresent it as a seat instead — this
+      // is a correction to keep the mock honest, not a behaviour change.
       body: JSON.stringify(entitlementsShouldReturnReader
-        ? { tier: 'reader', features: ['own_documents', 'portable_receipt', 'sync'], expires: null }
-        : { tier: 'free', features: [], expires: null }),
+        ? { tier: 'reader', features: ['own_documents', 'portable_receipt', 'sync'], expires: '2099-01-01T00:00:00.000Z', hasActiveSeat: false }
+        : { tier: 'free', features: [], expires: null, hasActiveSeat: false }),
     });
   });
   await routePage.route('**/api/billing/checkout', (route) => route.fulfill({
@@ -2825,10 +2833,49 @@ try {
   );
   const alreadyEntitledOnLoad = await readUpgradeButtonState(routePage);
 
+  // Item S6 follow-up: entitled via a class seat, not a subscription.
+  // manageBtn's own CSS (.manage-link { display: block }) is the SAME
+  // specificity-collision shape as readerBtn's `.btn` rule — this block
+  // exists specifically because that class of bug only ever reproduces in
+  // a real browser (this file's own header), and hiding manageBtn for a
+  // reason other than "not entitled at all" is genuinely new behaviour
+  // this task adds, not something the prior fix was ever exercised
+  // against before now.
+  await routePage.route('**/api/entitlements', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ tier: 'reader', features: ['own_documents', 'portable_receipt', 'sync'], expires: null, hasActiveSeat: true }),
+  }));
+  await routePage.evaluate(() => new Promise((r) => chrome.storage.local.set(
+    { sra_class_membership: { classId: 'smoke-class-1', seatId: 'smoke-seat-1', role: 'student', joinedAt: Date.now() } }, r,
+  )));
+  // Case B just cached a "subscription-active" entitlements response for
+  // this same session token (entitlements.js's own 15-minute TTL cache,
+  // keyed by token) — without clearing it, this navigation would silently
+  // reuse that stale cache and never reach the new route handler above at
+  // all, since getEntitlements() checks its cache before ever fetching.
+  await routePage.evaluate(() => new Promise((r) => chrome.storage.local.remove('sra_entitlements', r)));
+  await routePage.goto(`chrome-extension://${extId}/src/popup/upgrade.html`);
+  await routePage.waitForFunction(
+    () => document.getElementById('readerStateNote').textContent.includes('Reader access'),
+    { timeout: 5000 },
+  );
+  const seatOnly = await readUpgradeButtonState(routePage);
+  const teamsBtnState = await routePage.evaluate(() => {
+    const btn = document.getElementById('teamsBtn');
+    return { disabled: btn.disabled, text: btn.textContent, noteText: document.getElementById('teamsStateNote').textContent };
+  });
+
   await routePage.close();
 
   upgradeButtonResult = {
     attempted: true,
+    seatOnly: {
+      readerActuallyHiddenInRealChromium: seatOnly.reader.actuallyHidden,
+      manageBtnActuallyHiddenInRealChromium: !seatOnly.manageBtn.actuallyVisible,
+      stateNoteText: seatOnly.stateNoteText,
+      teamsBtnReflectsMembership: !teamsBtnState.disabled && teamsBtnState.text !== 'Coming soon',
+      teamsNoteText: teamsBtnState.noteText,
+    },
     beforeWebhook: {
       readerVisible: !beforeWebhook.reader.actuallyHidden,
       readerText: beforeWebhook.reader.text,

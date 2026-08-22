@@ -49,10 +49,57 @@
  * there — see that file — and redirects back here with `?checkout=pending`
  * so this page shows the processing state immediately rather than waiting
  * for a refocus that already happened before this page existed.
+ *
+ * ENTITLEMENT SOURCE (item S6 follow-up): "entitled" alone (hasFeature)
+ * used to be all this page needed, because the only action was "manage
+ * your subscription." Now a reader can also be entitled via a class seat
+ * (item S6), and that reader has nothing to manage on Creem's side — the
+ * Manage-subscription link would be a dead end. Confirmed by reading
+ * alcoiaServer's src/entitlements/resolve.js directly: the server did NOT
+ * distinguish source at all before this task (a subscriber-with-a-seat was
+ * byte-for-byte identical, over the wire, to a subscriber-without-one), so
+ * a small additive field (hasActiveSeat) was added there first — see that
+ * file's own comment — and entitlements.js's getEntitlementSource() derives
+ * 'subscription' | 'seat' | 'free' from it. Never inferred from this
+ * extension's own local sra_class_membership record alone: that record is
+ * only ever used below to LABEL which class, once the server has already
+ * confirmed a seat is active — a reader could hold a stale local record
+ * for a class left on another device while the server reports no active
+ * seat at all, or vice versa, and the server's bit is what actually
+ * decides the message shown, every time.
  */
 import { createSessionManager } from '../shared/session.js';
 import { createEntitlementsManager } from '../shared/entitlements.js';
 import { createBillingManager } from '../shared/billing.js';
+
+const CLASS_MEMBERSHIP_KEY = 'sra_class_membership';
+
+function seatOnlyMessage(classId) {
+  return classId
+    ? `You have Reader access through Class ${classId}.`
+    : 'You have Reader access through a class seat.';
+}
+function alsoInClassMessage(classId) {
+  return classId
+    ? `You're also enrolled in Class ${classId}, which includes Reader on its own.`
+    : "You're also enrolled in a class that includes Reader on its own.";
+}
+function teamsMembershipMessage(classId) {
+  return classId
+    ? `You're a member of Class ${classId} under this plan.`
+    : "You're a member of a class under this plan.";
+}
+
+// Display-only, same known limitation join-class.html already states
+// plainly: no server endpoint resolves a classId to a name yet (confirmed
+// by reading alcoiaServer's classes.js/invites.js — see src/shared/
+// invites.js's own header). This never decides WHETHER a seat is active —
+// only which id to print once the server has already said one is.
+async function getLocalClassId() {
+  const stored = await new Promise((resolve) =>
+    chrome.storage.local.get({ [CLASS_MEMBERSHIP_KEY]: null }, (res) => resolve(res[CLASS_MEMBERSHIP_KEY])));
+  return stored && typeof stored.classId === 'string' ? stored.classId : null;
+}
 
 const PRICES = {
   annual:  { amount: '$4.92', unit: '/mo', note: '$59 billed annually' },
@@ -105,6 +152,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const manageBtn = $('manageBtn');
   const studentBtn = $('studentBtn');
   const studentStateNote = $('studentStateNote');
+  const readerSeatNote = $('readerSeatNote');
+  const teamsBtn = $('teamsBtn');
+  const teamsStateNote = $('teamsStateNote');
 
   function setPeriod(period) {
     const p = PRICES[period];
@@ -154,6 +204,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (manageBtn) manageBtn.hidden = true;
       if (studentBtn) { studentBtn.hidden = false; studentBtn.disabled = false; }
       if (!checkoutInFlight) { showStateNote(stateNote, '', null); showStateNote(studentStateNote, '', null); }
+      showStateNote(readerSeatNote, '', null);
       return;
     }
 
@@ -172,8 +223,30 @@ document.addEventListener('DOMContentLoaded', () => {
       readerBtn.hidden = true;
       readerBtn.disabled = false;
       readerBtn.textContent = 'Subscribe';
-      if (manageBtn) manageBtn.hidden = false;
-      showStateNote(stateNote, "You're on the Reader plan.", 'current');
+
+      // Item S6 follow-up — see this file's own header for why this reads
+      // getEntitlementSource() rather than inferring from local storage.
+      const { source, hasActiveSeat } = await entitlements.getEntitlementSource();
+      const localClassId = hasActiveSeat ? await getLocalClassId() : null;
+
+      if (source === 'seat') {
+        // No subscription exists to manage — the portal link would be a
+        // dead end, so it stays hidden, and the seat message becomes the
+        // PRIMARY note rather than a secondary addition to it.
+        if (manageBtn) manageBtn.hidden = true;
+        showStateNote(stateNote, seatOnlyMessage(localClassId), 'current');
+        showStateNote(readerSeatNote, '', null);
+      } else {
+        // Subscription is the source (with or without a seat also
+        // active) — the prior task's fix is untouched: manage link shown,
+        // "You're on the Reader plan." stays the primary note.
+        if (manageBtn) manageBtn.hidden = false;
+        showStateNote(stateNote, "You're on the Reader plan.", 'current');
+        // "Both" case: an explicit second line, never hidden in favour of
+        // the subscription message above it.
+        showStateNote(readerSeatNote, hasActiveSeat ? alsoInClassMessage(localClassId) : '', hasActiveSeat ? 'current' : null);
+      }
+
       // Same entitlement, so the Student action has nothing left to do —
       // hidden rather than shown alongside a manage link that already
       // covers it, avoiding two competing "you already have this"
@@ -190,6 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
     readerBtn.hidden = false;
     if (manageBtn) manageBtn.hidden = true;
     if (studentBtn) studentBtn.hidden = false;
+    showStateNote(readerSeatNote, '', null);
     if (checkoutInFlight) {
       readerBtn.disabled = true;
       readerBtn.textContent = 'Waiting…';
@@ -205,6 +279,44 @@ document.addEventListener('DOMContentLoaded', () => {
       showStateNote(studentStateNote, '', null);
     }
   }
+
+  /* Item S6 follow-up. There is no self-serve checkout for this tier at
+   * all (this file's own header) — the button stays disabled/"Coming
+   * soon" for everyone except a reader who already holds an active class
+   * seat, where it reflects that real membership instead. Not a Teams
+   * console: the only action offered is a link into the ALREADY-BUILT
+   * leave/manage flow in join-class.html (item S6), opened as its own
+   * tab the same way every other cross-page action in this file works —
+   * nothing about class membership is managed on this page itself. */
+  async function renderTeamsTier() {
+    if (!teamsBtn) return;
+
+    const signedIn = await session.getSession();
+    if (!signedIn) {
+      teamsBtn.disabled = true;
+      teamsBtn.textContent = 'Coming soon';
+      showStateNote(teamsStateNote, '', null);
+      return;
+    }
+
+    const { hasActiveSeat } = await entitlements.getEntitlementSource();
+    if (!hasActiveSeat) {
+      teamsBtn.disabled = true;
+      teamsBtn.textContent = 'Coming soon';
+      showStateNote(teamsStateNote, '', null);
+      return;
+    }
+
+    const localClassId = await getLocalClassId();
+    teamsBtn.disabled = false;
+    teamsBtn.textContent = 'Manage your class membership';
+    showStateNote(teamsStateNote, teamsMembershipMessage(localClassId), 'current');
+  }
+
+  teamsBtn?.addEventListener('click', () => {
+    if (teamsBtn.disabled) return;
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/join-class.html') });
+  });
 
   /* Shared by the Reader button and the Student link — same
    * startCheckoutSession() call, only the plan key and which button/note
@@ -258,7 +370,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     if (!checkoutInFlight) return;
-    entitlements.refresh().then(renderReaderTier);
+    entitlements.refresh().then(() => { renderReaderTier(); renderTeamsTier(); });
   });
 
   // A session appearing/disappearing (signed in elsewhere, or via
@@ -268,8 +380,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (areaName !== 'local') return;
     if (!(self.ALCOIA_CONFIG.SESSION_STORAGE_KEY in changes)) return;
     renderReaderTier();
+    renderTeamsTier();
   });
 
   setPeriod('annual');
   renderReaderTier();
+  renderTeamsTier();
 });

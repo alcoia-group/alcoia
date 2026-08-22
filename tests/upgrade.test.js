@@ -137,8 +137,31 @@ async function importFreshUpgradeJs() {
 }
 
 const VALID_SESSION = { token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 };
-const FREE_RESPONSE = { tier: 'free', features: [], expires: null };
-const READER_RESPONSE = { tier: 'reader', features: ['own_documents', 'portable_receipt', 'sync'], expires: null };
+const FREE_RESPONSE = { tier: 'free', features: [], expires: null, hasActiveSeat: false };
+// Item S6 follow-up: `expires` must be a real date here, not null — per
+// alcoiaServer's src/entitlements/resolve.js (confirmed by reading it
+// directly), the subscription branch is the ONLY branch that ever sets a
+// non-null expires, so `expires: null` on a 'reader' tier now specifically
+// means "via a seat," not "via a subscription with no expiry." Every test
+// in this file that reaches this constant is modelling a completed
+// CHECKOUT (a subscription), so this is a correction to make the mock
+// honest, not a behaviour change to what these tests were already
+// asserting.
+const READER_RESPONSE = {
+  tier: 'reader', features: ['own_documents', 'portable_receipt', 'sync'],
+  expires: '2099-01-01T00:00:00.000Z', hasActiveSeat: false,
+};
+// The two new source states this task adds: entitled via a class seat
+// alone (no subscription — expires null, hasActiveSeat true), and entitled
+// via BOTH a subscription and a currently active seat at once.
+const SEAT_ONLY_RESPONSE = {
+  tier: 'reader', features: ['own_documents', 'portable_receipt', 'sync'],
+  expires: null, hasActiveSeat: true,
+};
+const BOTH_RESPONSE = {
+  tier: 'reader', features: ['own_documents', 'portable_receipt', 'sync'],
+  expires: '2099-01-01T00:00:00.000Z', hasActiveSeat: true,
+};
 
 describe('signed-out click routes through sign-in and resumes checkout after', () => {
   it('upgrade.js: a signed-out click stores the pending plan and navigates to account.html', async () => {
@@ -398,5 +421,216 @@ describe('Student checkout — same entitlement as Reader, confirmed server-side
 
     expect(document.getElementById('studentStateNote').textContent).toMatch(/processing/i);
     expect(document.getElementById('studentBtn').disabled).toBe(true);
+  });
+});
+
+describe('entitlement source (item S6 follow-up): subscription vs. class seat vs. both', () => {
+  it('subscription-only: shows the existing subscriber state unchanged — "You\'re on the Reader plan.", manage link visible, no seat note', async () => {
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    const readerBtn = document.getElementById('readerBtn');
+    await vi.waitFor(() => expect(isVisible(readerBtn)).toBe(false));
+
+    expect(document.getElementById('readerStateNote').textContent).toMatch(/you're on the reader plan/i);
+    const manageBtn = document.getElementById('manageBtn');
+    expect(manageBtn.hidden).toBe(false);
+    expect(isVisible(manageBtn)).toBe(true);
+    expect(document.getElementById('readerSeatNote').hidden).toBe(true);
+  });
+
+  it('seat-only: shows the new seat-based message as the PRIMARY note, and the Manage subscription link is gone', async () => {
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_session: VALID_SESSION,
+      sra_class_membership: { classId: 'c-seat-1', seatId: 's1', role: 'student', joinedAt: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => SEAT_ONLY_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    const readerBtn = document.getElementById('readerBtn');
+    await vi.waitFor(() => expect(isVisible(readerBtn)).toBe(false));
+
+    const manageBtn = document.getElementById('manageBtn');
+    expect(manageBtn.hidden).toBe(true);
+    expect(isVisible(manageBtn)).toBe(false);
+    expect(document.getElementById('readerStateNote').textContent).toMatch(/reader access through class c-seat-1/i);
+    expect(document.getElementById('readerStateNote').textContent).not.toMatch(/you're on the reader plan/i);
+    // No competing second note when the seat message is already primary.
+    expect(document.getElementById('readerSeatNote').hidden).toBe(true);
+  });
+
+  it('seat-only with no local class record: falls back to a generic message rather than fabricating a class id', async () => {
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION })); // no sra_class_membership
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => SEAT_ONLY_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    await vi.waitFor(() => expect(document.getElementById('readerStateNote').hidden).toBe(false));
+    expect(document.getElementById('readerStateNote').textContent).toMatch(/reader access through a class seat/i);
+    expect(document.getElementById('manageBtn').hidden).toBe(true);
+  });
+
+  it('both simultaneously, currently active seat: subscription state stays PRIMARY, and the active seat is surfaced, not hidden', async () => {
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_session: VALID_SESSION,
+      sra_class_membership: { classId: 'c-both-1', seatId: 's2', role: 'student', joinedAt: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => BOTH_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    const readerBtn = document.getElementById('readerBtn');
+    await vi.waitFor(() => expect(isVisible(readerBtn)).toBe(false));
+
+    // Primary: unchanged subscriber state, manage link present — this is
+    // what persists after the class is left (ALCOIA-PLATFORM-SPEC.md §6).
+    expect(document.getElementById('readerStateNote').textContent).toMatch(/you're on the reader plan/i);
+    const manageBtn = document.getElementById('manageBtn');
+    expect(manageBtn.hidden).toBe(false);
+    expect(isVisible(manageBtn)).toBe(true);
+
+    // Not silently hidden: a second, explicit line names the active seat.
+    const seatNote = document.getElementById('readerSeatNote');
+    expect(seatNote.hidden).toBe(false);
+    expect(seatNote.textContent).toMatch(/also enrolled in class c-both-1/i);
+  });
+
+  it('subscription + a seat that was since left: behaves exactly like subscription-only, no leftover seat note', async () => {
+    // A real, distinct case from "both active": the server reports
+    // hasActiveSeat: false once the seat is released, even though a local
+    // sra_class_membership record might still exist from before leaving
+    // (e.g. leave happened on another device) -- the server bit, not the
+    // stale local record, is what this page trusts.
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_session: VALID_SESSION,
+      sra_class_membership: { classId: 'c-since-left', seatId: 's3', role: 'student', joinedAt: Date.now() - 999_999 },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    const readerBtn = document.getElementById('readerBtn');
+    await vi.waitFor(() => expect(isVisible(readerBtn)).toBe(false));
+
+    expect(document.getElementById('readerStateNote').textContent).toMatch(/you're on the reader plan/i);
+    expect(document.getElementById('manageBtn').hidden).toBe(false);
+    // The stale local record must not resurrect a seat note the server no
+    // longer confirms.
+    expect(document.getElementById('readerSeatNote').hidden).toBe(true);
+  });
+});
+
+describe('Teams & classrooms card reflects real active-seat state (item S6 follow-up)', () => {
+  it('signed out: stays "Coming soon", disabled, no state note', async () => {
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome());
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', vi.fn());
+
+    await importFreshUpgradeJs();
+    const teamsBtn = document.getElementById('teamsBtn');
+    expect(teamsBtn.disabled).toBe(true);
+    expect(teamsBtn.textContent).toBe('Coming soon');
+    expect(document.getElementById('teamsStateNote').hidden).toBe(true);
+  });
+
+  it('signed in, free (no seat, no subscription): stays "Coming soon", disabled', async () => {
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => FREE_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    await vi.waitFor(() => expect(document.getElementById('teamsBtn').disabled).toBe(true));
+    expect(document.getElementById('teamsBtn').textContent).toBe('Coming soon');
+  });
+
+  it('subscription-only, no seat: stays "Coming soon" — a subscriber is not automatically a class member', async () => {
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    await vi.waitFor(() => expect(document.getElementById('readerStateNote').hidden).toBe(false));
+    expect(document.getElementById('teamsBtn').disabled).toBe(true);
+    expect(document.getElementById('teamsBtn').textContent).toBe('Coming soon');
+  });
+
+  it('an active seat holder (seat-only): the card reflects real membership and enables a link to the leave/manage flow', async () => {
+    loadUpgradeBody();
+    const chrome = fakeChrome({
+      sra_session: VALID_SESSION,
+      sra_class_membership: { classId: 'c-teams-1', seatId: 's4', role: 'student', joinedAt: Date.now() },
+    });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => SEAT_ONLY_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    const teamsBtn = document.getElementById('teamsBtn');
+    await vi.waitFor(() => expect(teamsBtn.disabled).toBe(false));
+    expect(teamsBtn.textContent).not.toBe('Coming soon');
+    expect(document.getElementById('teamsStateNote').hidden).toBe(false);
+    expect(document.getElementById('teamsStateNote').textContent).toMatch(/class c-teams-1/i);
+
+    // "surface a link to the existing leave-class flow from here too" —
+    // clicking opens join-class.html as its own tab, the same established
+    // pattern every other cross-page action in this file already uses;
+    // this file does not build a second leave UI.
+    //
+    // Asserts "at least one, most-recent" rather than an exact count: this
+    // click handler is synchronous (unlike startCheckout()'s async chain),
+    // which deterministically exposes a pre-existing characteristic of
+    // this test file — DOMContentLoaded listeners from every earlier
+    // importFreshUpgradeJs() in this same jsdom document accumulate on
+    // `document` and all re-fire on each new dispatch, re-attaching a click
+    // listener each time. Async handlers elsewhere in this file only
+    // APPEAR immune because vi.waitFor happens to catch length===1 before
+    // later accumulated listeners resolve — not a guarantee, just timing.
+    // The behaviour under test (this click opens the real leave flow) does
+    // not depend on exactly-once dispatch, so the assertion does not
+    // either.
+    const before = chrome._tabsCreated.length;
+    teamsBtn.click();
+    await vi.waitFor(() => expect(chrome._tabsCreated.length).toBeGreaterThan(before));
+    expect(chrome._tabsCreated.at(-1).url).toMatch(/join-class\.html$/);
+  });
+
+  it('an active seat holder alongside a subscription (both): the Teams card still reflects the active seat', async () => {
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_session: VALID_SESSION,
+      sra_class_membership: { classId: 'c-teams-2', seatId: 's5', role: 'student', joinedAt: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => BOTH_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    const teamsBtn = document.getElementById('teamsBtn');
+    await vi.waitFor(() => expect(teamsBtn.disabled).toBe(false));
+    expect(document.getElementById('teamsStateNote').textContent).toMatch(/class c-teams-2/i);
+  });
+
+  it('a disabled click is inert — no tab opens while still "Coming soon"', async () => {
+    loadUpgradeBody();
+    const chrome = fakeChrome({ sra_session: VALID_SESSION });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => FREE_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    await vi.waitFor(() => expect(document.getElementById('teamsBtn').disabled).toBe(true));
+    document.getElementById('teamsBtn').click();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(chrome._tabsCreated.length).toBe(0);
   });
 });
