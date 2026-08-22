@@ -49,6 +49,22 @@
   --ui:    var(--alc-ui);
 }
 
+/* A real, reproduced bug (upgrade.js's Reader button, confirmed via
+   Puppeteer): the browser's own `[hidden] { display: none }` UA rule and
+   an author rule like `.btn { display: inline-flex }` have the SAME
+   specificity — an attribute selector and a class selector are both
+   (0,0,1,0). Author stylesheets apply after the UA stylesheet, so `.btn`'s
+   own `display` wins the tie, and `el.hidden = true` on any `.btn`-classed
+   element does nothing visually: the element stays exactly as visible as
+   it was, showing whatever label/disabled state was last set. This raises
+   `[hidden]`'s specificity above any single class so the attribute is
+   authoritative everywhere on every page sharing this stylesheet, not just
+   the one button that happened to get noticed. `!important` is deliberate
+   here, not a shortcut — `hidden` is a semantic "this does not exist right
+   now" signal and nothing should be able to out-specificity it by
+   accident. */
+[hidden] { display: none !important; }
+
 .dark-mode,
 body.dark-mode {
   --paper:      #1A181C;

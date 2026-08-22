@@ -10,6 +10,37 @@
  * internally (no injection seam, matching how account.js already works) —
  * so every scenario here is driven through the same chrome.storage/fetch
  * surface a real browser would use, not by mocking this file's internals.
+ *
+ * A REAL BUG SLIPPED PAST THIS FILE ONCE ALREADY: earlier versions of
+ * these tests loaded ONLY <body>'s innerHTML, discarding panel.css's
+ * <link> and upgrade.html's own <style> block entirely, and asserted only
+ * `element.hidden === true` (the DOM attribute) rather than whether the
+ * element was actually, visually gone. `.hidden = true` was genuinely
+ * being set — the assertion was never false — but a `.btn { display:
+ * inline-flex }` rule in panel.css silently beat the browser's own
+ * `[hidden] { display: none }` default (equal specificity, author rule
+ * wins the tie), so the Reader button stayed fully visible in a real
+ * browser the whole time, stuck on whatever "Waiting…" label it had before
+ * refresh() resolved.
+ *
+ * THIS FILE STILL CANNOT CATCH THAT SPECIFIC BUG, EVEN NOW — confirmed
+ * directly, not assumed: jsdom's own getComputedStyle does NOT reproduce
+ * the collision at all (isolated repro: a `.btn { display: inline-flex }`
+ * rule never beats `[hidden]` in jsdom, regardless of author-stylesheet
+ * ordering — jsdom special-cases `hidden` in a way real Chromium does not).
+ * So loadUpgradeBody() below loading the real CSS, and isVisible() below
+ * checking computed style rather than the attribute, are real correctness
+ * improvements over the old attribute-only assertions (they do catch a
+ * genuinely un-hidden element with NO competing display rule, and they
+ * catch the label/disabled reset this bug also needed), but they are NOT
+ * what proves THIS specific CSS-specificity collision is fixed. That proof
+ * lives in tests/browser/smoke.mjs's "upgrade page button fix" block,
+ * which runs in genuine Chromium via Playwright — the only environment
+ * that actually reproduces the collision. Do not trust this file alone for
+ * that claim; it was already wrong once (the project notes §2: "this suite's
+ * failure mode is absence, not error... a green run is not evidence a
+ * feature works" — applies to this file's own history now, not just the
+ * app it tests).
  */
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
@@ -19,6 +50,9 @@ import { fileURLToPath } from 'node:url';
 const UPGRADE_HTML_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)), '..', 'alcoia', 'src', 'popup', 'upgrade.html',
 );
+const PANEL_CSS_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)), '..', 'alcoia', 'src', 'styles', 'panel.css',
+);
 
 const ENTITLEMENTS_URL = 'https://api.alcoia.invalid/api/entitlements';
 const CHECKOUT_URL = 'https://api.alcoia.invalid/api/billing/checkout';
@@ -26,11 +60,32 @@ const PORTAL_URL = 'https://api.alcoia.invalid/api/billing/portal';
 
 function loadUpgradeBody(search = '') {
   const html = fs.readFileSync(UPGRADE_HTML_PATH, 'utf8');
-  const match = html.match(/<body>([\s\S]*)<\/body>/);
-  if (!match) throw new Error('upgrade.html body not found — did its structure change?');
-  document.body.innerHTML = match[1].replace(/<script[\s\S]*?<\/script>/g, '');
+  const bodyMatch = html.match(/<body>([\s\S]*)<\/body>/);
+  if (!bodyMatch) throw new Error('upgrade.html body not found — did its structure change?');
+  const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
+  if (!styleMatch) throw new Error('upgrade.html <style> block not found — did its structure change?');
+
+  // Real panel.css FIRST, upgrade.html's own inline <style> SECOND — the
+  // same cascade order the real <head> uses (the <link> precedes the
+  // inline block there). This is what makes getComputedStyle(...).display
+  // below mean anything at all.
+  const panelCss = fs.readFileSync(PANEL_CSS_PATH, 'utf8');
+  document.head.innerHTML = '';
+  const styleEl = document.createElement('style');
+  styleEl.textContent = panelCss + '\n' + styleMatch[1];
+  document.head.appendChild(styleEl);
+
+  document.body.innerHTML = bodyMatch[1].replace(/<script[\s\S]*?<\/script>/g, '');
   if (search) window.history.pushState({}, '', '/upgrade.html' + search);
   else window.history.pushState({}, '', '/upgrade.html');
+}
+
+// The actual bug lived in the gap between "hidden === true" (the
+// attribute, always was correct) and "really invisible" (was not) — so
+// every check that matters here goes through computed style, not the
+// attribute alone.
+function isVisible(el) {
+  return getComputedStyle(el).display !== 'none';
 }
 
 function fakeChrome(seed = {}) {
@@ -170,14 +225,56 @@ describe('once entitlements.refresh() reports the new plan, the page reflects it
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     document.dispatchEvent(new Event('visibilitychange'));
 
-    await vi.waitFor(() => expect(document.getElementById('readerBtn').hidden).toBe(true));
+    const readerBtn = document.getElementById('readerBtn');
+    await vi.waitFor(() => expect(readerBtn.hidden).toBe(true));
+    // `.hidden` alone was already true at this point even before the fix
+    // — in a REAL browser the button stayed fully visible regardless (a
+    // `.btn { display: inline-flex }` rule in panel.css beats `[hidden]`'s
+    // equal-specificity UA default). isVisible() does NOT actually catch
+    // that here — jsdom does not reproduce the collision at all (see this
+    // file's own header) — so this assertion is a correctness check on the
+    // fixed value, not a regression guard for the CSS bug itself; that
+    // guard is tests/browser/smoke.mjs's "upgrade page button fix" block.
+    expect(isVisible(readerBtn)).toBe(false);
+    // And not just invisible-but-stale: the label/disabled state itself
+    // must be reset, not left showing "Waiting…"/disabled in case this
+    // element is ever shown again later (e.g. a downgrade).
+    expect(readerBtn.disabled).toBe(false);
+    expect(readerBtn.textContent).toBe('Subscribe');
     expect(document.getElementById('manageBtn').hidden).toBe(false);
+    expect(isVisible(document.getElementById('manageBtn'))).toBe(true);
     expect(document.getElementById('readerStateNote').textContent).toMatch(/you're on the reader plan/i);
     // Confirms this is entitlements.js's own refresh() actually running
     // (item E1/E3's own requirement) — a genuinely new network call, not
     // the 15-minute cache being silently reused or a hand-rolled second
     // implementation.
     expect(entitlementsFetch.mock.calls.length).toBeGreaterThan(callsBeforeRefocus);
+  });
+
+  it('the SAME entitled render, reached on a normal page load with no checkout ever attempted, also fully replaces the button — not only after a checkout round-trip', async () => {
+    // No `?checkout=pending` — this is a reader who is already entitled
+    // from a PRIOR session, just opening the plans page normally. Before
+    // the fix this path never even set the "Waiting…" label at all — the
+    // button's default HTML text ("Subscribe") is what stayed stuck
+    // visible, and worse than the return-from-checkout case, it was never
+    // disabled either, so it stayed genuinely clickable.
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+
+    const readerBtn = document.getElementById('readerBtn');
+    await vi.waitFor(() => expect(isVisible(readerBtn)).toBe(false));
+    expect(readerBtn.hidden).toBe(true);
+    expect(readerBtn.disabled).toBe(false);
+    expect(readerBtn.textContent).toBe('Subscribe');
+
+    const manageBtn = document.getElementById('manageBtn');
+    expect(manageBtn.hidden).toBe(false);
+    expect(isVisible(manageBtn)).toBe(true);
+    expect(document.getElementById('readerStateNote').textContent).toMatch(/you're on the reader plan/i);
   });
 
   it('a refocus while no checkout was ever initiated does not spuriously refresh', async () => {
@@ -260,11 +357,34 @@ describe('Student checkout — same entitlement as Reader, confirmed server-side
     vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
 
     await importFreshUpgradeJs();
-    await vi.waitFor(() => expect(document.getElementById('readerBtn').hidden).toBe(true));
+    const readerBtn = document.getElementById('readerBtn');
+    await vi.waitFor(() => expect(isVisible(readerBtn)).toBe(false));
 
-    expect(document.getElementById('studentBtn').hidden).toBe(true);
+    const studentBtn = document.getElementById('studentBtn');
+    expect(studentBtn.hidden).toBe(true);
+    // studentBtn (class="link-btn") never had the CSS collision readerBtn
+    // did — .link-btn sets no `display` of its own, so [hidden] was never
+    // contested for it. Asserted explicitly rather than assumed, per this
+    // item's own instruction to confirm Student's path by reading it, not
+    // by assuming it matches Reader's.
+    expect(isVisible(studentBtn)).toBe(false);
+    expect(studentBtn.disabled).toBe(false);
+    expect(studentBtn.textContent).toBe('start checkout');
     expect(document.getElementById('studentStateNote').hidden).toBe(true);
     expect(document.getElementById('manageBtn').hidden).toBe(false);
+  });
+
+  it('the same entitled render on a normal page load (no checkout ever attempted) also fully resets the Student action', async () => {
+    loadUpgradeBody();
+    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
+
+    await importFreshUpgradeJs();
+    const studentBtn = document.getElementById('studentBtn');
+    await vi.waitFor(() => expect(isVisible(studentBtn)).toBe(false));
+    expect(studentBtn.disabled).toBe(false);
+    expect(studentBtn.textContent).toBe('start checkout');
   });
 
   it('while a checkout is processing (from either button), the Student action is disabled too, not just Reader\'s', async () => {
