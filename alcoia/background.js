@@ -131,7 +131,98 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
 //     what still catches it, since Chrome's own enforcement and this
 //     file's are two separate pieces of code that could each be wrong on
 //     their own.
+// ── LTI launch handoff (item S6/E4 follow-up) ───────────────────────────
+// The same platform fact as the magic-link handoff above (background.js
+// is the only place that can ever receive onMessageExternal at all) now
+// serves a second web page too: whatever page a Canvas launch lands the
+// student's browser on, once built (see src/shared/config.js's own
+// LTI_READER_ORIGIN comment for why that page does not exist in any repo
+// available here yet, and why its origin is nonetheless a real,
+// server-confirmed value rather than an invention).
+//
+// A SEPARATE branch, not a widened version of the magic-link one above —
+// checked, and its own origin verified, BEFORE that listener's unconditional
+// origin/shape check runs, so a message can only ever be processed under
+// the one origin it is actually confirmed to come from. Two shapes,
+// copied verbatim from alcoiaServer's src/http/routes/lti.js (confirmed
+// by reading it directly, not assumed):
+//   disclosure not yet shown: { disclosureRequired: true, reportingMode,
+//     classId, ackCode } -- no session exists yet. Stores the pending
+//     record and opens join-class.html, the SAME disclosure screen the
+//     native invite-accept flow already uses (item S6) -- not a second
+//     one. The join/session cannot complete from here; only that page's
+//     own completeJoin() (gated on disclosureRendered, unchanged by this
+//     item) can turn ackCode into a real session, via
+//     invites.js's acknowledgeLtiDisclosure().
+//   disclosure already acknowledged on an earlier launch: { sessionToken,
+//     kind: 'lti', classId, assignmentId, redirectTo } -- stores the
+//     session directly, same as the magic-link exchange, and stops. No
+//     UI of any kind here: the guarantee ("join must not complete until
+//     disclosure has genuinely rendered") is already satisfied server-side
+//     — this seat's disclosure_ack_at was set on a PRIOR launch that DID
+//     go through the disclosure screen, not skipped.
+function handleLtiLaunchMessage(payload, sendResponse) {
+  if (!payload || typeof payload !== 'object') {
+    sendResponse({ ok: false, error: 'malformed_payload' });
+    return;
+  }
+
+  if (payload.disclosureRequired === true) {
+    const ackCode = typeof payload.ackCode === 'string' ? payload.ackCode.trim() : '';
+    const classId = typeof payload.classId === 'string' ? payload.classId : '';
+    if (!ackCode || !classId) {
+      sendResponse({ ok: false, error: 'malformed_payload' });
+      return;
+    }
+    chrome.storage.local.set({
+      sra_pending_lti_launch: {
+        ackCode,
+        classId,
+        reportingMode: typeof payload.reportingMode === 'string' ? payload.reportingMode : null,
+        at: Date.now(),
+      },
+    }, () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/join-class.html') });
+      sendResponse({ ok: true, disclosureRequired: true });
+    });
+    return;
+  }
+
+  if (typeof payload.sessionToken === 'string' && payload.sessionToken
+    && typeof payload.classId === 'string' && payload.classId) {
+    const session = {
+      token: payload.sessionToken,
+      // No email is ever returned at this step (confirmed absent from
+      // /api/lti/launch's own success shape, unlike the magic-link
+      // exchange's) — empty string, not a fabricated placeholder, so any
+      // page rendering it shows blank rather than the literal word "null".
+      email: '',
+      expiresAt: normaliseSessionExpiry(payload.expiresAt),
+    };
+    chrome.storage.local.set({
+      [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: session,
+      // Same key, same shape join-class.js/upgrade.js already read for
+      // display (item S6/S6-follow-up) — seatId/role are genuinely absent
+      // from this response (see invites.js's own header on the one real
+      // consequence: "Leave this class" cannot release a seat it has no
+      // id for).
+      sra_class_membership: { classId: payload.classId, seatId: null, role: null, joinedAt: Date.now() },
+    }, () => {
+      sendResponse({ ok: true, disclosureRequired: false });
+    });
+    return;
+  }
+
+  sendResponse({ ok: false, error: 'malformed_payload' });
+}
+
 chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
+  const ltiOrigin = self.ALCOIA_CONFIG.LTI_READER_ORIGIN;
+  if (sender && sender.origin === ltiOrigin && msg && msg.type === 'ltiLaunch') {
+    handleLtiLaunchMessage(msg.payload, sendResponse);
+    return true;
+  }
+
   const allowedOrigin = self.ALCOIA_CONFIG.WEB_APP_ORIGIN;
   if (!sender || sender.origin !== allowedOrigin) {
     sendResponse({ ok: false, error: 'origin_not_allowed' });

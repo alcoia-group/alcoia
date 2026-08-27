@@ -8,6 +8,7 @@ import { createInvitesManager } from '../alcoia/src/shared/invites.js';
 
 const ACCEPT_URL = 'https://api.alcoia.invalid/api/invites/accept';
 const SEATS_URL = 'https://api.alcoia.invalid/api/seats';
+const LTI_ACK_URL = 'https://api.alcoia.invalid/api/lti/disclosure/ack';
 
 function sessionOf(token) {
   return async () => (token ? { token, email: 'reader@example.com', expiresAt: Date.now() + 999_999 } : null);
@@ -159,5 +160,81 @@ describe('releaseSeat', () => {
     const fetchImpl = vi.fn(async () => { throw new Error('down'); });
     const m = createInvitesManager({ fetchImpl, seatsUrl: SEATS_URL, getSession: sessionOf('tok-1') });
     await expect(m.releaseSeat('seat-1')).resolves.toEqual({ ok: false, error: 'network_error' });
+  });
+});
+
+/* acknowledgeLtiDisclosure — item S6/E4 follow-up. Field names asserted
+ * here (acknowledged, ackCode, sessionToken, kind, classId, assignmentId,
+ * redirectTo, the error codes) are copied from reading alcoiaServer's
+ * src/http/routes/lti.js's POST /api/lti/disclosure/ack directly. */
+describe('acknowledgeLtiDisclosure', () => {
+  it('POSTs { acknowledged: true, ackCode } with NO Authorization header — no session exists yet at this point', async () => {
+    let seenInit = null;
+    const fetchImpl = vi.fn(async (url, init) => {
+      seenInit = init;
+      return {
+        ok: true,
+        json: async () => ({ sessionToken: 'lti-sess-1', kind: 'lti', classId: 'class-1', assignmentId: 'assign-1', redirectTo: 'https://console.alcoia.invalid/read?classId=class-1' }),
+      };
+    });
+    const m = createInvitesManager({ fetchImpl, ltiAckUrl: LTI_ACK_URL });
+
+    const result = await m.acknowledgeLtiDisclosure('ack-code-1');
+    expect(result).toEqual({
+      ok: true, sessionToken: 'lti-sess-1', classId: 'class-1', assignmentId: 'assign-1',
+      redirectTo: 'https://console.alcoia.invalid/read?classId=class-1',
+    });
+    expect(seenInit.method).toBe('POST');
+    expect(seenInit.headers.Authorization).toBeUndefined();
+    expect(JSON.parse(seenInit.body)).toEqual({ acknowledged: true, ackCode: 'ack-code-1' });
+  });
+
+  it('a null/missing assignmentId and redirectTo are reported as null, not fabricated', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ sessionToken: 's', kind: 'lti', classId: 'c' }),
+    }));
+    const m = createInvitesManager({ fetchImpl, ltiAckUrl: LTI_ACK_URL });
+    expect(await m.acknowledgeLtiDisclosure('a')).toEqual({
+      ok: true, sessionToken: 's', classId: 'c', assignmentId: null, redirectTo: null,
+    });
+  });
+
+  it('an empty ackCode is rejected before any network call', async () => {
+    const fetchImpl = vi.fn();
+    const m = createInvitesManager({ fetchImpl, ltiAckUrl: LTI_ACK_URL });
+    expect(await m.acknowledgeLtiDisclosure('')).toEqual({ ok: false, error: 'no_ack_code' });
+    expect(await m.acknowledgeLtiDisclosure('   ')).toEqual({ ok: false, error: 'no_ack_code' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('an invalid code (401 invalid_code) fails cleanly', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ error: 'invalid_code' }) }));
+    const m = createInvitesManager({ fetchImpl, ltiAckUrl: LTI_ACK_URL });
+    expect(await m.acknowledgeLtiDisclosure('bogus')).toEqual({ ok: false, error: 'invalid_code' });
+  });
+
+  it('an already-used code (401 code_already_used) fails cleanly', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ error: 'code_already_used' }) }));
+    const m = createInvitesManager({ fetchImpl, ltiAckUrl: LTI_ACK_URL });
+    expect(await m.acknowledgeLtiDisclosure('used')).toEqual({ ok: false, error: 'code_already_used' });
+  });
+
+  it('an expired code (401 code_expired) fails cleanly', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ error: 'code_expired' }) }));
+    const m = createInvitesManager({ fetchImpl, ltiAckUrl: LTI_ACK_URL });
+    expect(await m.acknowledgeLtiDisclosure('expired')).toEqual({ ok: false, error: 'code_expired' });
+  });
+
+  it('a malformed success response (missing sessionToken) is rejected, not trusted', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ classId: 'c' }) }));
+    const m = createInvitesManager({ fetchImpl, ltiAckUrl: LTI_ACK_URL });
+    expect(await m.acknowledgeLtiDisclosure('a')).toEqual({ ok: false, error: 'malformed_response' });
+  });
+
+  it('a network failure resolves to a clear error, never throws', async () => {
+    const fetchImpl = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
+    const m = createInvitesManager({ fetchImpl, ltiAckUrl: LTI_ACK_URL });
+    await expect(m.acknowledgeLtiDisclosure('a')).resolves.toEqual({ ok: false, error: 'network_error' });
   });
 });

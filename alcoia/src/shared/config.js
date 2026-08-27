@@ -82,5 +82,24 @@
     // invites.js appends "/:id/release" itself.
     INVITE_ACCEPT_URL: BACKEND_ORIGIN + '/api/invites/accept',
     SEATS_URL: BACKEND_ORIGIN + '/api/seats',
+    // LTI launch (item S6/E4 follow-up) — src/shared/invites.js's
+    // acknowledgeLtiDisclosure(). Confirmed by reading alcoiaServer's
+    // src/http/routes/lti.js directly: POST here with
+    // { acknowledged: true, ackCode } -> { sessionToken, kind: 'lti',
+    // classId, assignmentId, redirectTo }. No Authorization header — there
+    // is no session yet at this point in the flow; a successful ack is
+    // what MINTS one.
+    LTI_DISCLOSURE_ACK_URL: BACKEND_ORIGIN + '/api/lti/disclosure/ack',
+    // The web page a Canvas launch actually lands the student's browser
+    // on (whatever receives /api/lti/launch's JSON and hands it to this
+    // extension) does not exist in any repo available here yet — same gap
+    // WEB_APP_ORIGIN above already accepted for item S3 ("alcoia.app does
+    // not resolve yet; this whole roadmap is designed to work without
+    // it"). This value is NOT invented: it is copied verbatim from
+    // alcoiaServer's own default parameter for ltiReaderBaseUrl in
+    // src/http/routes/lti.js (createLtiRouter's own `.invalid`
+    // placeholder), so background.js's origin check matches what the
+    // server itself already assumes that page's origin will be.
+    LTI_READER_ORIGIN: 'https://console.alcoia.invalid',
   });
 })(typeof self !== 'undefined' ? self : this);

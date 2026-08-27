@@ -17,12 +17,21 @@
 // complete a join itself, for exactly this reason — see that file's own
 // header. A reader routed through sign-in always lands back HERE, and
 // still sees the disclosure fresh before anything is submitted.
+//
+// LTI entry (item S6/E4 follow-up): background.js's onMessageExternal
+// LTI-launch handler opens this SAME page — not a second disclosure
+// screen — when a Canvas launch reports disclosureRequired: true. See
+// this file's own showDisclosure()/completeJoin() for the second entry
+// path (pendingLtiAckCode alongside pendingInviteText) and background.js's
+// own header for the confirmed server shapes.
 import { createSessionManager } from '../shared/session.js';
 import { createEntitlementsManager } from '../shared/entitlements.js';
 import { createInvitesManager } from '../shared/invites.js';
 
 const PENDING_INVITE_KEY = 'sra_pending_invite';
 const PENDING_INVITE_MAX_AGE_MS = 10 * 60 * 1000;
+const PENDING_LTI_LAUNCH_KEY = 'sra_pending_lti_launch';
+const PENDING_LTI_LAUNCH_MAX_AGE_MS = 10 * 60 * 1000;
 const CLASS_MEMBERSHIP_KEY = 'sra_class_membership';
 
 const $ = (id) => document.getElementById(id);
@@ -43,6 +52,7 @@ const invites = createInvitesManager({
   getSession: session.getSession,
   acceptUrl: self.ALCOIA_CONFIG.INVITE_ACCEPT_URL,
   seatsUrl: self.ALCOIA_CONFIG.SEATS_URL,
+  ltiAckUrl: self.ALCOIA_CONFIG.LTI_DISCLOSURE_ACK_URL,
 });
 
 const inputState = $('inputState');
@@ -54,6 +64,11 @@ const leaveError = $('leaveError');
 
 let disclosureRendered = false;
 let pendingInviteText = '';
+// Set instead of pendingInviteText for the LTI entry path (item S6/E4
+// follow-up) — mutually exclusive with it; completeJoin() below branches
+// on which one is set, never both at once, since showInput()/showMember()
+// clear both together.
+let pendingLtiAckCode = '';
 
 function hideErrors() {
   inputError.hidden = true;
@@ -63,6 +78,7 @@ function hideErrors() {
 
 function showInput(prefill) {
   disclosureRendered = false;
+  pendingLtiAckCode = '';
   inputState.hidden = false;
   disclosureState.hidden = true;
   memberState.hidden = true;
@@ -70,20 +86,25 @@ function showInput(prefill) {
   if (typeof prefill === 'string') $('inviteInput').value = prefill;
 }
 
-function showDisclosure(inviteText) {
-  pendingInviteText = inviteText;
+// Takes no argument — callers set pendingInviteText OR pendingLtiAckCode
+// (never both) immediately before calling this, so the SAME disclosure
+// render (this function, this DOM) serves both entry paths without
+// knowing or caring which one led here. The explicit half of the join-
+// cannot-complete-without-disclosure guard — see this file's own header —
+// is this same disclosureRendered flag either path sets, right after the
+// disclosure block is actually in the visible DOM.
+function showDisclosure() {
   inputState.hidden = true;
   disclosureState.hidden = false;
   memberState.hidden = true;
   hideErrors();
-  // The explicit half of the guard — see this file's own header. Only
-  // ever set true here, right after the disclosure block is actually in
-  // the visible DOM.
   disclosureRendered = true;
 }
 
 function showMember(classId) {
   disclosureRendered = false;
+  pendingInviteText = '';
+  pendingLtiAckCode = '';
   inputState.hidden = true;
   disclosureState.hidden = true;
   memberState.hidden = false;
@@ -102,6 +123,15 @@ function joinErrorMessage(code) {
     case 'seat_capacity_exceeded':  return "This class doesn't have any open seats right now.";
     case 'no_session':              return 'Something went wrong signing you in — try again.';
     case 'no_token':                return 'Paste an invite link or code first.';
+    // LTI entry (item S6/E4 follow-up) — server codes from
+    // POST /api/lti/disclosure/ack, confirmed by reading
+    // alcoiaServer's src/http/routes/lti.js directly.
+    case 'invalid_code':            return 'This launch link has expired — go back to Canvas and open the reading again.';
+    case 'code_already_used':       return 'This launch was already confirmed — go back to Canvas and open the reading again.';
+    case 'code_expired':            return 'This launch link has expired — go back to Canvas and open the reading again.';
+    case 'acknowledgement_required':
+    case 'no_ack_code':             return 'Something went wrong confirming this — go back to Canvas and try again.';
+    case 'no_seat_id':              return "This class membership came from your school's system and can't be left here.";
     default:                        return "Couldn't join that class just now — try again.";
   }
 }
@@ -119,7 +149,9 @@ async function completeJoin() {
   confirmBtn.disabled = true;
   confirmBtn.textContent = 'Joining…';
 
-  const result = await invites.acceptInvite(pendingInviteText);
+  const result = pendingLtiAckCode
+    ? await invites.acknowledgeLtiDisclosure(pendingLtiAckCode)
+    : await invites.acceptInvite(pendingInviteText);
 
   confirmBtn.disabled = false;
   confirmBtn.textContent = 'Join this class';
@@ -130,9 +162,20 @@ async function completeJoin() {
     return;
   }
 
-  await new Promise((resolve) => chrome.storage.local.set({
-    [CLASS_MEMBERSHIP_KEY]: { classId: result.classId, seatId: result.seatId, role: result.role, joinedAt: Date.now() },
-  }, resolve));
+  if (pendingLtiAckCode) {
+    // LTI: no session existed before this call — a successful ack is what
+    // mints one (background.js's onMessageExternal handler does the same
+    // thing for a launch that skipped the disclosure because it was
+    // already acknowledged; this is the branch for the one that wasn't).
+    await new Promise((resolve) => chrome.storage.local.set({
+      [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: { token: result.sessionToken, email: '', expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1000 },
+      [CLASS_MEMBERSHIP_KEY]: { classId: result.classId, seatId: null, role: null, joinedAt: Date.now() },
+    }, resolve));
+  } else {
+    await new Promise((resolve) => chrome.storage.local.set({
+      [CLASS_MEMBERSHIP_KEY]: { classId: result.classId, seatId: result.seatId, role: result.role, joinedAt: Date.now() },
+    }, resolve));
+  }
 
   // "Holding a seat grants Reader entitlements automatically" — refresh
   // now, using Phase 3's own mechanism, not a guess that it worked.
@@ -160,7 +203,8 @@ $('inputFormEl').addEventListener('submit', async (e) => {
     return;
   }
 
-  showDisclosure(raw);
+  pendingInviteText = raw;
+  showDisclosure();
 });
 
 $('confirmJoinBtn').addEventListener('click', () => { completeJoin(); });
@@ -195,6 +239,30 @@ $('leaveBtn').addEventListener('click', async () => {
 });
 
 async function boot() {
+  // Checked FIRST, before any existing membership — background.js opened
+  // THIS tab specifically because a fresh Canvas launch needs the
+  // disclosure shown, and that signal is short-lived and single-use
+  // server-side (lti_pending_launches). A student must never see a stale
+  // "you're already in class X" screen (from some earlier, unrelated
+  // native join) when the reason this tab exists at all is a new launch
+  // waiting on this exact screen.
+  const ltiPending = await new Promise((resolve) =>
+    chrome.storage.local.get({ [PENDING_LTI_LAUNCH_KEY]: null }, (res) => resolve(res[PENDING_LTI_LAUNCH_KEY])));
+  if (ltiPending) {
+    await new Promise((resolve) => chrome.storage.local.remove(PENDING_LTI_LAUNCH_KEY, resolve));
+    const fresh = typeof ltiPending.at === 'number' && Date.now() - ltiPending.at < PENDING_LTI_LAUNCH_MAX_AGE_MS;
+    if (fresh && typeof ltiPending.ackCode === 'string' && ltiPending.ackCode) {
+      pendingLtiAckCode = ltiPending.ackCode;
+      showDisclosure();
+      return;
+    }
+    // Stale or malformed — the ackCode is single-use and short-lived
+    // server-side regardless, so showing it now would just fail cleanly
+    // on submit; falling through to the normal checks below is the
+    // honest option rather than showing a disclosure this specific launch
+    // can no longer actually complete.
+  }
+
   const membership = await new Promise((resolve) =>
     chrome.storage.local.get({ [CLASS_MEMBERSHIP_KEY]: null }, (res) => resolve(res[CLASS_MEMBERSHIP_KEY])));
   if (membership) {
@@ -213,7 +281,8 @@ async function boot() {
     const fresh = typeof pending.at === 'number' && Date.now() - pending.at < PENDING_INVITE_MAX_AGE_MS;
     const current = await session.getSession();
     if (fresh && typeof pending.invite === 'string' && current) {
-      showDisclosure(pending.invite);
+      pendingInviteText = pending.invite;
+      showDisclosure();
       return;
     }
   }
