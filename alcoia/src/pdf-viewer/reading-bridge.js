@@ -61,8 +61,9 @@ import { createHost } from '../content/host.js';
 import { createOrchestrator } from '../content/orchestrator.js';
 import { groupTextLayerParagraphs, unionRect } from '../content/pdf-handler.js';
 import { detectLanguage, countWords } from '../content/signals/segmentation.js';
+import { createSessionManager } from '../shared/session.js';
 
-export async function attachReadingBridge({ sourceUrl, debug } = {}) {
+export async function attachReadingBridge({ sourceUrl, assignmentId, debug } = {}) {
   const loadModule = (p) => import(chrome.runtime.getURL(p));
   const _log  = (...a) => console.log('[alcoia]', ...a);
   const _warn = (...a) => console.warn('[alcoia]', ...a);
@@ -97,6 +98,16 @@ export async function attachReadingBridge({ sourceUrl, debug } = {}) {
     fetchSummary: (...a) => hostApi.fetchSummary(...a),
   });
 
+  // Item S6/E4 follow-up: only ever constructed when this document was
+  // opened FROM the Assignments entry point (assignments.js's own
+  // `?assignmentId=` param, read by viewer.js) — a local file:// or
+  // ordinary web PDF passes none, so host.js's outcome-reporting stays
+  // entirely inert for those, unchanged from before this item. A real ES
+  // module context (viewer.html loads this file via `type="module"`), so
+  // this can construct session.js directly the same way join-class.js/
+  // upgrade.js already do, rather than going through loadModule().
+  const session = assignmentId ? createSessionManager() : null;
+
   hostApi = await createHost({
     loadModule,
     ui,
@@ -104,6 +115,8 @@ export async function attachReadingBridge({ sourceUrl, debug } = {}) {
     log: _log,
     warn: _warn,
     settings: () => ({ assistantEnabled, backendUrl }),
+    assignmentId,
+    getSession: session ? session.getSession : null,
   });
 
   // ── The PDF paragraph model, fed to paragraph-tracker.js as an injected

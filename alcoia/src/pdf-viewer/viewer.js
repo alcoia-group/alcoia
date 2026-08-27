@@ -29,7 +29,23 @@ let bridge = null;
   const fileUrl = params.get('src');
   if (!fileUrl) { showError('No PDF source specified.'); return; }
 
-  const filenameText = decodeURIComponent(fileUrl.split('/').pop() || fileUrl);
+  // Item S6/E4 follow-up: the Assignments entry point opens a signed
+  // download URL here — pdfjsLib.getDocument({url}) below already fetches
+  // any http(s) URL correctly regardless (confirmed by reading this file
+  // before touching it: item 31 already extended this exact loader to
+  // ordinary web-served PDFs), so no new loading path was needed, only two
+  // additive query params. A signed URL's own query string (signature,
+  // expiry) would otherwise show up raw in the toolbar/tab title via the
+  // existing fileUrl.split('/').pop() fallback below — `title`, when
+  // present, is used instead of deriving one from the URL; local file://
+  // and ordinary web PDFs (no `title` param) are completely unaffected,
+  // still deriving their filename exactly as before this item.
+  const titleOverride = params.get('title');
+  const assignmentId = params.get('assignmentId');
+
+  const filenameText = titleOverride
+    ? decodeURIComponent(titleOverride)
+    : decodeURIComponent(fileUrl.split('/').pop() || fileUrl);
   document.getElementById('filename').textContent = filenameText;
   document.title = filenameText;
 
@@ -140,7 +156,7 @@ let bridge = null;
   // real .textLayer spans. Kicked off concurrently with page rendering below
   // — it only needs to be attached (listeners installed) before
   // primeParagraph() runs, not before any page has actually rendered.
-  const bridgePromise = attachReadingBridge({ sourceUrl: fileUrl }).catch((e) => {
+  const bridgePromise = attachReadingBridge({ sourceUrl: fileUrl, assignmentId }).catch((e) => {
     console.warn('[alcoia] reading bridge failed to attach', e);
     return null;
   });

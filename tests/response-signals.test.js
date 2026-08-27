@@ -312,3 +312,50 @@ describe('responses outrank reading signals in the engine', () => {
     expect(policy.evaluate(after, {}).allow).toBe(false);
   });
 });
+
+/* Item S6/E4 follow-up: paragraphIndex/questionId are additive context
+ * carried from present() onto every record — used downstream by host.js
+ * to report outcomes against a specific assignment (see that file's own
+ * header). Both null-safe for every existing caller that never sets
+ * them — asserted here directly since ordinary (non-assignment) reading
+ * must stay completely unaffected. */
+describe('paragraphIndex/questionId context (item S6/E4 follow-up)', () => {
+  it('present() with no paragraphIndex/questionId in context leaves both null on the record — every pre-existing caller', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { paragraphKey: 'p1' });
+    const rec = r.answer(0, QUESTION);
+    expect(rec.paragraphIndex).toBeNull();
+    expect(rec.questionId).toBeNull();
+  });
+
+  it('present() carries paragraphIndex/questionId through to answer()', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { paragraphKey: 'p1', paragraphIndex: 4, questionId: 'q-fingerprint-1' });
+    const rec = r.answer(0, QUESTION);
+    expect(rec.paragraphIndex).toBe(4);
+    expect(rec.questionId).toBe('q-fingerprint-1');
+  });
+
+  it('carries through answerGraded() (free_recall/scenario) too', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present({ ...QUESTION, level: 'scenario' }, { paragraphIndex: 2, questionId: 'q-2' });
+    const rec = r.answerGraded('an answer', 'correct', 'high');
+    expect(rec.paragraphIndex).toBe(2);
+    expect(rec.questionId).toBe('q-2');
+  });
+
+  it('carries through respond() (adversarial) too', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present({ ...QUESTION, level: 'adversarial' }, { paragraphIndex: 9, questionId: 'q-9' });
+    const rec = r.respond('an argument');
+    expect(rec.paragraphIndex).toBe(9);
+    expect(rec.questionId).toBe('q-9');
+  });
+
+  it('a non-integer paragraphIndex in context normalises to null, never trusted as-is', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { paragraphIndex: 'not-a-number', questionId: 'q-1' });
+    const rec = r.answer(0, QUESTION);
+    expect(rec.paragraphIndex).toBeNull();
+  });
+});
