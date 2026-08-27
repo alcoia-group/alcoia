@@ -17,7 +17,7 @@ let capturedListener = null;
 
 function fakeChromeForImport() {
   return {
-    tabs: { onUpdated: { addListener: () => {} }, create: () => {}, update: () => {} },
+    tabs: { onUpdated: { addListener: () => {} }, create: (opts) => { chrome._tabsCreated.push(opts); }, update: () => {} },
     webNavigation: { onHistoryStateUpdated: { addListener: () => {} } },
     storage: {
       local: {
@@ -36,11 +36,13 @@ function fakeChromeForImport() {
       getURL: (p) => 'chrome-extension://test/' + p,
       lastError: undefined,
     },
+    _tabsCreated: [],
   };
 }
 
 const WEB_APP_ORIGIN = 'http://localhost:5173';
 const EXCHANGE_URL = 'https://api.alcoia.invalid/api/auth/extension-session/exchange';
+const LTI_READER_ORIGIN = 'https://console.alcoia.invalid';
 
 beforeAll(async () => {
   vi.stubGlobal('chrome', fakeChromeForImport());
@@ -49,6 +51,7 @@ beforeAll(async () => {
     EXTENSION_SESSION_EXCHANGE_URL: EXCHANGE_URL,
     SESSION_STORAGE_KEY: 'sra_session',
     SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
+    LTI_READER_ORIGIN,
   });
   // background.js has no exports — imported once, for its top-level
   // chrome.runtime.onMessageExternal.addListener(...) call, which the fake
@@ -59,6 +62,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   chrome.storage.local._store = {};
+  chrome._tabsCreated.length = 0;
 });
 
 function sender(origin) {
@@ -206,5 +210,86 @@ describe('a missing expiresAt still stores the session, with the same generous f
     const stored = chrome.storage.local._store.sra_session;
     expect(stored.expiresAt).toBeGreaterThan(before);
     expect(stored.expiresAt - before).toBeGreaterThan(30 * 24 * 60 * 60 * 1000);
+  });
+});
+
+describe('LTI launch handoff (item S6/E4 follow-up) — a second, independently origin-checked message shape', () => {
+  it('a disclosureRequired payload from the LTI origin stores the pending record and opens join-class.html — the SAME disclosure screen, not a second one', () => {
+    const sendResponse = vi.fn();
+    const payload = { disclosureRequired: true, reportingMode: 'aggregate', classId: 'class-1', ackCode: 'ack-abc' };
+
+    const keepOpen = capturedListener({ type: 'ltiLaunch', payload }, sender(LTI_READER_ORIGIN), sendResponse);
+    expect(keepOpen).toBe(true);
+
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true, disclosureRequired: true });
+    expect(chrome.storage.local._store.sra_pending_lti_launch).toMatchObject({
+      ackCode: 'ack-abc', classId: 'class-1', reportingMode: 'aggregate',
+    });
+    expect(typeof chrome.storage.local._store.sra_pending_lti_launch.at).toBe('number');
+    // No session and no membership are ever written for this branch — the
+    // join has NOT completed, only a pending record that join-class.js's
+    // own disclosure-gated completeJoin() can turn into one.
+    expect(chrome.storage.local._store.sra_session).toBeUndefined();
+    expect(chrome.storage.local._store.sra_class_membership).toBeUndefined();
+    expect(chrome._tabsCreated).toEqual([{ url: 'chrome-extension://test/src/popup/join-class.html' }]);
+  });
+
+  it('an already-acknowledged launch (sessionToken present, no disclosureRequired) stores the session and membership directly, opens no tab', () => {
+    const sendResponse = vi.fn();
+    const payload = { sessionToken: 'lti-sess-1', kind: 'lti', classId: 'class-2', assignmentId: 'assign-1', redirectTo: 'https://console.alcoia.invalid/read?classId=class-2' };
+
+    capturedListener({ type: 'ltiLaunch', payload }, sender(LTI_READER_ORIGIN), sendResponse);
+
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true, disclosureRequired: false });
+    expect(chrome.storage.local._store.sra_session).toEqual({ token: 'lti-sess-1', email: '', expiresAt: expect.any(Number) });
+    expect(chrome.storage.local._store.sra_class_membership).toEqual({ classId: 'class-2', seatId: null, role: null, joinedAt: expect.any(Number) });
+    expect(chrome._tabsCreated).toEqual([]);
+  });
+
+  it('rejects an LTI-shaped message from any origin other than LTI_READER_ORIGIN — including the magic-link origin', () => {
+    const sendResponse = vi.fn();
+    const payload = { disclosureRequired: true, reportingMode: 'aggregate', classId: 'class-1', ackCode: 'ack-abc' };
+
+    capturedListener({ type: 'ltiLaunch', payload }, sender(WEB_APP_ORIGIN), sendResponse);
+
+    // Falls through to the magic-link branch, which then rejects it for
+    // having no `code` — proving the LTI origin check is real, not just
+    // decorative: a message shaped for LTI from the WRONG origin is
+    // treated as a (malformed) magic-link attempt, never processed as LTI.
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'no_code' });
+    expect(chrome.storage.local._store.sra_pending_lti_launch).toBeUndefined();
+    expect(chrome._tabsCreated).toEqual([]);
+  });
+
+  it('rejects an LTI-origin message that is missing the ltiLaunch type — does not silently process it as LTI', () => {
+    const sendResponse = vi.fn();
+    capturedListener({ payload: { disclosureRequired: true, classId: 'c', ackCode: 'a' } }, sender(LTI_READER_ORIGIN), sendResponse);
+
+    // Falls through to the magic-link check, which then rejects this
+    // origin (LTI_READER_ORIGIN is not WEB_APP_ORIGIN).
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'origin_not_allowed' });
+  });
+
+  it('a malformed disclosureRequired payload (missing ackCode) is rejected cleanly, nothing stored', () => {
+    const sendResponse = vi.fn();
+    capturedListener(
+      { type: 'ltiLaunch', payload: { disclosureRequired: true, classId: 'class-1' } },
+      sender(LTI_READER_ORIGIN), sendResponse,
+    );
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'malformed_payload' });
+    expect(chrome.storage.local._store.sra_pending_lti_launch).toBeUndefined();
+    expect(chrome._tabsCreated).toEqual([]);
+  });
+
+  it('a payload that matches neither confirmed shape (no disclosureRequired, no sessionToken) is rejected cleanly', () => {
+    const sendResponse = vi.fn();
+    capturedListener({ type: 'ltiLaunch', payload: { somethingElse: true } }, sender(LTI_READER_ORIGIN), sendResponse);
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'malformed_payload' });
+  });
+
+  it('a completely missing payload does not throw', () => {
+    const sendResponse = vi.fn();
+    expect(() => capturedListener({ type: 'ltiLaunch' }, sender(LTI_READER_ORIGIN), sendResponse)).not.toThrow();
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: 'malformed_payload' });
   });
 });
