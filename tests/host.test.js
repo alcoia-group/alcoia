@@ -637,3 +637,150 @@ describe('the 12-callback host surface, structurally', () => {
     expect(host.getCurrentParagraph()).toBe(para);
   });
 });
+
+/* Item S6/E4 follow-up: the SAME detection pipeline, now also reporting
+ * outward. outcomes.js is loaded via the real loadModule() shim above —
+ * not mocked — so a genuine wiring mistake between host.js and that file
+ * shows up here, matching this file's own stated philosophy. */
+describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+
+  function assignmentDeps(overrides = {}) {
+    return baseDeps({
+      assignmentId: 'assign-42',
+      getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+      TOKEN_URL: 'https://api.test.invalid/api/token',
+      ASSIGNMENTS_URL,
+    });
+  });
+
+  it('a struggle signal POSTs a real outcome — correct assignmentId, paragraph_index, struggled:true, no pseudonym', async () => {
+    let seenUrl = null, seenInit = null;
+    const fetchImpl = vi.fn(async (url, init) => {
+      seenUrl = url; seenInit = init;
+      return { ok: true, json: async () => ({ recorded: true }) };
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { host } = await createHost(assignmentDeps());
+    host.onStruggle('some paragraph text', 3);
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenUrl).toBe(`${ASSIGNMENTS_URL}/assign-42/outcomes`);
+    const body = JSON.parse(seenInit.body);
+    expect(body).toEqual({ paragraph_index: 3, struggled: true });
+    expect(body).not.toHaveProperty('pseudonym');
+    expect(seenInit.headers.Authorization).toBe('Bearer tok-1');
+  });
+
+  it('a struggle signal with no active paragraph (null index) never calls the outcomes endpoint at all', async () => {
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+    const { host } = await createHost(assignmentDeps());
+
+    host.onStruggle('some text', null);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('a real question, answered through the actual rendered card, POSTs paragraph_index + question_id + correct + confidence, no pseudonym', async () => {
+    let seenUrl = null, seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => {
+      seenUrl = url; seenBody = JSON.parse(init.body);
+      return { ok: true, json: async () => ({ recorded: true }) };
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    chrome.runtime.sendMessage = sendMessage;
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
+    };
+
+    const { host } = await createHost(assignmentDeps());
+    document.body.innerHTML = '<p id="t">A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it at all.</p>';
+    const target = document.getElementById('t');
+
+    // The active paragraph's real ordinal — captured by orchestrator.js in
+    // production; supplied directly here since this test drives
+    // host.onIntervention() the same way the existing level-selection
+    // tests above already do.
+    const shown = await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, target, 7);
+    expect(shown).toBe(true);
+
+    // Answer correctly (index 0), with high confidence — the real DOM
+    // question-card.js rendered, not a re-implementation of its commit logic.
+    document.querySelector('.sra-q-option[data-index="0"]').click();
+    document.querySelector('.sra-q-conf-btn[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenUrl).toBe(`${ASSIGNMENTS_URL}/assign-42/outcomes`);
+    expect(seenBody.paragraph_index).toBe(7);
+    expect(seenBody.correct).toBe(true);
+    expect(seenBody.confidence).toBe('high');
+    expect(typeof seenBody.question_id).toBe('string');
+    expect(seenBody.question_id.length).toBeGreaterThan(0);
+    expect(seenBody).not.toHaveProperty('pseudonym');
+    expect(seenBody).not.toHaveProperty('struggled');
+  });
+
+  it('an incorrect answer sends correct: false explicitly, not omitted', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    vi.stubGlobal('fetch', fetchImpl);
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'incorrect-answer-test span' }] } });
+
+    const { host } = await createHost(assignmentDeps());
+    // Distinct text from every other test in this describe block — the
+    // question card's own popup-dedup fingerprint is derived from this
+    // span/text (question-card.js's own `fingerprint`), so reusing another
+    // test's exact text risks colliding with a still-open popup from a
+    // prior test rendered into the same shared jsdom document.
+    document.body.innerHTML = '<p id="t">A paragraph about the incorrect-answer case specifically, long enough to pass fetchQuestions\' own length floor before it will even try.</p>';
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 2);
+
+    document.querySelector('.sra-q-option[data-index="1"]').click(); // wrong
+    document.querySelector('.sra-q-conf-skip').click(); // no confidence given
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenBody.correct).toBe(false);
+    expect(seenBody).not.toHaveProperty('confidence');
+  });
+
+  it('ordinary reading (no assignmentId) never calls the outcomes endpoint at all — the existing behaviour is unchanged', async () => {
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+    // No assignmentId/getSession — the exact same deps every OTHER test in
+    // this file already uses (content.js's own real construction for
+    // ordinary web pages).
+    const { host } = await createHost(baseDeps());
+
+    host.onStruggle('some paragraph text', 3);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('a dismissed question (no answer given) never reaches the outcomes endpoint', async () => {
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'dismissed-test span' }] } });
+
+    const { host } = await createHost(assignmentDeps());
+    // Distinct text — see the incorrect-answer test's own comment above.
+    document.body.innerHTML = '<p id="t">A paragraph about the dismissed-question case specifically, long enough to pass fetchQuestions\' own length floor before it will even try.</p>';
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 1);
+
+    document.querySelector('.sra-close-btn').click();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});

@@ -103,7 +103,12 @@ export function createQuestionCard(deps = {}) {
     const root = ui.reservePopup(fingerprint);
     if (!root) return false;
 
-    responseSignals.present(question, context);
+    // Item S6/E4 follow-up: reuses this SAME popup-dedup fingerprint as
+    // the outcome-reporting question_id, rather than inventing a second
+    // identity for the same question — there is no question id anywhere
+    // else in this system (questions are generated on the fly, never
+    // persisted server-side). See response-signals.js's own header.
+    responseSignals.present(question, { ...context, questionId: fingerprint });
 
     const evidence = context.evidence && context.evidence.length
       ? `<div class="sra-q-evidence">${esc(context.evidence[0])}.</div>`

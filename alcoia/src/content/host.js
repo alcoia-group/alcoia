@@ -45,10 +45,46 @@ export async function createHost(deps) {
     log,     // content.js's _log
     warn,    // content.js's _warn
     settings, // () => { assistantEnabled, backendUrl }
+    // Item S6/E4 follow-up. Both undefined/null for EVERY caller except
+    // reading-bridge.js opening a document from the Assignments entry
+    // point — content.js (every ordinary web page) never passes either,
+    // so submitOutcome below stays a no-op there, unchanged from before
+    // this item existed. assignmentId is the whole reading session's
+    // context, established once at construction — not per-signal.
+    assignmentId = null,
+    getSession = null,
   } = deps;
 
   const s = () => settings() || {};
   const BACKEND_DEFAULT = self.ALCOIA_CONFIG.SUMMARIZE_URL;
+
+  // ── Outcome reporting (item S6/E4 follow-up) ────────────────────────────
+  // The SAME detection pipeline as ordinary reading, now also reporting
+  // outward — no new gate here. Whatever already decided a struggle signal
+  // or a question should fire (state-engine.js's transitions, intervention-
+  // policy.js's per-paragraph budget, the coverage gate governing the
+  // quiz/session-recall paths) is unchanged by this item; submitOutcome()
+  // is purely a tap on signals that already passed through them, not a
+  // second gate of its own. Fire-and-forget, one POST per discrete signal,
+  // no batching — see outcomes.js's own header for the full reasoning on
+  // that choice, made explicitly rather than guessed through.
+  let submitOutcome = () => {};
+  if (assignmentId && getSession) {
+    const outcomesModule = await loadModule('src/shared/outcomes.js');
+    const outcomesManager = outcomesModule.createOutcomesManager({
+      getSession,
+      outcomesUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/outcomes`,
+    });
+    submitOutcome = (fields) => {
+      // A session-recall review question (host.js's runSessionRecall, not
+      // handleAsk) has no reliable numeric index — session-recall.js
+      // keys everything by truncated text, never an ordinal — so this
+      // guard is what keeps those answers from attempting (and always
+      // failing) a submission, rather than special-casing that call site.
+      if (!Number.isInteger(fields.paragraphIndex) || fields.paragraphIndex < 0) return;
+      outcomesManager.submit(fields).catch(() => {});
+    };
+  }
 
   const {
     reservePopup, showPopup, closePopup, highlightElement,
@@ -229,6 +265,23 @@ export async function createHost(deps) {
       try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
       if (record.paragraphKey) sessionRecall.recordAnswered(record.paragraphKey, record.correct);
       try { orchestratorRef?.interventionPolicy.recordAnswered(); } catch (e) {}
+      // Item S6/E4 follow-up. Deliberately excludes quiz.js's separate
+      // standalone-quiz answers — those never reach this callback at all
+      // (quiz.js writes straight to quiz-store.js's IndexedDB, which its
+      // own header documents as "never transmitted", a design boundary
+      // this item does not cross) and dismiss()'s record has no
+      // questionId/correct worth reporting either. `correct` is only ever
+      // included when it's a real boolean — response-signals.js's own
+      // `null` means "not graded" (model verdict 'unknown', or
+      // adversarial's deliberate non-grading), not "wrong", and the
+      // server rejects `correct` without a `questionId` regardless — both
+      // are naturally satisfied here since they come from the same record.
+      submitOutcome({
+        paragraphIndex: record.paragraphIndex,
+        questionId: record.questionId,
+        correct: typeof record.correct === 'boolean' ? record.correct : undefined,
+        confidence: record.confidence,
+      });
     },
     onDismissed: () => {
       try { orchestratorRef?.interventionPolicy.recordDismissal(); } catch (e) {}
@@ -405,8 +458,13 @@ export async function createHost(deps) {
     }
   }
 
-  /* Returns true only if a card reached the screen. */
-  async function handleAsk(decision, state, target) {
+  /* Returns true only if a card reached the screen. paragraphIndex (item
+   * S6/E4 follow-up) is the active paragraph's real ordinal, captured by
+   * orchestrator.js at the moment it decided to intervene — see that
+   * file's own comment. Threaded through to questionCard.show()'s context
+   * purely so an eventual onAnswered record can carry it; nothing in this
+   * function's own question-generation logic reads it. */
+  async function handleAsk(decision, state, target, paragraphIndex) {
     const el = target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
     const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
     if (!text) return false;
@@ -433,6 +491,7 @@ export async function createHost(deps) {
       evidence: evidenceOverride ? [evidenceOverride] : decision.evidence,
       anchorRect,
       paragraphKey,
+      paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
       wasExplorationSample: decision.wasExplorationSample === true,
     });
   }
@@ -474,9 +533,13 @@ export async function createHost(deps) {
     setPrevParagraphText: (t) => { prevParagraphText = t; },
     setCogState: (label) => { lastCogState = label; },
     onParagraphRead: (text, dwellMs) => sessionRecall.recordRead(text, dwellMs),
-    onStruggle: (text) => sessionRecall.recordStruggle(text),
+    onStruggle: (text, paragraphIndex) => {
+      sessionRecall.recordStruggle(text);
+      // Item S6/E4 follow-up — see submitOutcome's own header just above.
+      submitOutcome({ paragraphIndex, struggled: true });
+    },
     onQuizOfferEligible: (result) => showQuizOffer(result),
-    onIntervention: async (decision, state, target) => {
+    onIntervention: async (decision, state, target, paragraphIndex) => {
       if (!s().assistantEnabled) return false;
       // Item 18: only the final render is suppressed — see snooze.js's own
       // header for why detection/coverage/the quiz gate keep running above.
@@ -487,7 +550,7 @@ export async function createHost(deps) {
         return true;
       }
       if (decision.action === 'ask') {
-        return await handleAsk(decision, state, target);
+        return await handleAsk(decision, state, target, paragraphIndex);
       }
       return false;
     },
