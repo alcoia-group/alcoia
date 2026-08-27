@@ -101,5 +101,23 @@
     // placeholder), so background.js's origin check matches what the
     // server itself already assumes that page's origin will be.
     LTI_READER_ORIGIN: 'https://console.alcoia.invalid',
+    // Assignments entry point (S6/E4 follow-up) — src/shared/assignments.js
+    // and src/content/host.js's outcome reporting. Both confirmed by
+    // reading alcoiaServer's src/http/routes/assignments.js, documents.js
+    // and outcomes.js directly:
+    //   GET  /api/assignments/mine (NEW — no student-facing assignment
+    //     listing existed anywhere before this item, confirmed by
+    //     exhaustively grepping every registered route first) ->
+    //     { assignments: [{ assignmentId, classId, className, closesAt,
+    //     documents: [{ documentId, format, status }] }] }
+    //   GET  /api/documents/:id/download-url -> { url, expiresInSeconds }
+    //   POST /api/assignments/:id/outcomes { paragraph_index, struggled,
+    //     question_id, correct, confidence, reached } -> { recorded: true }
+    // DOCUMENTS_URL is a base — assignments.js appends "/:id/download-url"
+    // itself; ASSIGNMENTS_URL is a base — host.js appends
+    // "/:id/outcomes" itself.
+    ASSIGNMENTS_MINE_URL: BACKEND_ORIGIN + '/api/assignments/mine',
+    ASSIGNMENTS_URL: BACKEND_ORIGIN + '/api/assignments',
+    DOCUMENTS_URL: BACKEND_ORIGIN + '/api/documents',
   });
 })(typeof self !== 'undefined' ? self : this);

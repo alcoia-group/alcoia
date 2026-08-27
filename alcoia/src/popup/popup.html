@@ -608,6 +608,12 @@
            itself routes a signed-out click through sign-in and back. -->
       <div class="btn-row" style="margin-top:10px">
         <button class="btn btn-ghost" id="joinClassBtn">Join a class</button>
+        <!-- Item S6/E4 follow-up. assignments.js itself shows an honest
+             "sign in to see your assignments" state when signed out,
+             rather than this button routing through sign-in the way
+             joinClassBtn does — there is nothing pending to resume after
+             signing in (no invite code, no ack), just a list to load. -->
+        <button class="btn btn-ghost" id="assignmentsBtn">Assignments</button>
       </div>
     </div>
 

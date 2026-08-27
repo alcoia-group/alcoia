@@ -171,7 +171,14 @@ export async function createOrchestrator(deps) {
 
     if (state.label === 'struggling' && host.onStruggle) {
       const t = state.signal?.text || (currentEl && (currentEl.innerText || currentEl.textContent)) || '';
-      if (t) { try { host.onStruggle(t.trim()); } catch (e) {} }
+      // Item S6/E4 follow-up: the active paragraph's real ordinal, read at
+      // the exact moment struggle is decided — struggle text itself is
+      // only ever a truncated key (session-recall's own, separately
+      // computed), never a numeric index, so this is the one place that
+      // index needs capturing fresh rather than reconstructed later.
+      // Passed through regardless of assignment context; host.onStruggle
+      // is a no-op for it outside one (see host.js's own header).
+      if (t) { try { host.onStruggle(t.trim(), activeParagraphIndex()); } catch (e) {} }
     }
     const decision  = interventionPolicy.evaluate(state, { currentEl });
 
@@ -192,7 +199,11 @@ export async function createOrchestrator(deps) {
         } catch (e) {}
       }
 
-      const shown = await host.onIntervention(decision, state, target);
+      // Item S6/E4 follow-up: the active paragraph's index, threaded
+      // through to whatever question ends up asked — see this file's own
+      // comment on the onStruggle call site above for why it has to be
+      // captured here rather than derived later from the question's text.
+      const shown = await host.onIntervention(decision, state, target, activeParagraphIndex());
 
       // Budget is spent once, and only for something the reader actually saw.
       if (shown) {

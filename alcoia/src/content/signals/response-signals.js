@@ -49,6 +49,19 @@ export function createResponseSignals(opts = {}) {
       span: question?.span || null,
       level: GRADABLE_LEVELS.includes(question?.level) ? question.level : 'recognition',
       paragraphKey: context.paragraphKey || null,
+      // Item S6/E4 follow-up. paragraphIndex is the active paragraph's
+      // real ordinal (orchestrator.js's own paragraph-tracker index),
+      // null whenever the caller has none — the session-recall review
+      // path never does (see host.js's own header). questionId is
+      // question-card.js's own popup-dedup fingerprint, reused as-is
+      // rather than inventing a second identity for the same question:
+      // there is no question id anywhere else in this system, since
+      // questions are generated on the fly and never persisted server-
+      // side. Both additive, both null-safe for every existing caller
+      // that never sets them — ordinary (non-assignment) reading is
+      // unaffected.
+      paragraphIndex: Number.isInteger(context.paragraphIndex) ? context.paragraphIndex : null,
+      questionId: typeof context.questionId === 'string' && context.questionId ? context.questionId : null,
       askedAt: now(),
       revisions: 0,
       scrolledBack: false,
@@ -105,6 +118,8 @@ export function createResponseSignals(opts = {}) {
       scrolledBack: asked.scrolledBack,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      paragraphIndex: asked.paragraphIndex,
+      questionId: asked.questionId,
       wasExplorationSample: asked.wasExplorationSample,
     };
 
@@ -143,6 +158,8 @@ export function createResponseSignals(opts = {}) {
       scrolledBack: asked.scrolledBack,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      paragraphIndex: asked.paragraphIndex,
+      questionId: asked.questionId,
       wasExplorationSample: asked.wasExplorationSample,
     };
 
@@ -177,6 +194,8 @@ export function createResponseSignals(opts = {}) {
       scrolledBack: asked.scrolledBack,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      paragraphIndex: asked.paragraphIndex,
+      questionId: asked.questionId,
       wasExplorationSample: asked.wasExplorationSample,
     };
 
