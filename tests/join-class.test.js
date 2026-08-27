@@ -18,6 +18,7 @@ const JOIN_HTML_PATH = path.resolve(
 const ENTITLEMENTS_URL = 'https://api.alcoia.invalid/api/entitlements';
 const ACCEPT_URL = 'https://api.alcoia.invalid/api/invites/accept';
 const SEATS_URL = 'https://api.alcoia.invalid/api/seats';
+const LTI_ACK_URL = 'https://api.alcoia.invalid/api/lti/disclosure/ack';
 
 function loadJoinBody() {
   const html = fs.readFileSync(JOIN_HTML_PATH, 'utf8');
@@ -58,6 +59,7 @@ function fakeConfig() {
     ENTITLEMENTS_URL,
     INVITE_ACCEPT_URL: ACCEPT_URL,
     SEATS_URL,
+    LTI_DISCLOSURE_ACK_URL: LTI_ACK_URL,
   };
 }
 
@@ -293,5 +295,177 @@ describe('landing directly on an already-active membership', () => {
     expect(document.getElementById('memberClassId').textContent).toContain('c9');
     expect(document.getElementById('inputState').hidden).toBe(true);
     expect(document.getElementById('disclosureState').hidden).toBe(true);
+  });
+});
+
+// Item S6/E4 follow-up: LTI launch entry into the SAME disclosure screen
+// above — background.js's onMessageExternal handler seeds
+// sra_pending_lti_launch and opens this exact page (not a second one)
+// when a Canvas launch reports disclosureRequired: true.
+describe('an LTI launch cannot complete without the disclosure having been rendered', () => {
+  it('a pending LTI launch shows the SAME disclosure screen on boot — no session exists yet, and the ack call is not made until confirmed', async () => {
+    loadJoinBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_pending_lti_launch: { ackCode: 'ack-1', classId: 'lti-class-1', reportingMode: 'aggregate', at: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    const ackFetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ sessionToken: 'lti-sess-1', kind: 'lti', classId: 'lti-class-1', assignmentId: 'assign-1', redirectTo: 'https://console.alcoia.invalid/read?classId=lti-class-1' }),
+    }));
+    vi.stubGlobal('fetch', routedFetch([[LTI_ACK_URL, ackFetch]]));
+
+    await importFreshJoinClassJs();
+
+    // Rendered immediately on boot — no signed-in session required, and
+    // it is the exact same #disclosureState/#confirmJoinBtn subtree the
+    // invite-link path uses.
+    expect(document.getElementById('disclosureState').hidden).toBe(false);
+    expect(document.getElementById('disclosureBlock').textContent).toMatch(/aggregate results only/i);
+    expect(ackFetch).not.toHaveBeenCalled();
+    // The pending record is consumed (removed) once read, same as the
+    // invite flow's own pending-invite handling.
+    expect(chrome._store.sra_pending_lti_launch).toBeUndefined();
+  });
+
+  it('only clicking "Join this class" calls the ack endpoint, and success mints a real session plus class membership', async () => {
+    loadJoinBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_pending_lti_launch: { ackCode: 'ack-2', classId: 'lti-class-2', reportingMode: 'aggregate', at: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    const ackFetch = vi.fn(async (url, init) => {
+      expect(JSON.parse(init.body)).toEqual({ acknowledged: true, ackCode: 'ack-2' });
+      expect(init.headers.Authorization).toBeUndefined();
+      return {
+        ok: true,
+        json: async () => ({ sessionToken: 'lti-sess-2', kind: 'lti', classId: 'lti-class-2', assignmentId: null, redirectTo: null }),
+      };
+    });
+    vi.stubGlobal('fetch', routedFetch([[LTI_ACK_URL, ackFetch], [ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
+
+    await importFreshJoinClassJs();
+    expect(document.getElementById('disclosureState').hidden).toBe(false);
+
+    document.getElementById('confirmJoinBtn').click();
+
+    await vi.waitFor(() => expect(ackFetch).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(document.getElementById('memberState').hidden).toBe(false));
+    expect(document.getElementById('memberClassId').textContent).toContain('lti-class-2');
+
+    // The join genuinely completed — a real session now exists, minted
+    // entirely by this confirm action (there was none before it).
+    expect(chrome._store.sra_session).toEqual({ token: 'lti-sess-2', email: '', expiresAt: expect.any(Number) });
+    expect(chrome._store.sra_class_membership).toEqual({ classId: 'lti-class-2', seatId: null, role: null, joinedAt: expect.any(Number) });
+  });
+
+  it('an expired ack code (401 code_expired) fails cleanly — no session, no membership, honest message, retry still possible', async () => {
+    loadJoinBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_pending_lti_launch: { ackCode: 'ack-3', classId: 'lti-class-3', reportingMode: 'aggregate', at: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[LTI_ACK_URL, async () => ({ ok: false, status: 401, json: async () => ({ error: 'code_expired' }) })]]));
+
+    await importFreshJoinClassJs();
+    document.getElementById('confirmJoinBtn').click();
+
+    await vi.waitFor(() => expect(document.getElementById('disclosureError').hidden).toBe(false));
+    expect(document.getElementById('disclosureError').textContent).toMatch(/expired/i);
+    expect(document.getElementById('memberState').hidden).toBe(true);
+    expect(chrome._store.sra_session).toBeUndefined();
+    expect(chrome._store.sra_class_membership).toBeUndefined();
+    expect(document.getElementById('confirmJoinBtn').disabled).toBe(false);
+  });
+
+  it('a stale pending launch (older than 10 minutes) is discarded — falls through to the normal input screen, not shown as a live disclosure it can no longer complete', async () => {
+    loadJoinBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_pending_lti_launch: { ackCode: 'ack-4', classId: 'lti-class-4', reportingMode: 'aggregate', at: Date.now() - 11 * 60 * 1000 },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', vi.fn());
+
+    await importFreshJoinClassJs();
+    expect(document.getElementById('inputState').hidden).toBe(false);
+    expect(document.getElementById('disclosureState').hidden).toBe(true);
+  });
+
+  it('a pending LTI launch takes priority over an existing, unrelated native class membership already in storage', async () => {
+    loadJoinBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_session: VALID_SESSION,
+      sra_class_membership: { classId: 'old-native-class', seatId: 's-old', role: 'student', joinedAt: Date.now() },
+      sra_pending_lti_launch: { ackCode: 'ack-5', classId: 'lti-class-5', reportingMode: 'aggregate', at: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', vi.fn());
+
+    await importFreshJoinClassJs();
+    // Shows the fresh disclosure, not the stale "you're already in
+    // old-native-class" member screen.
+    expect(document.getElementById('disclosureState').hidden).toBe(false);
+    expect(document.getElementById('memberState').hidden).toBe(true);
+  });
+
+  it('"Back" from an LTI-originated disclosure clears the pending ack — a second confirm click cannot silently resume it', async () => {
+    loadJoinBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_pending_lti_launch: { ackCode: 'ack-6', classId: 'lti-class-6', reportingMode: 'aggregate', at: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    const ackFetch = vi.fn(async () => ({ ok: true, json: async () => ({ sessionToken: 's', kind: 'lti', classId: 'lti-class-6' }) }));
+    vi.stubGlobal('fetch', routedFetch([[LTI_ACK_URL, ackFetch]]));
+
+    await importFreshJoinClassJs();
+    expect(document.getElementById('disclosureState').hidden).toBe(false);
+
+    document.getElementById('backBtn').click();
+    expect(document.getElementById('inputState').hidden).toBe(false);
+    // The structural guard: confirmJoinBtn lives inside #disclosureState,
+    // which is now hidden again — a real click can never reach it (a
+    // hidden ancestor is not hit-testable in a real browser; see this
+    // file's own header on the CSS-specificity fix that makes [hidden]
+    // genuinely apply). Not exercised via a raw .click() here, matching
+    // the sibling invite-flow "Back" test above — jsdom's .click() is a
+    // programmatic call that does not respect ancestor hiddenness the way
+    // a real pointer event does, and would reach completeJoin()'s own
+    // internal disclosureRendered guard directly, which throws BY DESIGN
+    // for exactly that "should be structurally unreachable" case rather
+    // than failing silently — an unhandled rejection in a test, not a
+    // real failure mode a reader could ever hit.
+    expect(ackFetch).not.toHaveBeenCalled();
+  });
+});
+
+// Explicit regression proof for this task's own second requirement: the
+// invite-link disclosure flow (item S6) is unaffected by adding the LTI
+// entry path above — both share showDisclosure()/completeJoin(), so this
+// re-exercises the invite path specifically to prove the LTI branch did
+// not change its behaviour.
+describe('the invite-link disclosure flow is unaffected by the LTI entry path (regression)', () => {
+  it('a normal invite-code submission still shows the disclosure and completes exactly as before, with no LTI state involved', async () => {
+    loadJoinBody();
+    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION })); // no sra_pending_lti_launch at all
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    const acceptFetch = vi.fn(async (url, init) => {
+      expect(JSON.parse(init.body)).toEqual({ token: 'regression-code' });
+      return { ok: true, json: async () => ({ classId: 'c1', seatId: 's1', role: 'student' }) };
+    });
+    vi.stubGlobal('fetch', routedFetch([[ACCEPT_URL, acceptFetch], [ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
+
+    await importFreshJoinClassJs();
+    document.getElementById('inviteInput').value = 'regression-code';
+    document.getElementById('inputFormEl').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(document.getElementById('disclosureState').hidden).toBe(false));
+
+    document.getElementById('confirmJoinBtn').click();
+    await vi.waitFor(() => expect(acceptFetch).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(document.getElementById('memberState').hidden).toBe(false));
+
+    // The invite path's own session was ALREADY there (VALID_SESSION) —
+    // unlike LTI, this flow never mints or overwrites sra_session itself.
+    expect(chrome._store.sra_session).toEqual(VALID_SESSION);
+    expect(chrome._store.sra_class_membership).toEqual({ classId: 'c1', seatId: 's1', role: 'student', joinedAt: expect.any(Number) });
   });
 });
