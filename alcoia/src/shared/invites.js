@@ -30,6 +30,24 @@
  * genuinely seat-backed, not client-side state), but this extension loses
  * the ability to call release() for it until the reader finds another way
  * to identify the seat.
+ *
+ * acknowledgeLtiDisclosure() (item S6/E4 follow-up) is a THIRD entry into
+ * the same disclosure screen (join-class.js), for LTI launches specifically
+ * — confirmed by reading alcoiaServer's src/http/routes/lti.js directly,
+ * not assumed:
+ *   POST /api/lti/disclosure/ack  { acknowledged: true, ackCode }
+ *     -> { sessionToken, kind: 'lti', classId, assignmentId, redirectTo }
+ * Unlike acceptInvite()/releaseSeat(), this call carries NO Authorization
+ * header — there is no session yet at this point in an LTI launch; a
+ * successful ack is what mints one, the same "authenticates with no prior
+ * session" shape session.js's own exchangeCode() already has for the
+ * magic-link path. The response also has no seatId/role field at all
+ * (unlike accept's), so a seat produced this way is stored locally with
+ * both null — join-class.js's own "member" display never reads either,
+ * only classId; the one thing that degrades is the existing "Leave this
+ * class" button, which cannot release a seat it has no id for. That is a
+ * real, honest consequence of the confirmed response shape, not
+ * something invented here to paper over.
  */
 
 export function createInvitesManager(opts = {}) {
@@ -37,6 +55,7 @@ export function createInvitesManager(opts = {}) {
   const getSession = opts.getSession;
   const acceptUrl = opts.acceptUrl;
   const seatsUrl = opts.seatsUrl;
+  const ltiAckUrl = opts.ltiAckUrl;
 
   function authHeaders(token) {
     return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
@@ -125,5 +144,45 @@ export function createInvitesManager(opts = {}) {
     }
   }
 
-  return { acceptInvite, releaseSeat };
+  /* Returns { ok: true, sessionToken, classId, assignmentId, redirectTo }
+   * or { ok: false, error }. `error` is the server's own code when one
+   * came back (acknowledgement_required, invalid_request, invalid_code,
+   * code_already_used, code_expired), or a client-side one (no_ack_code,
+   * no_ack_url, malformed_response, network_error). Never sends
+   * `acknowledged` as anything but the literal `true` this function's own
+   * signature already guarantees — there is no "acknowledge=false" caller
+   * anywhere, matching the server's own requirement that this be explicit,
+   * never inferred. */
+  async function acknowledgeLtiDisclosure(ackCode) {
+    const code = String(ackCode || '').trim();
+    if (!code) return { ok: false, error: 'no_ack_code' };
+    if (!ltiAckUrl || !fetchImpl) return { ok: false, error: 'no_ack_url' };
+
+    try {
+      const resp = await fetchImpl(ltiAckUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ acknowledged: true, ackCode: code }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        return { ok: false, error: (data && typeof data.error === 'string' && data.error) || `status_${resp.status}` };
+      }
+      if (!data || typeof data.sessionToken !== 'string' || !data.sessionToken
+        || typeof data.classId !== 'string' || !data.classId) {
+        return { ok: false, error: 'malformed_response' };
+      }
+      return {
+        ok: true,
+        sessionToken: data.sessionToken,
+        classId: data.classId,
+        assignmentId: typeof data.assignmentId === 'string' ? data.assignmentId : null,
+        redirectTo: typeof data.redirectTo === 'string' ? data.redirectTo : null,
+      };
+    } catch (e) {
+      return { ok: false, error: 'network_error' };
+    }
+  }
+
+  return { acceptInvite, releaseSeat, acknowledgeLtiDisclosure };
 }

@@ -44,7 +44,17 @@ export const TARGETS = ['chrome', 'firefox'];
  * manifest entry) must be swapped to match at the same time — the two are
  * not wired together and a mismatch would make one of them wrong silently.
  * The port here is Vite's default and a GUESS at what alcoiaWeb actually
- * runs on locally; confirm against that repo's own dev server output. */
+ * runs on locally; confirm against that repo's own dev server output.
+ *
+ * A second entry, 'https://console.alcoia.invalid/*', was added for the
+ * LTI launch flow (item S6/E4 follow-up) — the page a Canvas launch
+ * actually lands a student's browser on, which hands the extension either
+ * a pending-disclosure signal or an already-minted session. That page
+ * does not exist in any repo available here either; the value is copied
+ * verbatim from alcoiaServer's own default for ltiReaderBaseUrl
+ * (src/http/routes/lti.js), not invented, and src/shared/config.js's
+ * LTI_READER_ORIGIN must be swapped to match at the same time this entry
+ * is, for the same "not wired together" reason as WEB_APP_ORIGIN above. */
 
 /* Excluded from the shipped package.
  *
