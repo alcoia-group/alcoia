@@ -268,8 +268,11 @@ export function createQuestionCard(deps = {}) {
 
         if (level === 'adversarial') {
           // Never graded, never sent anywhere — the system acknowledges the
-          // argument; it does not mark it.
-          const record = responseSignals.respond(answerText);
+          // argument; it does not mark it. `confidence` IS forwarded
+          // though (bug fix) — the reader genuinely picked one via the
+          // same showConfidenceStep() every other level uses; only
+          // correct/gradingMethod stay fixed at null/'none' by design.
+          const record = responseSignals.respond(answerText, confidence);
           if (record && onAnswered) onAnswered(record);
           revealResponded(root);
           finish();
