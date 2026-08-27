@@ -755,6 +755,48 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     expect(seenBody).not.toHaveProperty('confidence');
   });
 
+  /* Bug fix follow-up: proves the fix in response-signals.js's respond()
+   * actually reaches this chokepoint end to end — a real adversarial
+   * answer, through the real rendered card, with a real confidence pick —
+   * not assumed from the response-signals.js/question-card.js fix alone.
+   * host.js's onAnswered callback itself required NO change for this to
+   * work, since it already read record.confidence generically; this test
+   * is what confirms that claim rather than trusting it. */
+  it('an adversarial answer\'s real confidence pick reaches the outcomes POST — the previously-broken path, now fixed', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    vi.stubGlobal('fetch', fetchImpl);
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    // The mocked question comes back already at 'adversarial' level —
+    // this test is about confidence reaching the outcome, not about
+    // exercising the epistemic engine's own escalation logic (already
+    // covered elsewhere in this file).
+    globalThis.__sendMessageImpl = (msg, cb) => cb({
+      ok: true,
+      data: { questions: [{ q: 'Q?', span: 'adversarial-confidence-test span', level: 'adversarial' }] },
+    });
+
+    const { host } = await createHost(assignmentDeps());
+    document.body.innerHTML = '<p id="t">A paragraph about the adversarial-confidence case specifically, long enough to pass fetchQuestions\' own length floor before it will even try.</p>';
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 9);
+
+    const textarea = document.querySelector('.sra-q-answer-input');
+    textarea.value = 'a counter-argument';
+    textarea.dispatchEvent(new Event('input'));
+    document.querySelector('.sra-q-submit-text').click();
+    document.querySelector('.sra-q-conf-btn[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenBody.paragraph_index).toBe(9);
+    // The actual bug: this used to always be absent (respond() hardcoded
+    // confidence: null, and outcomes.js omits a non-'low'/'high' value
+    // entirely from the request body — see that file's own header).
+    expect(seenBody.confidence).toBe('high');
+    // Grading behaviour stays exactly as this item's own scope requires —
+    // adversarial is still never graded, still never sent as correct.
+    expect(seenBody).not.toHaveProperty('correct');
+  });
+
   it('ordinary reading (no assignmentId) never calls the outcomes endpoint at all — the existing behaviour is unchanged', async () => {
     const fetchImpl = vi.fn();
     vi.stubGlobal('fetch', fetchImpl);

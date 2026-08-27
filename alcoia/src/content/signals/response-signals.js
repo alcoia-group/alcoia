@@ -175,16 +175,27 @@ export function createResponseSignals(opts = {}) {
    * engage, so this is not a refusal — but it asserts nothing about
    * comprehension either. `correct` stays null and state-engine.js reads
    * this the same way it reads a dismissal or an unknown grading verdict:
-   * nothing. */
-  function respond(answerText) {
+   * nothing — UNCHANGED by the fix below.
+   *
+   * `confidence` — bug fix, found during the assignment-outcomes work:
+   * question-card.js's confidence step runs for adversarial exactly as it
+   * does for recognition/free_recall/scenario (the reader genuinely picks
+   * one), but this function used to hardcode `confidence: null` regardless
+   * of what they chose, silently discarding it before it ever reached
+   * anywhere the signal is used — state-engine.js, the receipt, or (since
+   * the assignment-outcomes item) the outcomes endpoint. Normalized the
+   * same way answer()/answerGraded() already do, immediately above; this
+   * does not touch `correct`/`gradingMethod`/`subtype` at all. */
+  function respond(answerText, confidence) {
     if (!asked) return null;
     const latencyMs = now() - asked.askedAt;
+    const normalizedConfidence = confidence === 'low' || confidence === 'high' ? confidence : null;
 
     const record = {
       type: 'response',
       subtype: 'ungraded',
       correct: null,
-      confidence: null,
+      confidence: normalizedConfidence,
       gradingMethod: 'none',
       level: asked.level,
       answerText: String(answerText || '').slice(0, MAX_ANSWER_TEXT_CHARS),
