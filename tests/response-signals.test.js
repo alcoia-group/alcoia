@@ -72,6 +72,67 @@ describe('response-signals', () => {
     });
   });
 
+  /* answerGraded() (free_recall/scenario) — confirmed correct already, but
+   * given an explicit test of its own per the same rigor respond()'s bug
+   * fix below gets, rather than trusted from reading the code alone. */
+  describe('commit-time confidence — answerGraded (free_recall/scenario)', () => {
+    it.each(['low', 'high'])('records a valid %s rating', (level) => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present({ ...QUESTION, level: 'free_recall' });
+      expect(r.answerGraded('an answer', 'correct', level).confidence).toBe(level);
+    });
+
+    it('defaults to null when the reader skips rating it', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present({ ...QUESTION, level: 'scenario' });
+      expect(r.answerGraded('an answer', 'correct').confidence).toBeNull();
+    });
+
+    it('normalizes anything not exactly low/high to null', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      for (const bogus of [undefined, null, '', 'medium', 'HIGH', 3]) {
+        r.present({ ...QUESTION, level: 'scenario' });
+        expect(r.answerGraded('an answer', 'correct', bogus).confidence).toBeNull();
+      }
+    });
+  });
+
+  /* respond() (adversarial) — BUG FIX. Found during the assignment-outcomes
+   * work: this function used to hardcode `confidence: null` regardless of
+   * what the reader actually picked in the UI (question-card.js's own
+   * showConfidenceStep() runs identically for adversarial), silently
+   * discarding it before it ever reached state-engine.js, the receipt, or
+   * host.js's outcome-reporting chokepoint. Fixed to accept and normalize
+   * it the same way answer()/answerGraded() already did — confirmed
+   * `correct`/`gradingMethod` are untouched by the fix, per this task's own
+   * explicit "confidence only" scope. */
+  describe('commit-time confidence — respond (adversarial) — bug fix', () => {
+    it.each(['low', 'high'])('records a valid %s rating — was previously always discarded to null', (level) => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present({ ...QUESTION, level: 'adversarial' });
+      const rec = r.respond('an argument', level);
+      expect(rec.confidence).toBe(level);
+      // The fix is confidence-only — grading behaviour is unchanged.
+      expect(rec.correct).toBeNull();
+      expect(rec.gradingMethod).toBe('none');
+      expect(rec.subtype).toBe('ungraded');
+    });
+
+    it('defaults to null when the reader skips rating it — unchanged, still correct', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present({ ...QUESTION, level: 'adversarial' });
+      expect(r.respond('an argument').confidence).toBeNull();
+    });
+
+    it('normalizes anything not exactly low/high to null, never a guess', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      for (const bogus of [undefined, null, '', 'medium', 'HIGH', 3]) {
+        r.present({ ...QUESTION, level: 'adversarial' });
+        expect(r.respond('an argument', bogus).confidence).toBeNull();
+      }
+    });
+  });
+
   it('flags an answer that took a long time without treating it as wrong', () => {
     const clock = fixedClock();
     const r = createResponseSignals({ now: clock.now, slowAnswerMs: 10000 });

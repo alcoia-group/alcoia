@@ -659,6 +659,43 @@ describe('free-text levels (item 43)', () => {
     expect(ui.root.querySelector('.sra-q-result').classList.contains('sra-q-result-unknown')).toBe(true);
   });
 
+  /* Confirming, per level, that the adversarial gap (fixed above) does not
+   * also exist here — read directly in response-signals.js/question-card.js
+   * before writing this: answerGraded()'s own call site already forwards
+   * `confidence` correctly for both of these levels, unlike respond()'s
+   * former hardcoded null. Explicit tests, not just a read-through. */
+  it('free_recall: passes the real confidence pick through to the record — was already correct', async () => {
+    const ui = fakeUI();
+    const onAnswered = vi.fn();
+    const fetchGrading = vi.fn(async () => ({ verdict: 'correct', span: FREE_RECALL_QUESTION.span }));
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, onAnswered, onDismissed: () => {},
+    });
+    card.show(FREE_RECALL_QUESTION);
+    typeAnswer(ui.root, 'an answer');
+    submitAnswer(ui.root);
+    rate(ui.root, 'high');
+
+    await vi.waitFor(() => expect(onAnswered).toHaveBeenCalledTimes(1));
+    expect(onAnswered.mock.calls[0][0].confidence).toBe('high');
+  });
+
+  it('scenario: passes the real confidence pick through to the record — was already correct', async () => {
+    const ui = fakeUI();
+    const onAnswered = vi.fn();
+    const fetchGrading = vi.fn(async () => ({ verdict: 'correct', span: SCENARIO_QUESTION.span }));
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, onAnswered, onDismissed: () => {},
+    });
+    card.show(SCENARIO_QUESTION);
+    typeAnswer(ui.root, 'a correct application of the principle');
+    submitAnswer(ui.root);
+    rate(ui.root, 'low');
+
+    await vi.waitFor(() => expect(onAnswered).toHaveBeenCalledTimes(1));
+    expect(onAnswered.mock.calls[0][0].confidence).toBe('low');
+  });
+
   it('a response failing shape validation (fetchGrading returns something malformed) resolves to unknown and renders nothing alarming', async () => {
     const ui = fakeUI();
     const fetchGrading = vi.fn(async () => undefined); // simulates host.js's own defensive fallback shape being bypassed
@@ -705,6 +742,58 @@ describe('free-text levels (item 43)', () => {
     expect(onAnswered).toHaveBeenCalledTimes(1);
     expect(onAnswered.mock.calls[0][0].correct).toBeNull();
     expect(onAnswered.mock.calls[0][0].gradingMethod).toBe('none');
+  });
+
+  /* Bug fix, found during the assignment-outcomes work: the reader's real
+   * confidence pick on an adversarial answer used to be silently dropped
+   * — the confidence STEP was always shown and always collected a value
+   * (both existing adversarial tests above already prove that, via
+   * rate(ui.root, null)), but nothing had ever exercised picking an
+   * actual level here, which is exactly why the drop went unnoticed. */
+  it('adversarial: a real confidence pick reaches the record — the previously-dropped case', () => {
+    const ui = fakeUI();
+    const onAnswered = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed: () => {},
+    });
+    card.show(ADVERSARIAL_QUESTION);
+    typeAnswer(ui.root, 'an argument');
+    submitAnswer(ui.root);
+    rate(ui.root, 'high');
+
+    expect(onAnswered).toHaveBeenCalledTimes(1);
+    expect(onAnswered.mock.calls[0][0].confidence).toBe('high');
+    // Grading behaviour itself is untouched by this fix.
+    expect(onAnswered.mock.calls[0][0].correct).toBeNull();
+    expect(onAnswered.mock.calls[0][0].gradingMethod).toBe('none');
+  });
+
+  it('adversarial: "low" confidence also reaches the record, not just "high"', () => {
+    const ui = fakeUI();
+    const onAnswered = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed: () => {},
+    });
+    card.show(ADVERSARIAL_QUESTION);
+    typeAnswer(ui.root, 'an argument');
+    submitAnswer(ui.root);
+    rate(ui.root, 'low');
+
+    expect(onAnswered.mock.calls[0][0].confidence).toBe('low');
+  });
+
+  it('adversarial: skipping confidence still yields null, not a regression from the fix', () => {
+    const ui = fakeUI();
+    const onAnswered = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed: () => {},
+    });
+    card.show(ADVERSARIAL_QUESTION);
+    typeAnswer(ui.root, 'an argument');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+
+    expect(onAnswered.mock.calls[0][0].confidence).toBeNull();
   });
 
   it('never renders model output as HTML — the verdict drives fixed copy only, the span shown is the client\'s own known question.span', () => {
