@@ -247,12 +247,27 @@ function fromSignal(sig) {
   }
 
   if (sig.type === 'speed_mismatch' && sig.subtype === 'too_slow') {
-    return {
+    const proposal = {
       label: STATES.STRUGGLING,
       confidence: SIGNAL_CONFIDENCE.too_slow,
       evidence: [describeTooSlow(sig)],
       signal: sig,
     };
+    // Item 13c: propositional density is real, independent evidence for
+    // OVERLOAD specifically — CLT's own distinction (Sweller): intrinsic
+    // load comes from element interactivity, not from syntax, so this is
+    // deliberately read regardless of how syntactically simple or complex
+    // the SAME passage also is (syntacticLoad() is a separate input this
+    // does not consult). comprehension-monitor.js already attaches the
+    // full analyzeDifficulty() result as sig.readability — nothing new to
+    // wire upstream of this file for that data to arrive here. Only
+    // too_slow carries readability at all; backtrack/regression/
+    // blur_return do not, so this is the one branch that can offer a hint.
+    const prop = sig.readability && sig.readability.propositional;
+    if (prop && typeof prop.score === 'number' && prop.score < PROPOSITIONAL_DENSITY_OVERLOAD_THRESHOLD) {
+      proposal.substateHint = { label: SUBSTATES.OVERLOAD, confidence: PROPOSITIONAL_DENSITY_HINT_CONFIDENCE };
+    }
+    return proposal;
   }
 
   if (sig.type === 'speed_mismatch' && sig.subtype === 'too_fast') {
@@ -323,17 +338,29 @@ function fromSignal(sig) {
  * re-derived, since it is ground truth and outranks any inference.
  *
  * For every OTHER struggling proposal (the ordinary signal-driven path):
- * this project has no dedicated confusion/overload signal yet — items
- * 13b/13c/13d build those — so there is genuinely very little evidence to
- * classify on today, which the "alcoia Evidence Base" research artifact's
- * own finding predicts ("behavioral separation is hard... both confusion
- * and overload can produce slow reading, regressions, and long dwell").
- * `proposal.substateHint` is the shape a future dedicated signal is meant
- * to attach — `{ label: 'confusion' | 'overload', confidence: 0..1 }` — so
- * this function is a real threshold check, not a stub that always returns
- * the same thing for its own sake; it simply has nothing to read yet, so
- * it correctly and honestly falls through to 'unclear' every time. */
+ * `proposal.substateHint` — `{ label: 'confusion' | 'overload', confidence:
+ * 0..1 }` — is the shape a dedicated signal attaches when it has real
+ * evidence. Item 13c (below, the too_slow branch of fromSignal()) is the
+ * first one to actually populate it — propositional density from
+ * text-difficulty.js's own analyzeDifficulty(), real evidence for
+ * OVERLOAD specifically per CLT (Sweller): intrinsic load comes from
+ * element interactivity, not syntax. Items 13b/13d still have nothing to
+ * offer confusion's own side of this — this function stays a real
+ * threshold check, not a stub, and honestly falls through to 'unclear'
+ * whenever nothing cleared the bar, exactly as the "alcoia Evidence Base"
+ * research artifact predicts ("behavioral separation is hard"). */
 const SUBSTATE_CONFIDENCE_THRESHOLD = 0.6;
+
+// Item 13c. propositionalDensity()'s own score is on the same "higher =
+// easier" 0-100 scale as every score in text-difficulty.js — a passage
+// below this threshold is in (or bordering) that file's own 'difficult'/
+// 'very_difficult' band (gradeFor()'s 40/60 cutoffs). The hint confidence
+// is fixed, not derived from HOW far below the threshold the score is —
+// one signal, offered once it clears a bar, not scaled continuously; a
+// second independent signal (13b/13d) corroborating it is what should
+// raise confidence further, not this one signal alone trying harder.
+const PROPOSITIONAL_DENSITY_OVERLOAD_THRESHOLD = 50;
+const PROPOSITIONAL_DENSITY_HINT_CONFIDENCE = 0.65;
 
 function classifySubstate(proposal) {
   if (proposal.substate) return proposal.substate; // self-report — ground truth, not re-derived

@@ -406,3 +406,71 @@ describe('self-report (item 13a) — the highest-confidence evidence, overrides 
     expect(e.getState().label).toBe(STATES.STRUGGLING);
   });
 });
+
+/* Item 13c: propositional density (text-difficulty.js) is the first real
+ * signal to populate substateHint — comprehension-monitor.js already
+ * attaches the full analyzeDifficulty() result as sig.readability on
+ * every too_slow signal, so this is exercised with the exact shape that
+ * arrives in production, not a hand-invented one. */
+describe('propositional density biases substate toward overload (item 13c)', () => {
+  function tooSlowSignal(propositionalScore) {
+    return {
+      type: 'speed_mismatch', subtype: 'too_slow',
+      actualWpm: 90, baselineWpm: 225,
+      readability: {
+        score: 45, grade: 'difficult',
+        syntactic: { score: 90 }, // deliberately EASY syntactically — the whole point of item 13c
+        propositional: { score: propositionalScore, basis: 'lexical' },
+      },
+    };
+  }
+
+  it('a high-density passage (low propositional score) biases substate toward overload', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: tooSlowSignal(20) }); // well under the 50 threshold
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.OVERLOAD);
+  });
+
+  it('a low-density passage (high propositional score) stays unclear — no evidence either way', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: tooSlowSignal(85) }); // comfortably above threshold
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.UNCLEAR);
+  });
+
+  it('this is regardless of syntactic complexity — the SAME easy syntactic score is present in both cases above', () => {
+    // tooSlowSignal() always sets syntactic.score: 90 (easy) — confirms
+    // the bias comes from propositional density specifically, per CLT's
+    // own distinction (intrinsic load from element interactivity, not
+    // syntax), not from some accidental interaction with syntax.
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: tooSlowSignal(20) });
+    expect(s.signal.readability.syntactic.score).toBe(90);
+    expect(s.substate).toBe(SUBSTATES.OVERLOAD);
+  });
+
+  it('a self-report still overrides this inferred overload immediately — ground truth outranks the hint', () => {
+    const e = engineAt(fixedClock());
+    e.update({ reading: tooSlowSignal(20) });
+    expect(e.getState().substate).toBe(SUBSTATES.OVERLOAD);
+
+    const reported = e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.CONFUSION } });
+    expect(reported.substate).toBe(SUBSTATES.CONFUSION);
+  });
+
+  it('a too_slow signal with no readability at all (e.g. a caller that never attached it) still classifies as unclear, not a crash', () => {
+    const e = engineAt(fixedClock());
+    expect(() => e.update({ reading: { type: 'speed_mismatch', subtype: 'too_slow', actualWpm: 90, baselineWpm: 225 } })).not.toThrow();
+    const s = e.getState();
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.UNCLEAR);
+  });
+
+  it('other struggling-asserting signal types (backtrack, regression, blur_return) still classify as unclear — only too_slow carries readability today', () => {
+    const e1 = engineAt(fixedClock());
+    expect(e1.update({ reading: { type: 'backtrack', backtrackPx: 200 } }).substate).toBe(SUBSTATES.UNCLEAR);
+    const e2 = engineAt(fixedClock());
+    expect(e2.update({ reading: { type: 'regression', subtype: 'fast_return', distance: 1 } }).substate).toBe(SUBSTATES.UNCLEAR);
+  });
+});
