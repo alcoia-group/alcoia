@@ -857,3 +857,88 @@ describe('free-text levels (item 43)', () => {
     expect(onDismissed).toHaveBeenCalledTimes(1);
   });
 });
+
+/* Item 13a, affordance 3 (active surfacing). Additive to the question —
+ * never a replacement for it, per host.js's own handleAsk comment. */
+describe('self-report, active surfacing (item 13a)', () => {
+  it('context.showSelfReport renders the three options alongside the question', () => {
+    const ui = fakeUI();
+    const onSelfReport = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {}, onSelfReport,
+    });
+    card.show(QUESTION, { showSelfReport: true });
+
+    const opts = ui.root.querySelectorAll('[data-self-report]');
+    expect(opts).toHaveLength(3);
+    const subtypes = [...opts].map((b) => b.dataset.selfReport).sort();
+    expect(subtypes).toEqual(['confusion', 'disengaged', 'overload']);
+    // The real question is still there too — additive, not a replacement.
+    expect(ui.root.querySelector('.sra-q-text').textContent).toBe(QUESTION.q);
+    expect(ui.root.querySelectorAll('.sra-q-option')).toHaveLength(4);
+  });
+
+  it('without showSelfReport (the default/normal case), no self-report options render at all', () => {
+    const ui = fakeUI();
+    const onSelfReport = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {}, onSelfReport,
+    });
+    card.show(QUESTION); // no context at all
+    expect(ui.root.querySelectorAll('[data-self-report]')).toHaveLength(0);
+  });
+
+  it('showSelfReport true but no onSelfReport callback wired: renders no options rather than throwing on click', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    expect(() => card.show(QUESTION, { showSelfReport: true })).not.toThrow();
+    expect(ui.root.querySelectorAll('[data-self-report]')).toHaveLength(0);
+  });
+
+  it('clicking a self-report option calls onSelfReport with the right subtype', () => {
+    const ui = fakeUI();
+    const onSelfReport = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {}, onSelfReport,
+    });
+    card.show(QUESTION, { showSelfReport: true });
+    ui.root.querySelector('[data-self-report="overload"]').click();
+
+    expect(onSelfReport).toHaveBeenCalledTimes(1);
+    expect(onSelfReport).toHaveBeenCalledWith('overload');
+  });
+
+  it('self-reporting does NOT answer, dismiss, or otherwise affect the question — two independent signals', () => {
+    const ui = fakeUI();
+    const onAnswered = vi.fn();
+    const onDismissed = vi.fn();
+    const onSelfReport = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed, onSelfReport,
+    });
+    card.show(QUESTION, { showSelfReport: true });
+    ui.root.querySelector('[data-self-report="confusion"]').click();
+
+    expect(onAnswered).not.toHaveBeenCalled();
+    expect(onDismissed).not.toHaveBeenCalled();
+    // The question is still fully answerable afterward.
+    pick(ui.root, 0);
+    rate(ui.root, 'high');
+    expect(onAnswered).toHaveBeenCalledTimes(1);
+  });
+
+  it('active surfacing also works for a free-text (adversarial) question, not just recognition', () => {
+    const ui = fakeUI();
+    const onSelfReport = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {}, onSelfReport,
+    });
+    card.show(ADVERSARIAL_QUESTION, { showSelfReport: true });
+    expect(ui.root.querySelectorAll('[data-self-report]')).toHaveLength(3);
+
+    ui.root.querySelector('[data-self-report="disengaged"]').click();
+    expect(onSelfReport).toHaveBeenCalledWith('disengaged');
+  });
+});

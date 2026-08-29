@@ -20,6 +20,43 @@ export const STATES = Object.freeze({
   UNKNOWN:    'unknown',
 });
 
+/* Item 13a: struggling is not one thing. The "alcoia Evidence Base" research
+ * artifact's confusion/overload/boredom section is explicit that these
+ * demand OPPOSITE instructional responses — productive confusion should be
+ * preserved and worked through, overload should be reduced (segment,
+ * simplify, strip extraneous load), and disengagement needs re-engagement,
+ * not more of the same question — and that "behavioral separation is hard":
+ * both confusion and overload can produce identical slow reading,
+ * regressions and long dwell, so "the most reliable disambiguator available
+ * to a browser tool is a lightweight probe... a one-tap self-report."
+ *
+ * `substate` is purely additive — it exists ONLY alongside the unchanged
+ * top-level `label`, never replacing or narrowing it. Every existing
+ * consumer (intervention-policy.js's STATE_ACTIONS, reading-map, the
+ * receipt, diagnostics, the CSS hue tokens) branches on `label` alone and
+ * needs no change; `substate` is new surface for the intervention layer to
+ * read if it chooses to, nothing more. */
+export const SUBSTATES = Object.freeze({
+  CONFUSION: 'confusion',
+  OVERLOAD:  'overload',
+  UNCLEAR:   'unclear',
+});
+
+/* The self-report vocabulary is deliberately WIDER than SUBSTATES above —
+ * it also covers the disengagement case the same research section
+ * describes ("boredom/disengagement" as the third state on this spectrum,
+ * needing re-engagement rather than a load reduction or a Socratic prompt).
+ * Disengagement is not a `struggling` substate at all — a reader who says
+ * "not interested / lost focus" is telling the system it misjudged the
+ * PRIMARY state, not just the substate, so that report resolves to
+ * STATES.DRIFTING (unchanged, pre-existing top-level state) rather than to
+ * a fourth substate value nothing above declares. */
+export const SELF_REPORT = Object.freeze({
+  CONFUSION:    'confusion',
+  OVERLOAD:     'overload',
+  DISENGAGED:   'disengaged',
+});
+
 function clamp01(n) { return n < 0 ? 0 : n > 1 ? 1 : n; }
 
 /* Base confidence per reading signal. These are deliberately not 1.0:
@@ -33,6 +70,15 @@ const RESPONSE_CONFIDENCE = Object.freeze({
   incorrect: 0.95,
   correct:   0.90,
 });
+
+/* A self-report is the reader directly telling the system what is
+ * happening, not the system inferring it — the highest-confidence evidence
+ * this engine can ever receive, deliberately set above every inferred
+ * confidence including RESPONSE_CONFIDENCE.incorrect (0.95) so it always
+ * wins strongestAssertion() against anything else batched in the same
+ * update() call, and immediately overrides whatever substate would
+ * otherwise have been inferred. */
+const SELF_REPORT_CONFIDENCE = 1.0;
 
 /* Item 43: grading authority degrades as the difficulty ladder climbs.
  * recognition is deterministic (unchanged, uses RESPONSE_CONFIDENCE above).
@@ -161,6 +207,45 @@ function fromSignal(sig) {
     return null;
   }
 
+  /* Item 13a: the self-report signal — see SELF_REPORT_CONFIDENCE's own
+   * comment for why this always outranks everything else. confusion/
+   * overload confirm STRUGGLING (unchanged top-level label) and set the
+   * substate directly, bypassing classifySubstate()'s inference entirely —
+   * a `substate` set here on the returned proposal is honoured as-is by
+   * update() below. disengaged resolves to STATES.DRIFTING instead: the
+   * reader is saying the system misjudged the PRIMARY state, not merely
+   * the substate of a correctly-identified struggle. */
+  if (sig.type === 'self_report') {
+    if (sig.subtype === SELF_REPORT.CONFUSION) {
+      return {
+        label: STATES.STRUGGLING,
+        substate: SUBSTATES.CONFUSION,
+        confidence: SELF_REPORT_CONFIDENCE,
+        evidence: ["You said you're stuck or don't get it"],
+        signal: sig,
+      };
+    }
+    if (sig.subtype === SELF_REPORT.OVERLOAD) {
+      return {
+        label: STATES.STRUGGLING,
+        substate: SUBSTATES.OVERLOAD,
+        confidence: SELF_REPORT_CONFIDENCE,
+        evidence: ["You said it's too much at once"],
+        signal: sig,
+      };
+    }
+    if (sig.subtype === SELF_REPORT.DISENGAGED) {
+      return {
+        label: STATES.DRIFTING,
+        substate: null,
+        confidence: SELF_REPORT_CONFIDENCE,
+        evidence: ["You said you're not interested or lost focus"],
+        signal: sig,
+      };
+    }
+    return null;
+  }
+
   if (sig.type === 'speed_mismatch' && sig.subtype === 'too_slow') {
     return {
       label: STATES.STRUGGLING,
@@ -230,6 +315,36 @@ function fromSignal(sig) {
   return null;
 }
 
+/* Item 13a: the substate classifier. Called once per update(), only when
+ * the winning proposal's label is STRUGGLING.
+ *
+ * A self-report proposal (see fromSignal() above) already carries its own
+ * `substate` explicitly — that value is honoured as-is here, never
+ * re-derived, since it is ground truth and outranks any inference.
+ *
+ * For every OTHER struggling proposal (the ordinary signal-driven path):
+ * this project has no dedicated confusion/overload signal yet — items
+ * 13b/13c/13d build those — so there is genuinely very little evidence to
+ * classify on today, which the "alcoia Evidence Base" research artifact's
+ * own finding predicts ("behavioral separation is hard... both confusion
+ * and overload can produce slow reading, regressions, and long dwell").
+ * `proposal.substateHint` is the shape a future dedicated signal is meant
+ * to attach — `{ label: 'confusion' | 'overload', confidence: 0..1 }` — so
+ * this function is a real threshold check, not a stub that always returns
+ * the same thing for its own sake; it simply has nothing to read yet, so
+ * it correctly and honestly falls through to 'unclear' every time. */
+const SUBSTATE_CONFIDENCE_THRESHOLD = 0.6;
+
+function classifySubstate(proposal) {
+  if (proposal.substate) return proposal.substate; // self-report — ground truth, not re-derived
+  const hint = proposal.substateHint;
+  if (hint && (hint.label === SUBSTATES.CONFUSION || hint.label === SUBSTATES.OVERLOAD)
+    && hint.confidence >= SUBSTATE_CONFIDENCE_THRESHOLD) {
+    return hint.label;
+  }
+  return SUBSTATES.UNCLEAR;
+}
+
 /* Pick the strongest thing a signal is willing to assert. */
 function strongestAssertion(signals) {
   let best = null;
@@ -247,6 +362,7 @@ export function createReadingStateEngine(config = {}) {
   const subscribers = new Set();
   let current = {
     label: STATES.UNKNOWN,
+    substate: null,
     confidence: 0,
     evidence: [],
     at: now(),
@@ -255,6 +371,7 @@ export function createReadingStateEngine(config = {}) {
 
   function emit(next) {
     const changed = next.label !== current.label ||
+                    next.substate !== current.substate ||
                     Math.abs(next.confidence - current.confidence) > 0.001;
     current = next;
     if (!changed) return current;
@@ -292,6 +409,10 @@ export function createReadingStateEngine(config = {}) {
     const next = proposal
       ? {
           label: proposal.label,
+          // Item 13a: additive only — null for every label except
+          // STRUGGLING, matching every existing consumer's expectations
+          // exactly (they never read this field at all today).
+          substate: proposal.label === STATES.STRUGGLING ? classifySubstate(proposal) : null,
           confidence: clamp01(proposal.confidence),
           evidence: proposal.evidence || [],
           at,
@@ -299,6 +420,7 @@ export function createReadingStateEngine(config = {}) {
         }
       : {
           label: STATES.UNKNOWN,
+          substate: null,
           confidence: 0,
           evidence: [],
           at,

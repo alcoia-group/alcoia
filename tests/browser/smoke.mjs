@@ -609,6 +609,33 @@ shortcuts.results.altF_ruler = await page.evaluate(() =>
   !!document.querySelector('[class*="ruler"],[id*="ruler"]') || !!document.getElementById('sra-sim-toast'));
 await alt('KeyM');     // toggle reading map
 shortcuts.results.altM_map = await page.evaluate(() => !!document.getElementById('sra-reading-map'));
+
+// Item 13a — the self-report mechanism's three affordances. The
+// persistent trigger (affordance 2) should already be on screen before
+// any shortcut is pressed at all: "always available", unlike everything
+// else on this page.
+shortcuts.results.selfReportTriggerAlwaysPresent = await page.evaluate(() => !!document.getElementById('sra-self-report-trigger'));
+
+await alt('KeyC');     // self-report (affordance 1)
+await page.waitForTimeout(400);
+shortcuts.results.altC_selfReportOptionCount = await page.evaluate(() => document.querySelectorAll('[data-self-report]').length);
+// A real click in a real browser, not just markup existing — confirms the
+// handler actually runs and does not throw.
+await page.evaluate(() => document.querySelector('[data-self-report="confusion"]')?.click());
+await page.waitForTimeout(200);
+shortcuts.results.altC_clickAcknowledged = await page.evaluate(() =>
+  document.querySelector('[data-self-report="confusion"]')?.textContent === 'Thanks, noted.');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(400);
+
+// Affordance 2 — the SAME standalone card, reached by clicking the
+// persistent trigger instead of the keyboard shortcut.
+await page.evaluate(() => document.getElementById('sra-self-report-trigger')?.click());
+await page.waitForTimeout(400);
+shortcuts.results.triggerClick_selfReportOptionCount = await page.evaluate(() => document.querySelectorAll('[data-self-report]').length);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(400);
+
 await alt('KeyS');     // summarise paragraph at viewport centre
 await page.waitForTimeout(500);
 shortcuts.results.altS_popup = await page.evaluate(() => document.querySelectorAll('.sra-popup').length > 0);

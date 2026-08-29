@@ -180,6 +180,71 @@
 }
 .sra-btn-secondary:hover:not(:disabled) { background: var(--alc-accent-sf); }
 
+/* ── Self-report (item 13a) ──────────────────────────────────────────────
+   The "alcoia Evidence Base" research artifact: confusion and overload
+   need opposite responses but "behavioral separation is hard", so the
+   self-report loop is "not optional". Three affordances share this
+   styling family — the inline block below sits INSIDE a question card
+   (active surfacing, additive to the question, never a replacement for
+   it), the standalone card (Alt+C / the persistent trigger) reuses the
+   ordinary .sra-btn-secondary buttons directly. */
+.sra-self-report-inline {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--alc-border);
+}
+.sra-self-report-prompt {
+  font-family: var(--alc-ui);
+  font-size: 11px;
+  color: var(--alc-muted);
+  margin: 0 0 6px;
+}
+.sra-self-report-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.sra-self-report-btn {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--alc-border-2);
+  background: transparent;
+  color: var(--alc-accent-2);
+  font-family: var(--alc-ui);
+  font-size: 11px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.sra-self-report-btn:hover:not(:disabled) { background: var(--alc-accent-sf); }
+.sra-self-report-btn:focus-visible { outline: 2px solid var(--alc-accent); outline-offset: 2px; }
+.sra-self-report-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* Affordance 2: a persistent, always-clickable trigger — unlike every
+   other element in this file, it is not conditional on any detected
+   state or open card. Deliberately unobtrusive: a small paper-toned
+   circle, hairline border only, no glow or shadow beyond the same
+   near-invisible one every popup already gets, so it reads as "always
+   there if you need it" rather than as its own competing interruption. */
+#sra-self-report-trigger {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483645; /* one below .sra-popup, so an open card is never hidden behind it */
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--alc-border-2);
+  background: var(--alc-surface);
+  color: var(--alc-accent-2);
+  font-family: var(--alc-ui);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--alc-shadow);
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+#sra-self-report-trigger:hover { opacity: 1; }
+#sra-self-report-trigger:focus-visible { outline: 2px solid var(--alc-accent); outline-offset: 2px; opacity: 1; }
+
 /* ── Close / pin ─────────────────────────────────────────────────────────── */
 .sra-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 1px; }
 .sra-ctrl-btn {

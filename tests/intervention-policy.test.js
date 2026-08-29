@@ -379,3 +379,26 @@ describe('exploration sampling', () => {
     expect(d.wasExplorationSample).toBe(false);
   });
 });
+
+/* Item 13a: state-engine.js now emits an additive `substate` field
+ * alongside `label` whenever the state is struggling. This file's own
+ * evaluate()/STATE_ACTIONS/every other branch must stay byte-for-byte
+ * unchanged — confirmed here directly with a state object carrying the
+ * new field, not just inferred from "we didn't edit this file." */
+describe('substate (item 13a) is inert here — this file never reads it', () => {
+  it('a struggling state with substate: "unclear" behaves identically to one with no substate at all', () => {
+    const p1 = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const p2 = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const withSubstate = p1.evaluate(struggling({ substate: 'unclear' }));
+    const without = p2.evaluate(struggling());
+    expect(withSubstate).toEqual(without);
+  });
+
+  it('a struggling state with substate: "confusion" or "overload" is evaluated exactly the same way — this file does not branch on it', () => {
+    const base = createInterventionPolicy({ now: fixedClock().now, random: () => 0 }).evaluate(struggling());
+    for (const substate of ['confusion', 'overload', null, undefined]) {
+      const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+      expect(p.evaluate(struggling({ substate }))).toEqual(base);
+    }
+  });
+});
