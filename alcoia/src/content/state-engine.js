@@ -330,12 +330,28 @@ function fromSignal(sig) {
       ? [`You jumped straight back ${paras}`]
       : [`You went back ${paras} to re-read`];
 
-    return {
+    const proposal = {
       label: STATES.STRUGGLING,
       confidence: SIGNAL_CONFIDENCE[sig.subtype] ?? SIGNAL_CONFIDENCE.return,
       evidence,
       signal: sig,
     };
+
+    // scroll-regression.js only ever emits a non-slow-return 'regression'
+    // signal once it has confirmed a genuine re-read loop (see that file's
+    // own header) — a quick, oculomotor-style correction never reaches
+    // here. Repetition on the SAME passage is the further distinction: a
+    // reader who keeps returning to resolve it is the confusion signature
+    // specifically (D'Mello et al.'s "keeps trying to resolve something"),
+    // not overload or disengagement. A single genuine re-read is real but
+    // weaker evidence — per the brief, worth distinguishing rather than
+    // forcing it into confusion on one occurrence — so it sets no hint at
+    // all and falls through to 'unclear', same as before this existed.
+    if (typeof sig.sameIndexRereadCount === 'number' && sig.sameIndexRereadCount >= CONFUSION_REREAD_COUNT) {
+      proposal.substateHint = { label: SUBSTATES.CONFUSION, confidence: CONFUSION_REREAD_HINT_CONFIDENCE };
+    }
+
+    return proposal;
   }
 
   if (sig.type === 'blur_return') {
@@ -366,11 +382,17 @@ function fromSignal(sig) {
  * first one to actually populate it — propositional density from
  * text-difficulty.js's own analyzeDifficulty(), real evidence for
  * OVERLOAD specifically per CLT (Sweller): intrinsic load comes from
- * element interactivity, not syntax. Items 13b/13d still have nothing to
- * offer confusion's own side of this — this function stays a real
- * threshold check, not a stub, and honestly falls through to 'unclear'
- * whenever nothing cleared the bar, exactly as the "alcoia Evidence Base"
- * research artifact predicts ("behavioral separation is hard"). */
+ * element interactivity, not syntax. scroll-regression.js's genuine-reread
+ * repetition (the 'regression' branch of fromSignal(), below) is the first
+ * to populate CONFUSION's own side — a reader who keeps genuinely
+ * re-reading the same passage is the "keeps trying to resolve something"
+ * signature, not overload or disengagement. cursor-tracking.js's
+ * mind-wandering kinematics remains corroboration-only and never sets
+ * either hint — see its CORROBORATION_GUARD entry above. This function
+ * stays a real threshold check, not a stub, and honestly falls through to
+ * 'unclear' whenever nothing cleared the bar, exactly as the "alcoia
+ * Evidence Base" research artifact predicts ("behavioral separation is
+ * hard"). */
 const SUBSTATE_CONFIDENCE_THRESHOLD = 0.6;
 
 // Item 13c. propositionalDensity()'s own score is on the same "higher =
@@ -379,10 +401,20 @@ const SUBSTATE_CONFIDENCE_THRESHOLD = 0.6;
 // 'very_difficult' band (gradeFor()'s 40/60 cutoffs). The hint confidence
 // is fixed, not derived from HOW far below the threshold the score is —
 // one signal, offered once it clears a bar, not scaled continuously; a
-// second independent signal (13b/13d) corroborating it is what should
-// raise confidence further, not this one signal alone trying harder.
+// second independent signal corroborating it is what should raise
+// confidence further, not this one signal alone trying harder.
 const PROPOSITIONAL_DENSITY_OVERLOAD_THRESHOLD = 50;
 const PROPOSITIONAL_DENSITY_HINT_CONFIDENCE = 0.65;
+
+// A single genuine re-read is real evidence but weaker — per the brief,
+// worth distinguishing from repetition rather than forcing it into
+// confusion on one occurrence, so it sets no hint at all (falls through to
+// 'unclear'). It takes a SECOND genuine re-read of the SAME passage to
+// clear the bar. Confidence is fixed, matching PROPOSITIONAL_DENSITY_HINT_
+// CONFIDENCE's own reasoning above — offered once repetition clears a bar,
+// not scaled by the exact count.
+const CONFUSION_REREAD_COUNT = 2;
+const CONFUSION_REREAD_HINT_CONFIDENCE = 0.65;
 
 function classifySubstate(proposal) {
   if (proposal.substate) return proposal.substate; // self-report — ground truth, not re-derived

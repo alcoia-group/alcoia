@@ -574,3 +574,71 @@ describe('cursor kinematics corroborate unclear, never confusion or overload (re
     expect(s.label).toBe(STATES.UNKNOWN);
   });
 });
+
+/* scroll-regression.js only ever emits a non-slow-return 'regression'
+ * signal once it has confirmed a genuine re-read loop — a quick,
+ * oculomotor-style correction never reaches here at all (that filtering
+ * happens in scroll-regression.js itself, exercised in
+ * tests/signal-detectors.test.js). This describes what state-engine.js
+ * does with the sameIndexRereadCount that signal carries: repeated genuine
+ * re-reads of the SAME passage lean substate toward confusion; a single
+ * one is real evidence but weaker, and stays unclear rather than being
+ * forced into a category on one occurrence. */
+describe('repeated genuine re-reads of the same passage lean substate toward confusion', () => {
+  function regressionSignal(sameIndexRereadCount, subtype = 'return') {
+    return {
+      type: 'regression', subtype, toIndex: 2, fromIndex: 5, distance: 3,
+      latencyMs: 4000, returnDwellMs: 6000, originalDwellMs: 8000,
+      sameIndexRereadCount,
+    };
+  }
+
+  it('a single genuine re-read is struggling, but stays unclear — real evidence, not enough on its own', () => {
+    const s = engineAt(fixedClock()).update({ reading: regressionSignal(1) });
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.UNCLEAR);
+  });
+
+  it('a second genuine re-read of the SAME paragraph clears the bar for confusion', () => {
+    const s = engineAt(fixedClock()).update({ reading: regressionSignal(2) });
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.CONFUSION);
+  });
+
+  it('higher counts stay confusion — this is a threshold, not a countdown', () => {
+    const s = engineAt(fixedClock()).update({ reading: regressionSignal(5) });
+    expect(s.substate).toBe(SUBSTATES.CONFUSION);
+  });
+
+  it('a fast_return with repeated re-reads is confusion too — the count drives it, not the latency subtype', () => {
+    const s = engineAt(fixedClock()).update({ reading: regressionSignal(2, 'fast_return') });
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.CONFUSION);
+  });
+
+  it('a regression signal with no sameIndexRereadCount at all still classifies as unclear, not a crash', () => {
+    const e = engineAt(fixedClock());
+    expect(() => e.update({ reading: { type: 'regression', subtype: 'fast_return', distance: 2 } })).not.toThrow();
+    const s = e.getState();
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.UNCLEAR);
+  });
+
+  it('a self-report still overrides an inferred confusion immediately — ground truth outranks the hint', () => {
+    const e = engineAt(fixedClock());
+    e.update({ reading: regressionSignal(3) });
+    expect(e.getState().substate).toBe(SUBSTATES.CONFUSION);
+
+    const reported = e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.OVERLOAD } });
+    expect(reported.substate).toBe(SUBSTATES.OVERLOAD);
+  });
+
+  it('cursor kinematics never corroborates a repeated-re-read-driven confusion proposal either', () => {
+    const clock = fixedClock();
+    const mindWandering = { type: 'cursor_kinematics', assertable: false, subtype: 'mind_wandering', axisFlipRatio: 0.9, initiationDelayMs: null };
+    const alone = engineAt(clock).update({ reading: regressionSignal(2) });
+    const withCursor = engineAt(clock).update({ reading: [regressionSignal(2), mindWandering] });
+    expect(withCursor.substate).toBe(SUBSTATES.CONFUSION);
+    expect(withCursor.confidence).toBe(alone.confidence);
+  });
+});
