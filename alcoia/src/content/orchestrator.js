@@ -84,7 +84,7 @@ export async function createOrchestrator(deps) {
     // The master switch. Nothing accrues while the assistant is off.
     if (s().assistantEnabled === false) return;
     const batch = [];
-    for (const sig of [scrollRegression.signal(), scrollDynamics.signal(), progressionEntropy.signal()]) {
+    for (const sig of [scrollRegression.signal(), scrollDynamics.signal(), progressionEntropy.signal(), cursorTracker.signal()]) {
       if (sig) batch.push(sig);
     }
     const interactions = interactionSignals.signal();

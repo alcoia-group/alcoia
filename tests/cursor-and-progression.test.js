@@ -57,18 +57,120 @@ describe('cursor-tracking', () => {
     expect(c.update(300, 200, clock.now())).toBeNull();
   });
 
-  /* Pins the resolution of the cursor_reading defect (CLAUDE.md, Known
-   * defects): this module used to also emit a `type: 'cursor_reading'`
-   * object via signal(), meant to reach state-engine.js as a corroborating
-   * signal — but nothing ever wired state-engine.js's CORROBORATION table
-   * for it and orchestrator.js never called signal() to drain it, so the
-   * object was produced and then silently discarded. That emission path is
-   * deleted outright rather than wired up retroactively; this is the only
-   * surface the module has now. */
-  it('has no signal() or other engine-emission surface', () => {
+  /* Supersedes the old "has no signal() or other engine-emission surface"
+   * pin. That test deliberately fixed the ABSENCE of a signal() path after
+   * the cursor_reading defect (CLAUDE.md, Known defects): a `type:
+   * 'cursor_reading'` object used to be emitted via signal() but nothing
+   * ever wired state-engine.js's CORROBORATION table for it and
+   * orchestrator.js never called signal() to drain it, so it was produced
+   * and silently discarded — the dead path was deleted rather than wired
+   * up retroactively. This task is the deliberate decision CLAUDE.md said
+   * that revival would require: a real CORROBORATION entry
+   * (cursor_kinematics), a real drain in orchestrator.js's pumpSignals(),
+   * and a different, validated signal shape — mind-wandering kinematics,
+   * not the old reading-position judgement. The shape only, confirmed here;
+   * behaviour is covered by the describe block below. */
+  it('has a signal() surface again, deliberately, with the new shape', () => {
     const c = createCursorTracker();
-    expect(c.signal).toBeUndefined();
-    expect(Object.keys(c).sort()).toEqual(['getPointerY', 'isTracking', 'reset', 'update']);
+    expect(typeof c.signal).toBe('function');
+    expect(Object.keys(c).sort()).toEqual(['getPointerY', 'isTracking', 'reset', 'signal', 'update']);
+  });
+
+  it('a reader who never moves the mouse gets no signal at all — never zero events read as evidence of anything', () => {
+    const c = createCursorTracker();
+    expect(c.signal()).toBeNull();
+  });
+});
+
+describe('cursor-tracking — mind-wandering kinematics (revived, corroboration-only)', () => {
+  it('flags a real axis-flip pattern — cursor repeatedly reversing direction, well past jitter', () => {
+    const clock = fixedClock();
+    const c = createCursorTracker({ now: clock.now });
+    let y = 200;
+    // Deliberately zig-zags x by 20px every step, well above jitter noise,
+    // while y still advances so this cannot be mistaken for a stationary cursor.
+    const xs = [300, 320, 300, 320, 300, 320, 300, 320, 300, 320];
+    let sig = null;
+    for (const x of xs) {
+      clock.advance(150);
+      y += 4;
+      c.update(x, y, clock.now());
+      sig = c.signal() ?? sig;
+    }
+    expect(sig).not.toBeNull();
+    expect(sig.type).toBe('cursor_kinematics');
+    expect(sig.subtype).toBe('mind_wandering');
+    expect(sig.axisFlipRatio).toBeGreaterThan(0.35);
+    expect(sig.initiationDelayMs).toBeNull();
+  });
+
+  it('flags a slow resumption after a real pause — the response-initiation-delay proxy', () => {
+    const clock = fixedClock();
+    const c = createCursorTracker({ now: clock.now, resumeDelayMs: 5000 });
+    // Ordinary smooth downward tracking first, same shape as the
+    // "recognises a cursor being used to follow text" case above.
+    for (let i = 0; i < 8; i++) {
+      clock.advance(200);
+      c.update(300, 200 + i * 18, clock.now());
+    }
+    c.signal(); // drain anything from the warm-up, isolate the pause below
+    clock.advance(5500); // a real pause, past resumeDelayMs
+    c.update(300, 400, clock.now());
+    const sig = c.signal();
+    expect(sig).not.toBeNull();
+    expect(sig.subtype).toBe('mind_wandering');
+    expect(sig.initiationDelayMs).toBe(5500);
+  });
+
+  it('an ordinary short pause between moves is not evidence of anything', () => {
+    const clock = fixedClock();
+    const c = createCursorTracker({ now: clock.now, resumeDelayMs: 5000 });
+    for (let i = 0; i < 8; i++) {
+      clock.advance(200);
+      c.update(300, 200 + i * 18, clock.now());
+    }
+    c.signal();
+    clock.advance(1200); // well under resumeDelayMs — a normal reading pause
+    c.update(300, 400, clock.now());
+    expect(c.signal()).toBeNull();
+  });
+
+  it('smooth reading-tracking movement (the recognises-cursor-as-pointer case) produces no mind-wandering signal', () => {
+    const clock = fixedClock();
+    const c = createCursorTracker({ now: clock.now });
+    let sig = null;
+    for (let i = 0; i < 12; i++) {
+      clock.advance(250);
+      c.update(300 + (i % 3), 200 + i * 18, clock.now());   // same fixture as the reading-pointer test
+      sig = c.signal();
+    }
+    expect(sig).toBeNull();
+  });
+
+  it('drains once and clears, same as every other detector\'s signal()', () => {
+    const clock = fixedClock();
+    const c = createCursorTracker({ now: clock.now });
+    let y = 200;
+    for (const x of [300, 320, 300, 320, 300, 320, 300, 320]) {
+      clock.advance(150);
+      y += 4;
+      c.update(x, y, clock.now());
+    }
+    expect(c.signal()).not.toBeNull();
+    expect(c.signal()).toBeNull();
+  });
+
+  it('reset() clears any pending kinematics along with everything else', () => {
+    const clock = fixedClock();
+    const c = createCursorTracker({ now: clock.now });
+    let y = 200;
+    for (const x of [300, 320, 300, 320, 300, 320, 300, 320]) {
+      clock.advance(150);
+      y += 4;
+      c.update(x, y, clock.now());
+    }
+    c.reset();
+    expect(c.signal()).toBeNull();
   });
 });
 

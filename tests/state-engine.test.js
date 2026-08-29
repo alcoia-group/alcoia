@@ -121,6 +121,7 @@ describe('corroborating signals raise confidence but never assert', () => {
     ['selection', { type: 'selection', assertable: false, length: 40 }],
     ['copy', { type: 'copy', assertable: false, subtype: 'term', length: 18 }],
     ['scroll_jerk', { type: 'scroll_jerk', assertable: false, subtype: 'hunting', jerk: 0.05 }],
+    ['cursor_kinematics', { type: 'cursor_kinematics', assertable: false, subtype: 'mind_wandering', axisFlipRatio: 0.9, initiationDelayMs: null }],
   ])('%s alone produces nothing', (_name, sig) => {
     const s = engineAt(fixedClock()).update({ reading: sig });
     expect(s.label).toBe(STATES.UNKNOWN);
@@ -472,5 +473,104 @@ describe('propositional density biases substate toward overload (item 13c)', () 
     expect(e1.update({ reading: { type: 'backtrack', backtrackPx: 200 } }).substate).toBe(SUBSTATES.UNCLEAR);
     const e2 = engineAt(fixedClock());
     expect(e2.update({ reading: { type: 'regression', subtype: 'fast_return', distance: 1 } }).substate).toBe(SUBSTATES.UNCLEAR);
+  });
+});
+
+/* Revives cursor-tracking.js's dead signal() path (CLAUDE.md's own "known
+ * defects" list) with a deliberately different, validated shape: mind-
+ * wandering kinematics ("Wandering minds, wandering mice", Computers in
+ * Human Behavior 2020) — axis-flip frequency and slow response initiation —
+ * corroboration-only, never load-bearing, and scoped to the 'unclear'
+ * substate specifically. Never confusion or overload: those are a CLT/
+ * productive-confusion signature (item 13c), not a mind-wandering one. */
+describe('cursor kinematics corroborate unclear, never confusion or overload (revived signal)', () => {
+  const mindWandering = { type: 'cursor_kinematics', assertable: false, subtype: 'mind_wandering', axisFlipRatio: 0.9, initiationDelayMs: null };
+
+  it('a reader with zero cursor events is detected identically to the pre-this-task baseline — the signal is simply absent from the batch', () => {
+    const clock = fixedClock();
+    // No cursor_kinematics entry at all — exactly what a mouseless reader
+    // (trackpad, touch, keyboard nav, assistive tech) produces, since
+    // cursor-tracking.js's signal() only ever fires from a real update()
+    // call. This must match every pre-existing backtrack/too_slow/etc.
+    // assertion in this file exactly — nothing about those changes here.
+    const s = engineAt(clock).update({ reading: { type: 'backtrack', backtrackPx: 200 } });
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.UNCLEAR);
+    expect(s.evidence).toEqual(['You scrolled back 200px to re-read']);
+  });
+
+  it('alongside an ordinary struggling signal, it raises confidence, adds its own evidence, and the substate stays unclear', () => {
+    const clock = fixedClock();
+    const alone = engineAt(clock).update({ reading: { type: 'backtrack', backtrackPx: 200 } });
+    const withCursor = engineAt(clock).update({
+      reading: [
+        { type: 'backtrack', backtrackPx: 200 },
+        mindWandering,
+      ],
+    });
+    expect(withCursor.confidence).toBeGreaterThan(alone.confidence);
+    expect(withCursor.evidence).toContain('Your mouse paused and changed direction a lot around here');
+    expect(withCursor.substate).toBe(SUBSTATES.UNCLEAR);
+  });
+
+  it('an "ordinary" (non-mind_wandering) subtype does nothing, same as smooth scrolling does for scroll_jerk', () => {
+    const clock = fixedClock();
+    const alone = engineAt(clock).update({ reading: { type: 'backtrack', backtrackPx: 200 } });
+    const withOrdinary = engineAt(clock).update({
+      reading: [
+        { type: 'backtrack', backtrackPx: 200 },
+        { type: 'cursor_kinematics', assertable: false, subtype: 'ordinary', axisFlipRatio: 0.02, initiationDelayMs: null },
+      ],
+    });
+    expect(withOrdinary.confidence).toBe(alone.confidence);
+    expect(withOrdinary.evidence).not.toContain('Your mouse paused and changed direction a lot around here');
+  });
+
+  it('never corroborates a too_slow proposal already headed for overload (item 13c\'s propositional-density hint)', () => {
+    const clock = fixedClock();
+    const overloadSignal = {
+      type: 'speed_mismatch', subtype: 'too_slow',
+      actualWpm: 90, baselineWpm: 225,
+      readability: { syntactic: { score: 90 }, propositional: { score: 20, basis: 'lexical' } },
+    };
+    const alone = engineAt(clock).update({ reading: overloadSignal });
+    const withCursor = engineAt(clock).update({ reading: [overloadSignal, mindWandering] });
+    expect(alone.substate).toBe(SUBSTATES.OVERLOAD);
+    expect(withCursor.substate).toBe(SUBSTATES.OVERLOAD);
+    // The whole point: mind-wandering kinematics must not touch a proposal
+    // the engine already has real overload evidence for.
+    expect(withCursor.confidence).toBe(alone.confidence);
+    expect(withCursor.evidence).not.toContain('Your mouse paused and changed direction a lot around here');
+  });
+
+  it('never corroborates a self-reported confusion or overload — ground truth, not to be touched', () => {
+    const clock = fixedClock();
+    const alone = engineAt(clock).update({ reading: { type: 'self_report', subtype: SELF_REPORT.CONFUSION } });
+    const withCursor = engineAt(clock).update({
+      reading: [{ type: 'self_report', subtype: SELF_REPORT.CONFUSION }, mindWandering],
+    });
+    expect(withCursor.substate).toBe(SUBSTATES.CONFUSION);
+    expect(withCursor.confidence).toBe(alone.confidence);
+    expect(withCursor.evidence).not.toContain('Your mouse paused and changed direction a lot around here');
+  });
+
+  it('does corroborate a too_slow proposal whose propositional density does NOT clear the overload bar — that one really is unclear', () => {
+    const clock = fixedClock();
+    const unclearSignal = {
+      type: 'speed_mismatch', subtype: 'too_slow',
+      actualWpm: 90, baselineWpm: 225,
+      readability: { syntactic: { score: 90 }, propositional: { score: 85, basis: 'lexical' } }, // comfortably above the overload threshold
+    };
+    const alone = engineAt(clock).update({ reading: unclearSignal });
+    const withCursor = engineAt(clock).update({ reading: [unclearSignal, mindWandering] });
+    expect(alone.substate).toBe(SUBSTATES.UNCLEAR);
+    expect(withCursor.substate).toBe(SUBSTATES.UNCLEAR);
+    expect(withCursor.confidence).toBeGreaterThan(alone.confidence);
+    expect(withCursor.evidence).toContain('Your mouse paused and changed direction a lot around here');
+  });
+
+  it('cursor kinematics alone never asserts drifting or any other state', () => {
+    const s = engineAt(fixedClock()).update({ reading: mindWandering });
+    expect(s.label).toBe(STATES.UNKNOWN);
   });
 });
