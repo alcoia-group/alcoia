@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createReadingStateEngine, STATES } from '../alcoia/src/content/state-engine.js';
+import { createReadingStateEngine, STATES, SUBSTATES, SELF_REPORT } from '../alcoia/src/content/state-engine.js';
 
 /* A controllable clock so nothing here depends on wall time. */
 function fixedClock(start = 1_000_000) {
@@ -272,5 +272,137 @@ describe('subscribers', () => {
     off();
     e.update({ reading: { type: 'backtrack', backtrackPx: 200 } });
     expect(seen).not.toHaveBeenCalled();
+  });
+});
+
+/* Item 13a: struggling is not one thing — a substate the intervention
+ * layer can read, additive alongside the unchanged top-level `label`. */
+describe('substate — additive, struggling-only', () => {
+  it('is null when the state is unknown (nothing given)', () => {
+    const e = engineAt(fixedClock());
+    expect(e.update({}).substate).toBeNull();
+  });
+
+  it('is null for on_pace (correct response)', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: { type: 'response', subtype: 'correct' } });
+    expect(s.label).toBe(STATES.ON_PACE);
+    expect(s.substate).toBeNull();
+  });
+
+  it('is null for skimming (too_fast)', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: { type: 'speed_mismatch', subtype: 'too_fast', readability: { grade: 'difficult' } } });
+    expect(s.label).toBe(STATES.SKIMMING);
+    expect(s.substate).toBeNull();
+  });
+
+  it('is null for drifting-shaped input (no assertable signal at all)', () => {
+    // state-engine.js itself never asserts DRIFTING from an ordinary
+    // reading signal (that mapping lives in intervention-policy.js /
+    // orchestrator.js's idle handling) — the only path that reaches
+    // DRIFTING here is a self-report, covered in its own describe block
+    // below. This just confirms the unknown/no-proposal path stays null.
+    const e = engineAt(fixedClock());
+    expect(e.update({ reading: { type: 'idle' } }).substate).toBeNull();
+  });
+
+  it('is null for every ordinary struggle-adjacent signal type EXCEPT struggling itself — regression guard against a future signal accidentally reaching skimming/on_pace with a substate attached', () => {
+    const e = engineAt(fixedClock());
+    const slowReturn = e.update({ reading: { type: 'regression', subtype: 'slow_return', distance: 1 } });
+    expect(slowReturn.label).toBe(STATES.ON_PACE);
+    expect(slowReturn.substate).toBeNull();
+  });
+
+  it("is 'unclear' for an ordinary struggling signal — no dedicated confusion/overload signal exists yet (items 13b/13c/13d)", () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: { type: 'backtrack', backtrackPx: 200 } });
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.UNCLEAR);
+  });
+
+  it("is 'unclear' for every struggling-asserting signal type, not just one", () => {
+    const e = engineAt(fixedClock());
+    const cases = [
+      { type: 'speed_mismatch', subtype: 'too_slow', actualWpm: 90, baselineWpm: 225, readability: { grade: 'standard' } },
+      { type: 'regression', subtype: 'fast_return', distance: 1 },
+      { type: 'blur_return', blurMs: 30000 },
+      { type: 'response', subtype: 'incorrect' },
+    ];
+    for (const reading of cases) {
+      const s = e.update({ reading });
+      expect(s.label).toBe(STATES.STRUGGLING);
+      expect(s.substate).toBe(SUBSTATES.UNCLEAR);
+    }
+  });
+});
+
+describe('self-report (item 13a) — the highest-confidence evidence, overrides any inferred substate immediately', () => {
+  it('confusion sets label struggling and substate confusion', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.CONFUSION } });
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.CONFUSION);
+    expect(s.confidence).toBe(1);
+  });
+
+  it('overload sets label struggling and substate overload', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.OVERLOAD } });
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.OVERLOAD);
+  });
+
+  it('disengaged resolves to the EXISTING top-level DRIFTING state, not a fourth substate value', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.DISENGAGED } });
+    expect(s.label).toBe(STATES.DRIFTING);
+    expect(s.substate).toBeNull();
+  });
+
+  it('an unrecognised self_report subtype asserts nothing, same as any other unregistered signal', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: { type: 'self_report', subtype: 'bogus' } });
+    expect(s.label).toBe(STATES.UNKNOWN);
+  });
+
+  it('immediately overrides an already-inferred unclear substate — the exact override this task requires', () => {
+    const e = engineAt(fixedClock());
+    const inferred = e.update({ reading: { type: 'backtrack', backtrackPx: 200 } });
+    expect(inferred.substate).toBe(SUBSTATES.UNCLEAR);
+
+    const reported = e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.CONFUSION } });
+    expect(reported.substate).toBe(SUBSTATES.CONFUSION);
+  });
+
+  it('wins strongestAssertion() even against a wrong-answer response batched in the SAME update() call — the highest-confidence evidence, full stop', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({
+      reading: [
+        { type: 'response', subtype: 'incorrect' }, // confidence 0.95 — the previous ceiling
+        { type: 'self_report', subtype: SELF_REPORT.OVERLOAD },
+      ],
+    });
+    expect(s.label).toBe(STATES.STRUGGLING);
+    expect(s.substate).toBe(SUBSTATES.OVERLOAD);
+  });
+
+  it('a self-report emits even when label/confidence are unchanged from the current state — substate alone must trigger a real emission, not just label/confidence', () => {
+    const e = engineAt(fixedClock());
+    e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.CONFUSION } }); // struggling/confusion, confidence 1
+    const seen = vi.fn();
+    e.subscribe(seen);
+
+    // Same label (struggling), same confidence (1) — only substate differs.
+    e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.OVERLOAD } });
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(seen.mock.calls[0][0].substate).toBe(SUBSTATES.OVERLOAD);
+  });
+
+  it('getState() reflects the self-reported substate after the fact, same as any other field', () => {
+    const e = engineAt(fixedClock());
+    e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.CONFUSION } });
+    expect(e.getState().substate).toBe(SUBSTATES.CONFUSION);
+    expect(e.getState().label).toBe(STATES.STRUGGLING);
   });
 });

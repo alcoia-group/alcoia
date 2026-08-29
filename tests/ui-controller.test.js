@@ -16,6 +16,7 @@ function build(settings = {}) {
 beforeEach(() => {
   document.body.innerHTML = '';
   delete window.__sra_resize_watcher;
+  delete window.__sra_self_report_trigger;
 });
 
 describe('helpers', () => {
@@ -171,5 +172,42 @@ describe('installResizeWatcher', () => {
     const resizeCalls = spy.mock.calls.filter(([type]) => type === 'resize');
     expect(resizeCalls).toHaveLength(1);
     spy.mockRestore();
+  });
+});
+
+/* Item 13a, affordance 2: a small, persistent, always-clickable trigger —
+ * not conditional on any detected state or open card, unlike everything
+ * else this module renders. */
+describe('ensureSelfReportTrigger', () => {
+  it('creates a single clickable trigger element, wired to the given callback', () => {
+    const onClick = vi.fn();
+    build().ensureSelfReportTrigger(onClick);
+
+    const btn = document.getElementById('sra-self-report-trigger');
+    expect(btn).toBeTruthy();
+    expect(btn.tagName).toBe('BUTTON');
+
+    btn.click();
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('installs once even if called twice (content script injected twice) — the SAME idempotency guard installResizeWatcher already uses', () => {
+    const onClick1 = vi.fn();
+    const onClick2 = vi.fn();
+    build().ensureSelfReportTrigger(onClick1);
+    build().ensureSelfReportTrigger(onClick2);
+
+    expect(document.querySelectorAll('#sra-self-report-trigger')).toHaveLength(1);
+    // The SECOND call's callback never got wired — the first trigger
+    // element (and its original callback) is what actually persists.
+    document.getElementById('sra-self-report-trigger').click();
+    expect(onClick1).toHaveBeenCalledTimes(1);
+    expect(onClick2).not.toHaveBeenCalled();
+  });
+
+  it('is always present regardless of getSettings() — unlike every other element in this file, it is not conditional on detected state', () => {
+    const ui = createUIController({ getSettings: () => ({ highlightEnabled: false, pinDefault: false, autohideEnabled: false }) });
+    ui.ensureSelfReportTrigger(() => {});
+    expect(document.getElementById('sra-self-report-trigger')).toBeTruthy();
   });
 });
