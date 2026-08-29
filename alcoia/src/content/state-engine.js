@@ -115,7 +115,7 @@ const SIGNAL_CONFIDENCE = Object.freeze({
  * summary on selection — asserting on it too would interrupt twice for one
  * action. */
 const CORROBORATING_TYPES = Object.freeze([
-  'selection', 'copy', 'scroll_jerk', 'progression',
+  'selection', 'copy', 'scroll_jerk', 'progression', 'cursor_kinematics',
 ]);
 
 const CORROBORATION = Object.freeze({
@@ -123,14 +123,36 @@ const CORROBORATION = Object.freeze({
   copy:        { states: [STATES.STRUGGLING], bonus: 0.12, evidence: 'You copied a phrase from it' },
   scroll_jerk: { states: [STATES.SKIMMING, STATES.STRUGGLING], bonus: 0.08, evidence: 'Your scrolling became uneven here' },
   progression: { states: [STATES.SKIMMING], bonus: 0.08, evidence: 'You have been moving evenly and quickly through the page' },
+  // "Wandering minds, wandering mice" (Computers in Human Behavior, 2020):
+  // axis-flip frequency and slow response initiation are a mind-wandering
+  // signature, not a confusion or overload one — see cursor-tracking.js's
+  // own header. Struggling only; the CORROBORATION_GUARD below additionally
+  // refuses to fire on a proposal already headed for confusion or overload,
+  // so this signal only ever corroborates the 'unclear' substate.
+  cursor_kinematics: { states: [STATES.STRUGGLING], bonus: 0.08, evidence: 'Your mouse paused and changed direction a lot around here' },
 });
 
 /* Extra conditions before a corroborating signal counts. Without these,
  * "your scrolling became uneven" would be attached to perfectly smooth
- * scrolling, which is worse than saying nothing. */
+ * scrolling, which is worse than saying nothing. Guards receive the
+ * proposal too, not just the signal — cursor_kinematics is the first one
+ * that needs it, to stay out of confusion/overload's way. */
 const CORROBORATION_GUARD = Object.freeze({
   scroll_jerk: (sig) => sig.subtype === 'hunting',
   progression: (sig) => sig.subtype === 'skimming',
+  cursor_kinematics: (sig, proposal) => {
+    if (sig.subtype !== 'mind_wandering') return false;
+    // Self-report ground truth (confusion/overload) — never touch it.
+    if (proposal.substate) return false;
+    // A substateHint (item 13c's propositional density, today) already
+    // clearing the bar for confusion/overload — mind-wandering kinematics
+    // are a disengagement signature, not evidence for either, so this
+    // signal must not attach itself to that proposal at all.
+    const hint = proposal.substateHint;
+    if (hint && (hint.label === SUBSTATES.CONFUSION || hint.label === SUBSTATES.OVERLOAD)
+      && hint.confidence >= SUBSTATE_CONFIDENCE_THRESHOLD) return false;
+    return true;
+  },
 });
 
 function describeTooSlow(sig) {
@@ -427,7 +449,7 @@ export function createReadingStateEngine(config = {}) {
         const rule = CORROBORATION[sig.type];
         if (!rule || !rule.states.includes(proposal.label)) continue;
         const guard = CORROBORATION_GUARD[sig.type];
-        if (guard && !guard(sig)) continue;
+        if (guard && !guard(sig, proposal)) continue;
         proposal.confidence = clamp01(proposal.confidence + rule.bonus);
         proposal.evidence   = [...proposal.evidence, rule.evidence];
       }
