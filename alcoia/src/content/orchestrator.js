@@ -45,9 +45,14 @@ export async function createOrchestrator(deps) {
   const policyModule = await loadModule('src/content/intervention-policy.js');
   const coverageModule = await loadModule('src/content/coverage-gate.js');
   const offerModule = await loadModule('src/content/quiz-offer.js');
+  const pretestModule = await loadModule('src/content/pretest.js');
   const stateEngine  = engineModule.createReadingStateEngine();
   const interventionPolicy = policyModule.createInterventionPolicy();
   const coverageGate = coverageModule.createCoverageGate();
+  // Predict-then-reveal occlusion (pretesting effect). Standalone: never
+  // touches state-engine.js, only interventionPolicy's shared budget — see
+  // pretest.js's own header.
+  const pretest = pretestModule.createPretestOcclusion({ interventionPolicy });
   const resolveDocumentKey = documentKeyOverride || coverageModule.documentKey;
   // Reader-initiated — never touches interventionPolicy, spends no budget.
   const quizOffer = offerModule.createQuizOfferChecker({
@@ -289,6 +294,11 @@ export async function createOrchestrator(deps) {
    * scrolls — which loses the opening of every article. */
   function primeParagraph() {
     try { paragraphTracker.rescan(); syncParagraph(); } catch (e) {}
+    // Once per page: scans for a discourse-marker trigger not yet scrolled
+    // into view. Not wired to the idle tick or a mutation observer — content
+    // added later (infinite scroll) is out of scope for this pass, see
+    // pretest.js's own header.
+    if (s().comprehensionCheckEnabled) { try { pretest.scan(); } catch (e) {} }
   }
 
   /* Item 27: a genuine SPA route change (new pathname, per
@@ -320,6 +330,7 @@ export async function createOrchestrator(deps) {
     try { interactionSignals.reset(); } catch (e) {}
     try { cursorTracker.reset(); } catch (e) {}
     try { scrollDynamics.reset(); } catch (e) {}
+    try { pretest.reset(); } catch (e) {}
     try { host.setCurrentParagraph(null); } catch (e) {}
     if (s().debugEnabled) { try { host.log('SPA route change — paragraph tracking reset'); } catch (e) {} }
     primeParagraph();
@@ -350,6 +361,7 @@ export async function createOrchestrator(deps) {
     // Exposed for the popup's manual paths and for tests.
     stateEngine,
     interventionPolicy,
+    pretest,
     paragraphTracker,
     // "Read enough to test" — the popup's quiz button reads this directly.
     coverageGate,
