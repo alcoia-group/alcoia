@@ -204,6 +204,47 @@ export function createInterventionPolicy(config = {}) {
     };
   }
 
+  /* A content-triggered interruption — not derived from a detected reading
+   * state, so it never touches STATE_ACTIONS, confidence, the skimming-grade
+   * check or dismissal backoff, none of which describe "the page itself is
+   * about to reveal something" (see pretest.js). It still spends from
+   * exactly the same budget as every state-driven interruption — session
+   * cap, the three-minute gap, never twice on the same paragraph — sharing
+   * `count`/`lastAt`/`seenParagraphs` with evaluate() rather than keeping a
+   * second pool: CLAUDE.md's "reader-initiated actions spend no budget" is
+   * about actions the reader took, and a page-content-triggered prompt they
+   * did not ask for is not that. `record()` below is unchanged and already
+   * state-agnostic — it only reads `decision.allow`/`.paragraphKey` — so it
+   * is reused as-is for this path too. */
+  function evaluateContentTrigger(ctx = {}) {
+    const deny = (reason) =>
+      ({ allow: false, action: 'pretest', reason, evidence: ctx.evidence || [], paragraphKey: null });
+
+    const cap = sessionCap();
+    if (count >= cap) {
+      return deny(`session budget spent (${count}/${cap}, ceiling ${budget.absoluteCeiling})`);
+    }
+
+    const since = now() - lastAt;
+    if (lastAt !== 0 && since < budget.minGapMs) {
+      return deny(`only ${Math.round(since / 1000)}s since the last interruption`);
+    }
+
+    const key = ctx.paragraphKey || null;
+    if (key && seenParagraphs.has(key)) {
+      return deny('already interrupted on this paragraph');
+    }
+
+    return {
+      allow: true,
+      action: 'pretest',
+      reason: 'pretest trigger matched',
+      evidence: ctx.evidence || [],
+      paragraphKey: key,
+      wasExplorationSample: false,
+    };
+  }
+
   /* Call only once an interruption is actually on screen. Keeping this
    * separate from evaluate() means a decision that gets dropped downstream
    * doesn't silently consume the budget. */
@@ -247,6 +288,7 @@ export function createInterventionPolicy(config = {}) {
 
   return {
     evaluate,
+    evaluateContentTrigger,
     record,
     recordCoverage,
     recordDismissal,
