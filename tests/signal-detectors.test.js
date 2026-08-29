@@ -194,19 +194,24 @@ describe('paragraph-tracker: injected block source (item 30b)', () => {
     t.rescan();
     expect(blocks.map((b) => t.getIndex(b.el))).toEqual([0, 1, 2]);
 
-    // scroll-regression.js only ever reads transition.left.index / .entered.index
-    // as plain integers — it has no DOM dependency — so feeding it transitions
-    // produced from injected blocks exercises the real integration, not just
-    // the tracker in isolation.
+    // scroll-regression.js only ever reads transition.left.index/.entered.index
+    // and left.dwellMs as plain data — it has no DOM dependency — so feeding
+    // it transitions produced from injected blocks exercises the real
+    // integration, not just the tracker in isolation. Genuine re-read
+    // classification needs a baseline dwell and a subsequent resolving
+    // transition (see scroll-regression.js's own header), so this now runs
+    // the full sequence rather than a single forward-then-back pair.
     const reg = createScrollRegressionDetector({ now: fixedClock().now, minDistance: 1, cooldown: 0 });
     t.update();                                  // enters index 1 (line at 320)
     reg.update(t.signal());
-    // Force a jump forward past index 2, establishing maxIndexReached, then
-    // move back to index 1 to trigger a real regression off injected indices.
-    const forward = { type: 'paragraph_change', left: { index: 1 }, entered: { index: 2 }, at: 2000 };
-    reg.update(forward);
-    const back = { type: 'paragraph_change', left: { index: 2 }, entered: { index: 1 }, at: 3000 };
-    const regression = reg.update(back);
+    const toTwo   = { type: 'paragraph_change', left: { index: 1, dwellMs: 8000 }, entered: { index: 2 }, at: 2000 };
+    reg.update(toTwo);
+    const toThree = { type: 'paragraph_change', left: { index: 2, dwellMs: 3000 }, entered: { index: 3 }, at: 3000 };
+    reg.update(toThree);
+    const jumpBack = { type: 'paragraph_change', left: { index: 3, dwellMs: 2000 }, entered: { index: 1 }, at: 4000 };
+    expect(reg.update(jumpBack)).toBeNull();     // distance 2, watched — not yet counted
+    const leaveOne = { type: 'paragraph_change', left: { index: 1, dwellMs: 6000 }, entered: { index: 4 }, at: 5000 };
+    const regression = reg.update(leaveOne);      // dwelled 6s back, comparable to the original 8s
     expect(regression.type).toBe('regression');
     expect(regression.toIndex).toBe(1);
   });
@@ -384,9 +389,9 @@ describe('media dwell attribution end to end (paragraph-tracker + comprehension-
 });
 
 describe('scroll-regression', () => {
-  const change = (fromIdx, toIdx, at) => ({
+  const change = (fromIdx, toIdx, at, dwellMs) => ({
     type: 'paragraph_change',
-    left: fromIdx == null ? null : { index: fromIdx },
+    left: fromIdx == null ? null : { index: fromIdx, dwellMs },
     entered: toIdx == null ? null : { index: toIdx, el: null },
     at,
   });
@@ -399,19 +404,81 @@ describe('scroll-regression', () => {
     expect(d.update(change(1, 2, clock.now()))).toBeNull();
   });
 
-  it('flags a return to an earlier paragraph', () => {
+  /* A jump back is watched, not counted, the moment it happens — genuine
+   * vs. correction can only be told apart once the reader leaves the
+   * re-visited paragraph again and its dwell there is actually known. */
+  it('flags a genuine re-read: a large backward jump followed by substantial dwell once back', () => {
     const clock = fixedClock();
     const d = createScrollRegressionDetector({ now: clock.now });
     d.update(change(null, 0, clock.now()));
-    d.update(change(0, 1, clock.now()));
+    clock.advance(8000);
+    d.update(change(0, 1, clock.now(), 8000));            // leave 0 (original dwell 8s) -> enter 1
+    clock.advance(3000);
+    d.update(change(1, 2, clock.now(), 3000));             // leave 1 -> enter 2 (maxIndexReached = 2)
     clock.advance(5000);
-    d.update(change(1, 2, clock.now()));
-    clock.advance(5000);
+    const jumpBack = d.update(change(2, 0, clock.now(), 5000));   // leave 2 -> enter 0: distance 2, watched
+    expect(jumpBack).toBeNull();
 
-    const sig = d.update(change(2, 0, clock.now()));
+    clock.advance(7000);                                    // stays at 0 almost as long as the first visit
+    const sig = d.update(change(0, 3, clock.now(), 7000));  // leave 0 again -> resolves the jump
     expect(sig.type).toBe('regression');
     expect(sig.toIndex).toBe(0);
     expect(sig.distance).toBe(2);
+    expect(sig.returnDwellMs).toBe(7000);
+    expect(sig.originalDwellMs).toBe(8000);
+    expect(sig.sameIndexRereadCount).toBe(1);
+  });
+
+  it('a small backward glance never counts as a genuine re-read, however long the dwell once back', () => {
+    const clock = fixedClock();
+    const d = createScrollRegressionDetector({ now: clock.now });
+    d.update(change(null, 0, clock.now()));
+    clock.advance(8000);
+    d.update(change(0, 1, clock.now(), 8000));              // original dwell on 0: 8s
+    clock.advance(5000);
+    const jumpBack = d.update(change(1, 0, clock.now(), 5000));   // distance 1 only
+    expect(jumpBack).toBeNull();
+    clock.advance(8000);                                     // a long dwell back — still not enough
+    const sig = d.update(change(0, 2, clock.now(), 8000));
+    expect(sig).toBeNull();
+    expect(d.signal()).toBeNull();
+  });
+
+  it('a large jump followed by an immediate continue is a quick correction, not a re-read', () => {
+    const clock = fixedClock();
+    const d = createScrollRegressionDetector({ now: clock.now });
+    d.update(change(null, 0, clock.now()));
+    clock.advance(8000);
+    d.update(change(0, 1, clock.now(), 8000));
+    clock.advance(3000);
+    d.update(change(1, 2, clock.now(), 3000));               // maxIndexReached = 2
+    clock.advance(5000);
+    const jumpBack = d.update(change(2, 0, clock.now(), 5000));   // distance 2, watched
+    expect(jumpBack).toBeNull();
+    clock.advance(400);                                       // barely there before moving on
+    const sig = d.update(change(0, 3, clock.now(), 400));
+    expect(sig).toBeNull();
+    expect(d.signal()).toBeNull();
+  });
+
+  it('never asserts a genuine re-read against a paragraph with no recorded original dwell — ambiguous, not forced into a category', () => {
+    const clock = fixedClock();
+    const d = createScrollRegressionDetector({ now: clock.now });
+    d.update(change(null, 0, clock.now()));
+    clock.advance(1000);
+    d.update(change(0, 1, clock.now(), 1000));                 // dwell on 0 recorded
+    clock.advance(500);
+    d.update(change(1, 5, clock.now(), 500));                   // jumps straight to 5 — paragraph 2 never visited at all
+    clock.advance(3000);
+    // distance 5 -> 2 is 3, well past largeDistance — but there is no
+    // baseline dwell on 2 to judge a return against, so even a long dwell
+    // back must not be forced into "genuine" on distance alone.
+    const jumpBack = d.update(change(5, 2, clock.now(), 3000));
+    expect(jumpBack).toBeNull();
+    clock.advance(9000);                                         // a very long dwell back
+    const sig = d.update(change(2, 6, clock.now(), 9000));
+    expect(sig).toBeNull();
+    expect(d.signal()).toBeNull();
   });
 
   it('separates a fast return from a slow one', () => {
@@ -419,31 +486,86 @@ describe('scroll-regression', () => {
       const clock = fixedClock();
       const d = createScrollRegressionDetector({ now: clock.now });
       d.update(change(null, 0, clock.now()));
-      d.update(change(0, 1, clock.now()));
-      clock.advance(FAST_RETURN_MS - 500);
-      return d.update(change(1, 0, clock.now()));
+      clock.advance(500);
+      d.update(change(0, 1, clock.now(), 500));               // original dwell on 0: 0.5s
+      clock.advance(500);
+      d.update(change(1, 2, clock.now(), 500));                // maxIndexReached = 2
+      clock.advance(FAST_RETURN_MS - 1000);                     // total latency since leaving 0 stays under FAST_RETURN_MS
+      const jumpBack = d.update(change(2, 0, clock.now(), 500));
+      expect(jumpBack).toBeNull();
+      clock.advance(700);                                       // genuinely re-reads it (>= 0.6 * 500)
+      return d.update(change(0, 3, clock.now(), 700));
     })();
     expect(fast.subtype).toBe('fast_return');
 
     const slow = (() => {
+      // Slow returns already resolve to on_pace downstream and were never
+      // struggle evidence — exempt from the genuine/correction distinction,
+      // so this is unchanged: it still emits immediately.
       const clock = fixedClock();
       const d = createScrollRegressionDetector({ now: clock.now });
       d.update(change(null, 0, clock.now()));
-      d.update(change(0, 1, clock.now()));
+      d.update(change(0, 1, clock.now(), 8000));
       clock.advance(SLOW_RETURN_MS + 2000);
-      return d.update(change(1, 0, clock.now()));
+      return d.update(change(1, 0, clock.now(), 8000));
     })();
     expect(slow.subtype).toBe('slow_return');
   });
 
   it('holds a cooldown between regressions', () => {
     const clock = fixedClock();
-    const d = createScrollRegressionDetector({ now: clock.now });
+    const d = createScrollRegressionDetector({ now: clock.now, cooldown: 20000 });
+
     d.update(change(null, 0, clock.now()));
-    d.update(change(0, 3, clock.now()));
-    expect(d.update(change(3, 1, clock.now()))).toBeTruthy();
+    clock.advance(5000);
+    d.update(change(0, 1, clock.now(), 5000));                 // original dwell on 0: 5s
+    clock.advance(3000);
+    d.update(change(1, 2, clock.now(), 3000));                  // maxIndexReached = 2
+    clock.advance(4000);
+    d.update(change(2, 0, clock.now(), 4000));                   // distance 2, watched
+    clock.advance(6000);
+    const first = d.update(change(0, 3, clock.now(), 6000));     // genuine: 6000 >= 0.6 * 5000
+    expect(first.type).toBe('regression');
+
+    // A second attempt well inside the cooldown window never even gets
+    // watched, so there is nothing left to resolve later either.
     clock.advance(1000);
-    expect(d.update(change(1, 0, clock.now()))).toBeNull();
+    d.update(change(3, 4, clock.now(), 1000));                   // maxIndexReached = 4
+    clock.advance(1000);
+    const secondJump = d.update(change(4, 0, clock.now(), 1000));
+    expect(secondJump).toBeNull();
+    clock.advance(6000);
+    const second = d.update(change(0, 5, clock.now(), 6000));
+    expect(second).toBeNull();
+  });
+
+  it('repeated genuine re-reads of the SAME paragraph count up — evidence state-engine.js reads as confusion', () => {
+    const clock = fixedClock();
+    const d = createScrollRegressionDetector({ now: clock.now, cooldown: 0 });
+
+    d.update(change(null, 0, clock.now()));
+    clock.advance(6000);
+    d.update(change(0, 1, clock.now(), 6000));                  // original dwell on 0: 6s
+
+    // Each round must pick up from wherever the previous one actually left
+    // off, or `left.index` would claim a position the reader was never at.
+    let cursor = 1;
+    function genuineRereadOfZero() {
+      const mid = cursor + 1;
+      clock.advance(2000);
+      d.update(change(cursor, mid, clock.now(), 2000));           // maxIndexReached advances past 0 again
+      clock.advance(1000);
+      d.update(change(mid, 0, clock.now(), 1000));                 // distance >= 2, watched
+      clock.advance(4000);                                          // genuine dwell (>= 0.6 * 6000)
+      const sig = d.update(change(0, mid + 1, clock.now(), 4000));
+      cursor = mid + 1;
+      return sig;
+    }
+
+    const first = genuineRereadOfZero();
+    expect(first.sameIndexRereadCount).toBe(1);
+    const second = genuineRereadOfZero();
+    expect(second.sameIndexRereadCount).toBe(2);
   });
 });
 
