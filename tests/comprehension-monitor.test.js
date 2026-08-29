@@ -20,13 +20,21 @@ const EASY = (n) => {
   return s.repeat(Math.ceil(n / 10)).trim();
 };
 
-// Longer sentences, a subordinator, real punctuation: scores as 'difficult'
-// (40-59), not 'very_difficult' — the too_slow path explicitly excludes
-// very_difficult text, so a 'difficult' fixture is what exercises it.
+// Longer sentences, several subordinators, real punctuation: scores as
+// 'difficult' (40-59), not 'very_difficult' — the too_slow path explicitly
+// excludes very_difficult text, so a 'difficult' fixture is what exercises
+// it. Item 13c: strengthened from an earlier, lighter version — that one
+// used almost entirely common words (committee, proposal, members,
+// amendment...), so once lexicalRarity()/propositionalDensity() started
+// contributing real signal alongside FK/syntacticLoad(), it scored right
+// at the MIN_DIFFICULTY boundary rather than robustly below it. More
+// subordination and clause nesting gives this a real margin under the new
+// four-input blend, not just the syllable-heavy FK score it was mostly
+// riding on before.
 const DIFFICULT = (n) => {
-  const s = 'The committee reviewed the proposal because several members believed it needed further amendment. '
-    + 'Although the initial draft was carefully prepared, considerable disagreement remained among the delegates. ';
-  return s.repeat(Math.ceil(n / 24)).trim();
+  const s = 'The committee reviewed the proposal because several members believed it needed further amendment, although the initial draft, which had been carefully prepared, remained contentious. '
+    + 'Whereas the delegates whom the chairperson consulted had expressed considerable disagreement, insofar as the underlying assumptions were themselves subject to dispute, no resolution was reached. ';
+  return s.repeat(Math.ceil(n / 40)).trim();
 };
 
 function el(text) { return { innerText: text, textContent: text }; }

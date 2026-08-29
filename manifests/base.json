@@ -46,6 +46,7 @@
         "src/libs/fonts/*.woff2",
         "src/libs/jszip.min.js",
         "src/libs/pdfjs/*.js",
+        "src/libs/wordfreq/*.js",
         "src/pdf-viewer/viewer.html",
         "src/pptx-viewer/viewer.html"
       ],
