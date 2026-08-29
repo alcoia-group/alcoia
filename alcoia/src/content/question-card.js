@@ -67,10 +67,14 @@ export function createQuestionCard(deps = {}) {
     onAnswered,         // (record) => void — hands the signal to the engine
     onDismissed,        // (record) => void
     onSnooze,           // (durationMs, label) => void — item 18
+    onSelfReport,       // (subtype) => void — item 13a, affordance 3 (active surfacing)
   } = deps;
 
   /* question: { q, options[4], answerIndex, explanation, span, level?, span_role? }
-   * context: { evidence[], anchorRect, paragraphKey, passage?, wasExplorationSample }
+   * context: { evidence[], anchorRect, paragraphKey, passage?, wasExplorationSample,
+   *            showSelfReport? } — item 13a: showSelfReport renders the
+   *            self-report options alongside this question, additive to
+   *            the answer flow, never a replacement for it.
    * Returns true only if the card actually reached the screen.
    *
    * Malformed model output degrades to silence here, not to a broken card.
@@ -124,6 +128,22 @@ export function createQuestionCard(deps = {}) {
           <div class="sra-q-answer-count"><span class="sra-q-answer-count-num">0</span>/${MAX_ANSWER_CHARS}</div>
         </div>`;
 
+    // Item 13a, affordance 3 (active surfacing): additive, alongside the
+    // question — never instead of it (see host.js's own handleAsk comment
+    // for why). Independent of answering: picking one does not commit,
+    // dismiss, or otherwise affect the question above it — they are two
+    // separate signals about two separate things.
+    const selfReport = context.showSelfReport && onSelfReport
+      ? `<div class="sra-self-report-inline">
+          <div class="sra-self-report-prompt">Not sure how to describe this?</div>
+          <div class="sra-self-report-options">
+            <button type="button" class="sra-self-report-btn" data-self-report="overload">Too much at once</button>
+            <button type="button" class="sra-self-report-btn" data-self-report="confusion">I'm stuck / don't get it</button>
+            <button type="button" class="sra-self-report-btn" data-self-report="disengaged">Not interested / lost focus</button>
+          </div>
+        </div>`
+      : '';
+
     root.innerHTML = `
       <div class="sra-controls">
         <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
@@ -133,12 +153,23 @@ export function createQuestionCard(deps = {}) {
         ${evidence}
         <div class="sra-q-text">${esc(question.q)}</div>
         ${bodyInner}
+        ${selfReport}
       </div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
         <button class="sra-btn sra-btn-secondary sra-q-skip">Skip this</button>
         ${onSnooze ? '<button type="button" class="sra-q-snooze-toggle">Snooze reminders</button>' : ''}
       </div>`;
+
+    if (selfReport) {
+      for (const btn of root.querySelectorAll('[data-self-report]')) {
+        btn.onclick = () => {
+          onSelfReport(btn.dataset.selfReport);
+          for (const b of root.querySelectorAll('[data-self-report]')) b.disabled = true;
+          btn.textContent = 'Thanks, noted.';
+        };
+      }
+    }
 
     let committed = false;
     let selected = null; // tentative pick — recognition only, not yet graded

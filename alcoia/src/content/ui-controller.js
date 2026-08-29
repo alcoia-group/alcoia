@@ -355,6 +355,27 @@ export function createUIController(deps = {}) {
     }, ms);
   }
 
+  /* Item 13a, affordance 2: a small, persistent, always-clickable trigger —
+   * unlike every other element this module renders, it is not conditional
+   * on any detected state or open card (that's affordance 3, inside
+   * question-card.js itself). host.js calls this once, during its own
+   * construction, and owns what a click actually does (showSelfReportCard
+   * — the same standalone card affordance 1's Alt+C shortcut opens too).
+   * Idempotent for the same reason installResizeWatcher() below is: the
+   * content script can be injected into the same page more than once. */
+  function ensureSelfReportTrigger(onClick) {
+    if (window.__sra_self_report_trigger) return;
+    window.__sra_self_report_trigger = true;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'sra-self-report-trigger';
+    btn.title = "How's this going? (Alt+C)";
+    btn.setAttribute('aria-label', 'Report how your reading is going');
+    btn.textContent = '?';
+    btn.addEventListener('click', () => onClick());
+    document.body.appendChild(btn);
+  }
+
   /* Re-clamp visible popups when the viewport changes, so a resize cannot
    * strand a card off-screen. Guarded against double installation because the
    * content script can be injected more than once into the same page. */
@@ -387,6 +408,7 @@ export function createUIController(deps = {}) {
     reservePopup, showPopup, resetAutohide,
     renderPopup,
     showNudge, showSimulateToast, showStatusToast,
+    ensureSelfReportTrigger,
   };
 }
 

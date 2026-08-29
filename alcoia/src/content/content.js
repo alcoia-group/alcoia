@@ -207,6 +207,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     sessionRecall, responseSignals, sessionTracker, focusRuler,
     comprehensionMonitor, setPdfHandler, setPptxHandler, getCogState,
     getPrevParagraphText, setOrchestrator,
+    showSelfReportCard, // item 13a — affordance 1 (Alt+C, below)
   } = hostApi;
   const hostCallbacks = hostApi.host;
 
@@ -432,6 +433,15 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       if (e.key === 'm' || e.key === 'M') {
         e.preventDefault();
         readingMap.toggle();
+        return;
+      }
+
+      // Alt+C: self-report how reading is going (item 13a, affordance 1) —
+      // always reader-initiated, spends no interruption budget. Opens the
+      // same standalone card the persistent trigger (affordance 2) does.
+      if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        showSelfReportCard();
         return;
       }
     });
