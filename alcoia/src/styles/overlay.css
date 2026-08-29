@@ -759,13 +759,75 @@
   .sra-word-bubble { display: none !important; }
 }
 
+/* ── Predict-then-reveal occlusion (pretesting effect) ───────────────────────
+ * Inline in the article's own text, not a floating card — see pretest.js's
+ * own header. The real sentence stays in the DOM under the blur the whole
+ * time; revealing is a class swap, never a re-fetch or a rebuild. Sage
+ * because this is a moment the system itself produced, same as the evidence
+ * rule and a correct answer elsewhere in this file. */
+.sra-pretest-hidden {
+  filter: blur(6px);
+  user-select: none;
+  border-radius: 3px;
+  background: var(--alc-sage-sf);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.sra-pretest-revealed {
+  filter: none;
+  background: transparent;
+  transition: filter 0.25s ease;
+}
+.sra-pretest-prompt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  font-family: var(--alc-ui);
+  font-size: 0.85em;
+  vertical-align: middle;
+}
+.sra-pretest-label { color: var(--alc-sage-2); }
+.sra-pretest-guess {
+  font-family: var(--alc-ui);
+  font-size: inherit;
+  width: 12em;
+  padding: 2px 6px;
+  border: 1px solid var(--alc-border-2);
+  border-radius: 6px;
+  background: var(--alc-surface);
+  color: var(--alc-text);
+}
+.sra-pretest-reveal-btn {
+  font-family: var(--alc-ui);
+  border: 1px solid var(--alc-border-2);
+  border-radius: 6px;
+  background: var(--alc-sage-sf);
+  color: var(--alc-sage-2);
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.sra-pretest-reveal-btn:hover { background: var(--alc-sage); color: #FFFFFF; }
+.sra-pretest-reveal-btn:focus-visible { outline: 2px solid var(--alc-accent); outline-offset: 2px; }
+.sra-pretest-feedback {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--alc-ui);
+  font-size: 0.85em;
+  color: var(--alc-muted);
+}
+.sra-pretest-guess-echo,
+.sra-pretest-actual-echo { display: block; }
+.sra-pretest-actual-echo { color: var(--alc-sage-2); }
+
 /* ── Reduced motion ──────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .sra-popup,
   .sra-word-bubble,
   .sra-cal-overlay,
   .sra-cal-target,
-  .sra-cal-fill { transition-duration: 1ms !important; }
+  .sra-cal-fill,
+  .sra-pretest-revealed { transition-duration: 1ms !important; }
   .sra-nudge-highlight,
   .sra-nudge { animation: none !important; }
 }
