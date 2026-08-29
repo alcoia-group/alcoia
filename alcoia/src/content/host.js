@@ -232,6 +232,101 @@ export async function createHost(deps) {
   let orchestratorRef = null;
   function setOrchestrator(o) { orchestratorRef = o; }
 
+  // ── Self-report (item 13a) ──────────────────────────────────────────────
+  // The "alcoia Evidence Base" research artifact's confusion/overload/
+  // boredom section: confusion and overload demand OPPOSITE responses
+  // (preserve and work through vs. reduce load) but "behavioral separation
+  // is hard... the most reliable disambiguator available to a browser tool
+  // is a lightweight probe... a one-tap self-report" — the loop it calls
+  // "not optional". This is that probe.
+  //
+  // Always reader-initiated, from all three affordances (content.js's
+  // Alt+C, the persistent trigger below, and active surfacing inside the
+  // question card itself) — never called from anywhere the interruption
+  // budget governs, so it spends none, the same "reader-initiated actions
+  // spend no budget" principle intervention-policy.js's header already
+  // states for the quiz/manual paths, extended here to a genuinely new
+  // trigger rather than reusing one of those existing ones.
+  const stateEngineModule = await loadModule('src/content/state-engine.js');
+  const { SELF_REPORT } = stateEngineModule;
+
+  function reportSelfState(subtype) {
+    // Fed through the SAME pumpSignals() chokepoint every other reading
+    // signal already uses (host.js's own onAnswered callback above does
+    // the same for response-signals.js's records) — not a second pathway
+    // into the engine. state-engine.js's own SELF_REPORT_CONFIDENCE (1.0,
+    // above even a wrong-answer response) is what makes this win
+    // strongestAssertion() against anything else batched in the same call,
+    // so the resulting state/substate change is reflected on the very next
+    // emission — immediate in exactly the sense this codebase's engine
+    // already gives every other signal, not a new "sticky override"
+    // mechanism layered on top of it.
+    try { orchestratorRef?.pumpSignals({ type: 'self_report', subtype }); } catch (e) {}
+  }
+
+  const SELF_REPORT_FINGERPRINT = 'sra-self-report';
+  /* Affordances 1 (Alt+C, content.js) and 2 (the persistent trigger,
+   * ui-controller.js) both open this same standalone card — it exists
+   * independent of any active intervention, since a reader can decide to
+   * self-report at any moment, not only while a question is on screen.
+   * Affordance 3 (active surfacing) is different: it augments the
+   * QUESTION card itself, wired below via questionCard's own onSelfReport
+   * option, rather than replacing it with this card — see handleAsk's own
+   * comment for why replacing the primary intervention outright would be a
+   * much bigger behavioural change than this item's own scope. */
+  function showSelfReportCard() {
+    const root = reservePopup(SELF_REPORT_FINGERPRINT);
+    if (!root) return false;
+
+    root.innerHTML = `
+      <div class="sra-controls">
+        <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
+      </div>
+      <div class="sra-popup-body">
+        <div class="sra-state-badge sra-self-report-badge">How's this going?</div>
+        <div class="sra-self-report-options">
+          <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.OVERLOAD}">Too much at once</button>
+          <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.CONFUSION}">I'm stuck / don't get it</button>
+          <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.DISENGAGED}">Not interested / lost focus</button>
+        </div>
+      </div>`;
+
+    root.querySelector('.sra-close-btn').onclick = () => closePopup(root, SELF_REPORT_FINGERPRINT);
+    for (const btn of root.querySelectorAll('[data-self-report]')) {
+      btn.onclick = () => {
+        reportSelfState(btn.dataset.selfReport);
+        for (const b of root.querySelectorAll('[data-self-report]')) b.disabled = true;
+        btn.textContent = 'Thanks, noted.';
+        // Bug found verifying this in real Chromium (tests/browser/smoke.mjs):
+        // stored on root._hideT, the SAME property closePopup() already
+        // clearTimeout()s on every close path — Escape, the ✕ button, or
+        // this auto-close itself. Without that, an early close (Escape,
+        // right after this click) left this bare setTimeout alive; every
+        // instance of this card shares SELF_REPORT_FINGERPRINT, so when it
+        // later fired it closed whatever card currently held that
+        // fingerprint — including a genuinely different, still-open one a
+        // reader had opened since — deleting its openPopups entry without
+        // actually removing it from the DOM, orphaning it: visible,
+        // unpinned, and no longer reachable by hidePopup()/Escape at all.
+        root._hideT = setTimeout(() => closePopup(root, SELF_REPORT_FINGERPRINT), 900);
+      };
+    }
+
+    showPopup(root);
+    return true;
+  }
+
+  // Affordance 2: a persistent trigger, always reachable regardless of
+  // whether any intervention is currently on screen — in contrast to
+  // affordance 3, which only ever appears alongside an actual question.
+  // ui-controller.js owns all rendered chrome (CLAUDE.md: "orchestrator.js
+  // decides, ui-controller.js renders"); this just asks it to ensure the
+  // trigger exists and wires what a click does. Optional-chained since a
+  // ui built with a stub (e.g. some existing tests' fakeUI()) may not
+  // implement it — the mechanism this task builds must not throw in a
+  // context that predates it.
+  try { ui.ensureSelfReportTrigger?.(showSelfReportCard); } catch (e) {}
+
   // ── Question layer ─────────────────────────────────────────────────────
   const responseModule = await loadModule('src/content/signals/response-signals.js');
   const cardModule     = await loadModule('src/content/question-card.js');
@@ -258,6 +353,11 @@ export async function createHost(deps) {
     ui,
     esc,
     responseSignals,
+    // Item 13a, affordance 3 (active surfacing) — see handleAsk's own
+    // comment for when context.showSelfReport is set. Reuses the exact
+    // same reportSelfState() affordances 1/2 already call — one signal
+    // pathway, three ways to reach it.
+    onSelfReport: reportSelfState,
     fetchExplanation: (spanText) => fetchSummary(spanText, 'explain_more'),
     fetchGrading, // item 43 — free_recall/scenario only; question-card.js itself never calls this for recognition or adversarial
     onAnswered: (record) => {
@@ -463,7 +563,19 @@ export async function createHost(deps) {
    * orchestrator.js at the moment it decided to intervene — see that
    * file's own comment. Threaded through to questionCard.show()'s context
    * purely so an eventual onAnswered record can carry it; nothing in this
-   * function's own question-generation logic reads it. */
+   * function's own question-generation logic reads it.
+   *
+   * Item 13a, affordance 3 (active surfacing): when state.substate is
+   * 'unclear' — today, always, since no dedicated confusion/overload
+   * signal exists yet (items 13b/13c/13d build those) — the question card
+   * ALSO shows the three self-report options alongside the real question,
+   * rather than replacing it. Deliberately additive, not a swap: the
+   * question is still this system's primary intervention (CLAUDE.md
+   * decision #1), and the self-report options are what "visibly ask rather
+   * than infer" actually means here — an honest admission next to the
+   * question, not instead of it. Costs no extra budget: it rides the SAME
+   * 'ask' interruption intervention-policy.js already gated before this
+   * function was ever called. */
   async function handleAsk(decision, state, target, paragraphIndex) {
     const el = target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
     const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
@@ -493,6 +605,7 @@ export async function createHost(deps) {
       paragraphKey,
       paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
       wasExplorationSample: decision.wasExplorationSample === true,
+      showSelfReport: state.substate === 'unclear',
     });
   }
 
@@ -578,6 +691,12 @@ export async function createHost(deps) {
     questionCard,
     runQuiz,
     runSessionRecall,
+    // Item 13a — affordances 1 (content.js's Alt+C) and 2 (a settings/
+    // popup-triggered equivalent) both call showSelfReportCard() directly;
+    // reportSelfState() is exposed separately in case a caller ever needs
+    // to submit one without the standalone card (none does today).
+    showSelfReportCard,
+    reportSelfState,
     startSnooze,
     snoozeControl,
     // Popup-triggered snooze (msg.action === 'snoozeReminders') sends only an

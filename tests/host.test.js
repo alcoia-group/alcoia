@@ -826,3 +826,171 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
+
+/* Item 13a — the self-report mechanism's three affordances, from host.js's
+ * own side of the wiring. Each is verified independently, per this task's
+ * own Tests requirement. */
+describe('self-report (item 13a)', () => {
+  it('affordance 2: host.js asks ui-controller.js to install the persistent trigger, wired to showSelfReportCard', async () => {
+    const ui = createUIController({});
+    const spy = vi.spyOn(ui, 'ensureSelfReportTrigger');
+    const { showSelfReportCard } = await createHost(baseDeps({ ui }));
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toBe(showSelfReportCard);
+  });
+
+  it('showSelfReportCard() (affordances 1 and 2) renders a standalone card with exactly the three self-report options', async () => {
+    // Reset first — a stale, not-yet-removed card from an earlier test in
+    // this shared jsdom document (closePopup()'s own removal is a 250ms
+    // setTimeout, so a just-closed card can still be in the DOM) must
+    // never be what querySelectorAll below actually finds.
+    document.body.innerHTML = '';
+    const { showSelfReportCard } = await createHost(baseDeps());
+    const shown = showSelfReportCard();
+    expect(shown).toBe(true);
+
+    const opts = document.querySelectorAll('[data-self-report]');
+    expect(opts).toHaveLength(3);
+    const subtypes = [...opts].map((b) => b.dataset.selfReport).sort();
+    expect(subtypes).toEqual(['confusion', 'disengaged', 'overload']);
+  });
+
+  it('clicking an option in the standalone card feeds a real self_report signal into the engine via pumpSignals', async () => {
+    document.body.innerHTML = ''; // see the previous test's own comment
+    const { showSelfReportCard, setOrchestrator } = await createHost(baseDeps());
+    const pumpSignals = vi.fn();
+    setOrchestrator({ pumpSignals });
+
+    showSelfReportCard();
+    document.querySelector('[data-self-report="confusion"]').click();
+
+    expect(pumpSignals).toHaveBeenCalledTimes(1);
+    expect(pumpSignals).toHaveBeenCalledWith({ type: 'self_report', subtype: 'confusion' });
+  });
+
+  it('reportSelfState() (the underlying function both affordances call) feeds the same signal shape directly', async () => {
+    const { reportSelfState, setOrchestrator } = await createHost(baseDeps());
+    const pumpSignals = vi.fn();
+    setOrchestrator({ pumpSignals });
+
+    reportSelfState('overload');
+    expect(pumpSignals).toHaveBeenCalledWith({ type: 'self_report', subtype: 'overload' });
+  });
+
+  it('self-report never touches interventionPolicy — it is reader-initiated and spends no budget', async () => {
+    document.body.innerHTML = ''; // see the earlier standalone-card test's own comment
+    const { showSelfReportCard, setOrchestrator } = await createHost(baseDeps());
+    const interventionPolicy = { evaluate: vi.fn(), record: vi.fn(), recordAnswered: vi.fn(), recordDismissal: vi.fn() };
+    setOrchestrator({ pumpSignals: vi.fn(), interventionPolicy });
+
+    showSelfReportCard();
+    document.querySelector('[data-self-report="disengaged"]').click();
+
+    expect(interventionPolicy.evaluate).not.toHaveBeenCalled();
+    expect(interventionPolicy.record).not.toHaveBeenCalled();
+  });
+
+  it('affordance 3: handleAsk passes showSelfReport: true into questionCard.show() when state.substate is "unclear"', async () => {
+    const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    chrome.runtime.sendMessage = sendMessage;
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'active-surfacing-test span' }] } });
+
+    const { host, questionCard } = await createHost(baseDeps());
+    const shows = [];
+    const originalShow = questionCard.show;
+    questionCard.show = (q, ctx) => { shows.push(ctx); return originalShow(q, ctx); };
+
+    document.body.innerHTML = '<p id="t">A paragraph about the active-surfacing case, long enough to pass fetchQuestions\' own length floor before it will even try.</p>';
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, { substate: 'unclear' }, document.getElementById('t'));
+
+    expect(shows).toHaveLength(1);
+    expect(shows[0].showSelfReport).toBe(true);
+  });
+
+  it('affordance 3 does NOT surface when substate is confidently classified (not "unclear") — future 13b/13c/13d signals will stop triggering this automatically once they exist', async () => {
+    const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    chrome.runtime.sendMessage = sendMessage;
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'confident-substate-test span' }] } });
+
+    const { host, questionCard } = await createHost(baseDeps());
+    const shows = [];
+    const originalShow = questionCard.show;
+    questionCard.show = (q, ctx) => { shows.push(ctx); return originalShow(q, ctx); };
+
+    document.body.innerHTML = '<p id="t">A paragraph about the confident-substate case, long enough to pass fetchQuestions\' own length floor before it will even try.</p>';
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, { substate: 'confusion' }, document.getElementById('t'));
+
+    expect(shows[0].showSelfReport).toBe(false);
+  });
+
+  it('an early-closed self-report card does not orphan a LATER one sharing the same fingerprint — regression guard for a real bug found verifying this in tests/browser/smoke.mjs', async () => {
+    // Uses ui.hidePopup() directly — the SAME function Escape calls in a
+    // real page (ui-controller.js) — rather than clicking the card's own
+    // ✕ button. This distinction is the whole point of the test: a direct
+    // closePopup(specificRoot, ...) call bypasses the broken openPopups
+    // LOOKUP entirely (it already has the right element), so it cannot
+    // expose this bug — only a close path that finds its target BY
+    // FINGERPRINT, the way hidePopup() and a second reservePopup() call
+    // both do, can. An earlier version of this test used the ✕ button for
+    // both closes and passed even WITHOUT the fix — verified directly, not
+    // assumed, by reverting the fix and re-running it — which is exactly
+    // the false-security CLAUDE.md's own "this suite's failure mode is
+    // absence, not error" warns about, applied to this test's own history.
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '';
+      const ui = createUIController({});
+      const { showSelfReportCard, setOrchestrator } = await createHost(baseDeps({ ui }));
+      setOrchestrator({ pumpSignals: vi.fn() });
+
+      showSelfReportCard();
+      // Schedules a 900ms auto-close (host.js's own showSelfReportCard()).
+      document.querySelector('[data-self-report="confusion"]').click();
+
+      // Closed EARLY via hidePopup() — Escape's own mechanism — well
+      // before that 900ms auto-close would fire.
+      ui.hidePopup();
+      vi.advanceTimersByTime(300); // past the 250ms DOM-removal delay
+      expect(document.querySelectorAll('[data-self-report]')).toHaveLength(0);
+
+      // A second card, the SAME fingerprint, opened before the first
+      // card's now-orphaned 900ms timer would have fired.
+      const reopened = showSelfReportCard();
+      expect(reopened).toBe(true);
+
+      // The bug: the first card's stale timer fires here. Before the fix
+      // (storing it as root._hideT, the property closePopup() already
+      // clearTimeout()s), this deleted the SECOND card's openPopups entry
+      // without removing it from the DOM — orphaned: visible, but no
+      // longer reachable by any future hidePopup()/Escape call.
+      vi.advanceTimersByTime(700); // 1000ms since the FIRST click — past its 900ms mark
+      expect(document.querySelectorAll('[data-self-report]')).toHaveLength(3);
+
+      // The real assertion: closable via the SAME Escape-equivalent path,
+      // proving openPopups still correctly tracks it rather than having
+      // been silently deleted out from under it.
+      ui.hidePopup();
+      vi.advanceTimersByTime(300);
+      expect(document.querySelectorAll('[data-self-report]')).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('affordance 3 does not apply to skimming (substate is always null there, never "unclear")', async () => {
+    const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    chrome.runtime.sendMessage = sendMessage;
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'skimming-substate-test span' }] } });
+
+    const { host, questionCard } = await createHost(baseDeps());
+    const shows = [];
+    const originalShow = questionCard.show;
+    questionCard.show = (q, ctx) => { shows.push(ctx); return originalShow(q, ctx); };
+
+    document.body.innerHTML = '<p id="t">A paragraph about the skimming-substate case, long enough to pass fetchQuestions\' own length floor before it will even try.</p>';
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, { substate: null }, document.getElementById('t'));
+
+    expect(shows[0].showSelfReport).toBe(false);
+  });
+});
