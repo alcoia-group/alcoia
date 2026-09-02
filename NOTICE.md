@@ -29,40 +29,46 @@ migration note under "Signal hierarchy"). What remains bundled is all permissive
 | `src/libs/jszip.min.js` | MIT or GPLv3 (dual); bundles pako (MIT) | Stuk |
 | `src/libs/fonts/literata-*.woff2` | **SIL OFL 1.1** — `OFL-Literata.txt` alongside | 2017 The Literata Project Authors |
 | `src/libs/fonts/plus-jakarta-sans-*.woff2` | **SIL OFL 1.1** — `OFL-PlusJakartaSans.txt` alongside | 2020 The Plus Jakarta Sans Project Authors |
-| `src/libs/wordfreq/google-10000-english.txt` | ⚠️ **See "Needs review" below — not a clean permissive licence** | Josh Kaufman (compilation); underlying corpus via LDC |
+| `src/libs/wordfreq/google-10000-english.txt` | Public domain (source texts, via Project Gutenberg) | Frequencies computed by this project — see below |
 
-### ⚠️ NEEDS REVIEW — `src/libs/wordfreq/google-10000-english.txt` (item 13c)
+### `src/libs/wordfreq/google-10000-english.txt` / `common-words.js` — resolved
 
-**Flagged deliberately, not resolved — a human decision is still owed here, per the owner's own
-instruction when this was bundled.** This is NOT the same shape as every other row in the table
-above; do not let its presence in the same list read as "already cleared."
+**Was flagged NEEDS REVIEW (item 13c): the original list
+([first20hours/google-10000-english](https://github.com/first20hours/google-10000-english) on
+GitHub, derived from the Google Web Trillion Word Corpus via the Linguistic Data Consortium) came
+with an explicit "I do not recommend using this data for commercial purposes without licensing it
+from the Linguistic Data Consortium" from its own author, and GitHub's own license detector
+reported `"license":"other"`/`"spdx_id":"NOASSERTION"` — no clean permissive licence to point to,
+for a commercial product. Replaced, not licensed after the fact.**
 
-Bundled for the lexical-rarity measure in `text-difficulty.js` (item 13c) — a top-10,000
-English word-frequency list, sourced from
-[first20hours/google-10000-english](https://github.com/first20hours/google-10000-english) on
-GitHub, itself derived from the *Google Web Trillion Word Corpus* (Brants & Franz) as distributed
-by the **Linguistic Data Consortium**, with editing by Josh Kaufman. Fetched and verified directly
-(not assumed): raw 75,153 bytes, gzips to 34,980 bytes — smaller than the ~200KB gzipped estimate
-this item started from.
+**Current source: computed by this project from Project Gutenberg's public-domain catalogue.**
+`tools/build-wordfreq.mjs` (kept in the repo, not just its output — `npm run wordfreq:build` to
+regenerate) fetches a curated batch of individually-named, well-known public-domain books —
+novels, essays, standard prose translations — from `gutenberg.pglaf.org` (Project Gutenberg's own
+official mirror, per [their mirror list](https://www.gutenberg.org/MIRRORS.ALL); confirmed
+directly against
+[gutenberg.org's own robot-access policy](https://www.gutenberg.org/policy/robot_access.html)
+before writing the script, since gutenberg.org itself is "intended for human users only" and a
+curated batch of specific ids is neither the sanctioned harvest endpoint nor a full mirror sync).
+Each book's own Project Gutenberg licensing boilerplate is stripped before counting (the standard
+`*** START/END OF THE PROJECT GUTENBERG EBOOK ***` markers), so word frequency reflects the books
+themselves, not Project Gutenberg's own legal text repeated in every file. Project Gutenberg's own
+texts in the US are public domain; nothing here is licensed, only counted.
 
-**The source repository's own `LICENSE.md`, quoted in full, is the reason this needs review:**
+Every book is named, by Gutenberg id, in `tools/build-wordfreq.mjs` itself — this section does not
+duplicate that list. As built for this replacement: **49 books, ~6.5 million words tokenized,
+top 10,000 by frequency kept** — the exact figures are in the commit that replaced this file, and
+regenerating reports fresh ones on every run, since Project Gutenberg's own texts are corrected
+over time (see their "Files change frequently" note on the policy page above).
 
-> Educational and personal/research use of this data is permitted under the LDC license, Norvig's
-> MIT license for his contributions, and US fair use doctrine. I do not recommend using this data
-> for commercial purposes without licensing it from the Linguistic Data Consortium.
-
-GitHub's own license detector reports this repository as `"license": "other"` /
-`"spdx_id": "NOASSERTION"` — there is no standard permissive licence to point to here. alcoia is a
-commercial product (paid Reader/Student/Teams/Institution tiers, Creem billing). The author's own
-text advises against exactly that use without licensing the underlying corpus from the LDC
-separately.
-
-**Decision made when this was added:** ship it now, flag it here prominently, revisit before any
-public release. Options for whoever picks this up: (a) license the corpus from the LDC, (b)
-replace this file with a list under an unambiguous permissive licence, (c) replace it with a
-smaller hand-curated list (loses frequency granularity, gains a clean licence — see item 13c's own
-task notes for why this was the fallback option). Do not ship a public release with this file
-present and this section unresolved.
+**A real, structural tradeoff, stated rather than left implicit:** Project Gutenberg's catalogue
+is overwhelmingly pre-1929-ish (US copyright term), so this list under-represents strictly modern
+or technical vocabulary (a word like "middleware" or "authentication" will read as rarer here than
+under the original web-crawl-derived list) — confirmed by a direct before/after comparison against
+sample passages before this replaced anything, not assumed. For the plain, ordinary English
+`text-difficulty.js` actually scores day to day, the two lists behave comparably; a passage dense
+with contemporary technical jargon will now score as somewhat harder/rarer than it would have
+under the old list. This is the honest cost of a public-domain-only source, not an oversight.
 
 Two fonts are bundled: **Literata** (reading voice) and **Plus Jakarta Sans** (UI voice), latin and latin-ext subsets, roman and italic, variable weight. Both are SIL
 OFL 1.1, which permits bundling and redistribution provided the licence travels with the

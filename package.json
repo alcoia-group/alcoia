@@ -10,6 +10,7 @@
     "test:watch": "vitest",
     "test:browser": "node tests/browser/smoke.mjs",
     "questions:review": "node tools/question-quality.mjs",
+    "wordfreq:build": "node tools/build-wordfreq.mjs",
     "build": "node build.mjs",
     "build:chrome": "node build.mjs chrome",
     "build:firefox": "node build.mjs firefox"
