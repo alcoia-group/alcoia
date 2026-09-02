@@ -790,6 +790,8 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     expect(seenBody.question_id.length).toBeGreaterThan(0);
     expect(seenBody).not.toHaveProperty('pseudonym');
     expect(seenBody).not.toHaveProperty('struggled');
+    // Item 13j-1: the real chosen option (index 0, the one clicked above).
+    expect(seenBody.selected_answer).toBe(0);
   });
 
   it('an incorrect answer sends correct: false explicitly, not omitted', async () => {
@@ -814,6 +816,9 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenBody.correct).toBe(false);
     expect(seenBody).not.toHaveProperty('confidence');
+    // Item 13j-1: the specific WRONG option chosen (index 1) — the whole
+    // point of this field, per the task's own framing.
+    expect(seenBody.selected_answer).toBe(1);
   });
 
   /* Bug fix follow-up: proves the fix in response-signals.js's respond()
@@ -856,6 +861,11 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     // Grading behaviour stays exactly as this item's own scope requires —
     // adversarial is still never graded, still never sent as correct.
     expect(seenBody).not.toHaveProperty('correct');
+    // Item 13j-1: adversarial is free-text — no discrete option exists, so
+    // this is explicit null, never fabricated (and never simply omitted,
+    // which would be indistinguishable from a caller that predates this
+    // field entirely).
+    expect(seenBody).toHaveProperty('selected_answer', null);
   });
 
   it('ordinary reading (no assignmentId) never calls the outcomes endpoint at all — the existing behaviour is unchanged', async () => {
