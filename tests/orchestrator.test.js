@@ -140,3 +140,61 @@ describe('createOrchestrator(): documentKey override (item 30c)', () => {
     expect(orch.documentKey()).toBe(key);
   });
 });
+
+/* host.onStruggle carries substate/selfReported now (13g). host.js just
+ * passes these through unchanged (see tests/host.test.js for that half);
+ * THIS is the half that proves orchestrator.js itself computes them
+ * correctly off a real stateEngine transition — including the
+ * 'unclear'-means-no-real-classification translation, which lives here,
+ * not in state-engine.js or host.js. */
+describe('createOrchestrator(): onStruggle carries substate/selfReported (13g wiring)', () => {
+  function hostWithParagraphText(text) {
+    return stubHost({ getCurrentParagraph: vi.fn(() => ({ type: 'dom', data: { innerText: text } })) });
+  }
+
+  async function makeOrch(host) {
+    return createOrchestrator({
+      loadModule,
+      comprehensionMonitor: stubComprehensionMonitor(),
+      settings: () => ({ assistantEnabled: true, comprehensionCheckEnabled: true, focusRulerEnabled: false, debugEnabled: false }),
+      host,
+    });
+  }
+
+  it('a self-reported confusion state sends substate:"confusion" and selfReported:true', async () => {
+    const host = hostWithParagraphText('some paragraph text');
+    const orch = await makeOrch(host);
+
+    orch.stateEngine.update({ reading: { type: 'self_report', subtype: 'confusion' } });
+    await vi.waitFor(() => expect(host.onStruggle).toHaveBeenCalled());
+    expect(host.onStruggle).toHaveBeenCalledWith('some paragraph text', null, 'confusion', true);
+  });
+
+  it('an inferred (non-self-reported) substate — a propositional-density hint clearing the overload bar — sends selfReported:false, distinctly', async () => {
+    const host = hostWithParagraphText('some paragraph text');
+    const orch = await makeOrch(host);
+
+    orch.stateEngine.update({
+      reading: {
+        type: 'speed_mismatch', subtype: 'too_slow',
+        actualWpm: 90, baselineWpm: 225,
+        readability: { syntactic: { score: 90 }, propositional: { score: 20, basis: 'lexical' } },
+      },
+    });
+    await vi.waitFor(() => expect(host.onStruggle).toHaveBeenCalled());
+    expect(host.onStruggle).toHaveBeenCalledWith('some paragraph text', null, 'overload', false);
+  });
+
+  it('an ordinary struggling signal with nothing clearing a substate bar sends null, not the internal "unclear" default', async () => {
+    const host = hostWithParagraphText('some paragraph text');
+    const orch = await makeOrch(host);
+
+    orch.stateEngine.update({ reading: { type: 'backtrack', backtrackPx: 200 } });
+    await vi.waitFor(() => expect(host.onStruggle).toHaveBeenCalled());
+    // Confirms the state engine really did land on 'unclear' internally —
+    // the translation to null happens at this call site, not by 'unclear'
+    // never occurring in the first place.
+    expect(orch.getState().substate).toBe('unclear');
+    expect(host.onStruggle).toHaveBeenCalledWith('some paragraph text', null, null, null);
+  });
+});

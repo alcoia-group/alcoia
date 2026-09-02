@@ -46,6 +46,7 @@ export async function createOrchestrator(deps) {
   const coverageModule = await loadModule('src/content/coverage-gate.js');
   const offerModule = await loadModule('src/content/quiz-offer.js');
   const pretestModule = await loadModule('src/content/pretest.js');
+  const { SUBSTATES } = engineModule;
   const stateEngine  = engineModule.createReadingStateEngine();
   const interventionPolicy = policyModule.createInterventionPolicy();
   const coverageGate = coverageModule.createCoverageGate();
@@ -183,7 +184,23 @@ export async function createOrchestrator(deps) {
       // index needs capturing fresh rather than reconstructed later.
       // Passed through regardless of assignment context; host.onStruggle
       // is a no-op for it outside one (see host.js's own header).
-      if (t) { try { host.onStruggle(t.trim(), activeParagraphIndex()); } catch (e) {} }
+      //
+      // substate/selfReported, captured here too (13g's server contract,
+      // confirmed by reading alcoiaServer/src/http/routes/outcomes.js
+      // directly). 'unclear' is 13a's own fallback when nothing cleared a
+      // confidence bar (classifySubstate() in state-engine.js) — not a
+      // real classification, so it is reported the same as no substate at
+      // all: null, never a guess dressed up as a measurement. 'confusion'/
+      // 'overload' ARE real, whether from a genuine self-report
+      // (state.signal.type === 'self_report', ground truth) or an
+      // inferred hint that cleared its threshold — selfReported reads
+      // directly off which one actually produced it, not assumed either
+      // way.
+      const substate = state.substate && state.substate !== SUBSTATES.UNCLEAR ? state.substate : null;
+      const selfReported = substate ? state.signal?.type === 'self_report' : null;
+      if (t) {
+        try { host.onStruggle(t.trim(), activeParagraphIndex(), substate, selfReported); } catch (e) {}
+      }
     }
     const decision  = interventionPolicy.evaluate(state, { currentEl });
 

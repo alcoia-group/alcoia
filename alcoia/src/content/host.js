@@ -646,10 +646,16 @@ export async function createHost(deps) {
     setPrevParagraphText: (t) => { prevParagraphText = t; },
     setCogState: (label) => { lastCogState = label; },
     onParagraphRead: (text, dwellMs) => sessionRecall.recordRead(text, dwellMs),
-    onStruggle: (text, paragraphIndex) => {
+    onStruggle: (text, paragraphIndex, substate, selfReported) => {
       sessionRecall.recordStruggle(text);
       // Item S6/E4 follow-up — see submitOutcome's own header just above.
-      submitOutcome({ paragraphIndex, struggled: true });
+      // substate/selfReported: already resolved by orchestrator.js at the
+      // moment struggle was decided (13a's 'unclear' default translated to
+      // null there, not here — see its own comment). source: 'inline'
+      // names this specific chokepoint — the in-page retrieval prompt —
+      // distinct from quiz.js's separate, never-transmitted path (13i,
+      // untouched by this item).
+      submitOutcome({ paragraphIndex, struggled: true, substate, selfReported, source: 'inline' });
     },
     onQuizOfferEligible: (result) => showQuizOffer(result),
     onIntervention: async (decision, state, target, paragraphIndex) => {
