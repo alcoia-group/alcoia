@@ -14,12 +14,25 @@
  * directly, not assumed:
  *   POST /api/assignments/:id/outcomes
  *     { paragraph_index, struggled?, question_id?, correct?, confidence?,
- *       reached? } -> 201 { recorded: true }
+ *       reached?, substate?, self_reported?, source? } -> 201 { recorded: true }
  * `correct` requires `question_id` to also be present (server-enforced,
  * 422 correct_requires_question_id otherwise) — this module does not
  * duplicate that check; its two real callers in host.js only ever set
  * `correct` alongside `questionId` together, from the same answered
  * record.
+ *
+ * substate/selfReported/source (confirmed the same way, against the same
+ * file, migration 1787900000003): `substate` is one of 'confusion' /
+ * 'overload' / 'unclear', or explicit `null` — never omitted when the
+ * caller passed one, since omitting it would be indistinguishable from a
+ * caller that never knew this field existed, and this module's whole job
+ * is to say what was actually observed (or that nothing was). `self_
+ * reported` is a boolean the server accepts ONLY alongside a real
+ * (non-null) `substate` — 422 self_reported_requires_substate otherwise,
+ * enforced at the DB level too — mirrored here so a caller mistake fails
+ * the same way locally as it would against the server, not silently sent
+ * and rejected. `source` is 'inline' or 'quiz', independent of the other
+ * two — see host.js's own call sites for which value each one sends.
  *
  * NEVER sends a pseudonym field — confirmed the server derives it
  * server-side from the assignment's own salt and the authenticated
@@ -48,7 +61,10 @@ export function createOutcomesManager(opts = {}) {
    * assignment_salt_unavailable, not_a_participant, invalid_paragraph_index,
    * correct_requires_question_id, invalid_confidence), or a client-side one
    * (invalid_paragraph_index, no_session, no_outcomes_url, network_error). */
-  async function submit({ paragraphIndex, struggled, questionId, correct, confidence, reached } = {}) {
+  async function submit({
+    paragraphIndex, struggled, questionId, correct, confidence, reached,
+    substate, selfReported, source,
+  } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
     }
@@ -64,6 +80,21 @@ export function createOutcomesManager(opts = {}) {
     if (typeof correct === 'boolean') body.correct = correct;
     if (confidence === 'low' || confidence === 'high') body.confidence = confidence;
     if (typeof reached === 'boolean') body.reached = reached;
+
+    // A real classification: sent as-is, and self_reported rides with it
+    // ONLY here — never alongside a null/absent substate (matches the
+    // server's own self_reported_requires_substate constraint). Explicit
+    // null: sent as null, not omitted — see this file's own header for why
+    // that distinction matters. undefined (the caller never mentioned
+    // substate at all): neither branch below fires, so the key stays
+    // absent entirely, identical to every caller that predates this field.
+    if (substate === 'confusion' || substate === 'overload' || substate === 'unclear') {
+      body.substate = substate;
+      if (typeof selfReported === 'boolean') body.self_reported = selfReported;
+    } else if (substate === null) {
+      body.substate = null;
+    }
+    if (source === 'inline' || source === 'quiz') body.source = source;
 
     try {
       const resp = await fetchImpl(outcomesUrl, {

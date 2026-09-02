@@ -661,7 +661,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     });
   });
 
-  it('a struggle signal POSTs a real outcome — correct assignmentId, paragraph_index, struggled:true, no pseudonym', async () => {
+  it('a struggle signal POSTs a real outcome — correct assignmentId, paragraph_index, struggled:true, source:inline, no pseudonym', async () => {
     let seenUrl = null, seenInit = null;
     const fetchImpl = vi.fn(async (url, init) => {
       seenUrl = url; seenInit = init;
@@ -670,14 +670,75 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     vi.stubGlobal('fetch', fetchImpl);
 
     const { host } = await createHost(assignmentDeps());
+    // No substate/selfReported args — orchestrator.js's own translation of
+    // 13a's 'unclear' default (see its own comment) means a genuinely
+    // unclassified struggle calls host.onStruggle with substate/
+    // selfReported simply absent, exactly like every pre-13g caller.
     host.onStruggle('some paragraph text', 3);
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenUrl).toBe(`${ASSIGNMENTS_URL}/assign-42/outcomes`);
     const body = JSON.parse(seenInit.body);
-    expect(body).toEqual({ paragraph_index: 3, struggled: true });
+    // source: 'inline' is unconditional for this chokepoint (13g) — it
+    // names WHICH path submitted, not a fact that can be "unavailable".
+    // substate/self_reported stay absent here since neither was passed.
+    expect(body).toEqual({ paragraph_index: 3, struggled: true, source: 'inline' });
     expect(body).not.toHaveProperty('pseudonym');
+    expect(body).not.toHaveProperty('substate');
+    expect(body).not.toHaveProperty('self_reported');
     expect(seenInit.headers.Authorization).toBe('Bearer tok-1');
+  });
+
+  it('a struggle signal with a self-reported substate POSTs substate + self_reported:true + source:inline together', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => {
+      seenBody = JSON.parse(init.body);
+      return { ok: true, json: async () => ({ recorded: true }) };
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+    const { host } = await createHost(assignmentDeps());
+
+    host.onStruggle('some paragraph text', 3, 'confusion', true);
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenBody).toEqual({
+      paragraph_index: 3, struggled: true, source: 'inline',
+      substate: 'confusion', self_reported: true,
+    });
+  });
+
+  it('a struggle signal with an inferred (non-self-reported) substate POSTs self_reported:false, distinctly', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => {
+      seenBody = JSON.parse(init.body);
+      return { ok: true, json: async () => ({ recorded: true }) };
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+    const { host } = await createHost(assignmentDeps());
+
+    host.onStruggle('some paragraph text', 3, 'overload', false);
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenBody).toEqual({
+      paragraph_index: 3, struggled: true, source: 'inline',
+      substate: 'overload', self_reported: false,
+    });
+  });
+
+  it('an explicit null substate (no real classification) POSTs substate: null, never omitted and never fabricated', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => {
+      seenBody = JSON.parse(init.body);
+      return { ok: true, json: async () => ({ recorded: true }) };
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+    const { host } = await createHost(assignmentDeps());
+
+    host.onStruggle('some paragraph text', 3, null, null);
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenBody).toEqual({ paragraph_index: 3, struggled: true, source: 'inline', substate: null });
+    expect(seenBody).not.toHaveProperty('self_reported');
   });
 
   it('a struggle signal with no active paragraph (null index) never calls the outcomes endpoint at all', async () => {
