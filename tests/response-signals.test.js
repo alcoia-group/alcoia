@@ -39,6 +39,37 @@ describe('response-signals', () => {
     expect(rec.subtype).toBe('incorrect');
   });
 
+  /* Item 13j-1: which option was actually chosen — correct or incorrect —
+   * so the server can compute distractor clustering
+   * (alcoiaServer/src/outcomes/classify.js). */
+  describe('chosenIndex (item 13j-1)', () => {
+    it('records the real chosen index on a correct answer', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present(QUESTION);
+      expect(r.answer(0, QUESTION).chosenIndex).toBe(0);
+    });
+
+    it('records the real chosen index on a wrong answer too — the whole point', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present(QUESTION);
+      expect(r.answer(2, QUESTION).chosenIndex).toBe(2);
+    });
+
+    it('answerGraded() (free_recall/scenario) never sets chosenIndex — no discrete option exists', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present({ ...QUESTION, level: 'free_recall' });
+      const rec = r.answerGraded('my answer', 'correct', 'high');
+      expect(rec.chosenIndex).toBeUndefined();
+    });
+
+    it('respond() (adversarial) never sets chosenIndex either', () => {
+      const r = createResponseSignals({ now: fixedClock().now });
+      r.present({ ...QUESTION, level: 'adversarial' });
+      const rec = r.respond('my argument', 'low');
+      expect(rec.chosenIndex).toBeUndefined();
+    });
+  });
+
   /* Confidence is captured at commit time, alongside the answer — see
    * CLAUDE.md's confidence-calibration shape. Skippable: an omitted rating
    * must resolve to null, never to a guessed 'low' or 'high'. */
