@@ -104,6 +104,20 @@ export function createResponseSignals(opts = {}) {
       type: 'response',
       subtype: correct ? 'correct' : 'incorrect',
       correct,
+      // Item 13j-1: which specific option — correct or incorrect — the
+      // reader actually chose, confirmed by reading alcoiaServer's
+      // src/outcomes/classify.js directly: it clusters wrong answers by
+      // this exact value to distinguish a shared misconception from
+      // scattered difficulty, comparing it for equality only, so a plain
+      // option index (the same identifier question-card.js's own
+      // data-index already uses) is a correct, sufficient identifier —
+      // this file does not invent a second one. Only this function
+      // (recognition, real discrete options) ever has one;
+      // answerGraded()/respond() below are free-text levels with nothing
+      // to record here, and simply never set this field at all — the
+      // outcome-submission call site reads its absence as null, not
+      // fabricated.
+      chosenIndex: Number.isInteger(Number(chosenIndex)) ? Number(chosenIndex) : null,
       confidence: normalizedConfidence,
       // Item 43: explicit even though this path never changes — a record
       // that carries the method only sometimes would make state-engine.js's

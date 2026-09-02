@@ -381,6 +381,12 @@ export async function createHost(deps) {
         questionId: record.questionId,
         correct: typeof record.correct === 'boolean' ? record.correct : undefined,
         confidence: record.confidence,
+        // Item 13j-1: response-signals.js's answer() (recognition, real
+        // discrete options) is the only record shape that ever carries
+        // chosenIndex — answerGraded()/respond() (free_recall/scenario/
+        // adversarial) never set it, so this correctly sends an explicit
+        // null for those rather than fabricating an option id.
+        selectedAnswer: typeof record.chosenIndex === 'number' ? record.chosenIndex : null,
       });
     },
     onDismissed: () => {
