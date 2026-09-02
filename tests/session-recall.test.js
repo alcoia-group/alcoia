@@ -103,6 +103,48 @@ describe('selection', () => {
   });
 });
 
+/* Item 13i: paragraphIndex is additive — needed only so a quiz question
+ * generated from a candidate select() returns can be attributed back to a
+ * real paragraph_index when reporting a quiz outcome under assignment
+ * context (host.js's runQuiz). This module stays text-keyed; nothing
+ * about candidacy, weighting or selection reads or depends on it. */
+describe('paragraphIndex (item 13i)', () => {
+  it('is null when recordRead is never given one — every pre-13i caller', () => {
+    const r = createSessionRecall();
+    r.recordRead(para(1), 10000);
+    expect(r.candidates()[0].paragraphIndex).toBeNull();
+  });
+
+  it('is carried through to select()\'s returned entries', () => {
+    const r = createSessionRecall({ random: seq([0]) });
+    r.recordRead(para(1), 10000, 7);
+    expect(r.select(1)[0].paragraphIndex).toBe(7);
+  });
+
+  it('the FIRST real index recorded wins, not overwritten by a later re-visit', () => {
+    const r = createSessionRecall();
+    r.recordRead(para(1), MIN_DWELL_MS / 2, 2);
+    r.recordRead(para(1), MIN_DWELL_MS / 2, 99); // scrolled back to it later, say
+    expect(r.candidates()[0].paragraphIndex).toBe(2);
+  });
+
+  it('a negative or non-integer index is ignored, same as never having one', () => {
+    const r = createSessionRecall();
+    r.recordRead(para(1), 10000, -1);
+    expect(r.candidates()[0].paragraphIndex).toBeNull();
+
+    const r2 = createSessionRecall();
+    r2.recordRead(para(2), 10000, 1.5);
+    expect(r2.candidates()[0].paragraphIndex).toBeNull();
+  });
+
+  it('index 0 is a real index, not falsy-and-ignored', () => {
+    const r = createSessionRecall();
+    r.recordRead(para(1), 10000, 0);
+    expect(r.candidates()[0].paragraphIndex).toBe(0);
+  });
+});
+
 describe('stats', () => {
   it('separates seen from actually read', () => {
     const r = createSessionRecall();

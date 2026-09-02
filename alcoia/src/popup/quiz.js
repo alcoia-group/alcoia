@@ -20,6 +20,8 @@ import { gradedResultMarkup, respondedResultMarkup } from '../content/graded-res
 import { createBackendClient } from '../shared/backend-client.js';
 import { createGradingClient } from '../shared/grading-client.js';
 import { createRateLimiter } from '../shared/rate-limit.js';
+import { createSessionManager } from '../shared/session.js';
+import { createOutcomesManager } from '../shared/outcomes.js';
 
 const FREE_TEXT_LEVELS = ['free_recall', 'scenario', 'adversarial'];
 // Mirrors tests/contract/grading.js's MAX_ANSWER_CHARS — enforced via the
@@ -41,6 +43,33 @@ $('closeBtn').addEventListener('click', () => window.close());
 const store = createQuizStore();
 const root = $('quizRoot');
 const documentKey = new URL(location.href).searchParams.get('key') || null;
+
+// Item 13i: outcome reporting for a quiz taken on an assignment's own
+// document — reuses item 9b's exact assignment-context mechanism rather
+// than building a second one. assignmentId, when present, rides on this
+// page's own URL the same way it already rides on the PDF viewer's
+// (host.js's openQuizPage(), mirroring assignments.js's own pattern) —
+// this page has no content-script context to inherit it from otherwise.
+// On ordinary (non-assignment) reading this param is simply absent and
+// submitQuizOutcome stays the no-op default below: no session manager, no
+// outcomes manager, no network capability constructed at all — not merely
+// unused.
+const assignmentId = new URL(location.href).searchParams.get('assignmentId') || null;
+let submitQuizOutcome = () => {};
+if (assignmentId) {
+  const outcomesSession = createSessionManager();
+  const outcomesManager = createOutcomesManager({
+    getSession: outcomesSession.getSession,
+    outcomesUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/outcomes`,
+  });
+  submitQuizOutcome = (fields) => {
+    // Mirrors host.js's own submitOutcome guard exactly: a question with no
+    // real paragraphIndex (session-recall.js had none recorded for it) is
+    // silently not reported, never guessed at.
+    if (!Number.isInteger(fields.paragraphIndex) || fields.paragraphIndex < 0) return;
+    outcomesManager.submit({ ...fields, source: 'quiz' }).catch(() => {});
+  };
+}
 
 // Set once boot() reads the sra_backend_url setting; falls back to
 // config.js's default (loaded as a classic script before this module, same
@@ -177,6 +206,9 @@ function renderQuestion(record, index) {
         questionIndex: index, chosenIndex: selected, correct, confidence,
         gradingMethod: 'deterministic', level: 'recognition', answeredAt: Date.now(),
       });
+      // Item 13i: source:'quiz', added by submitQuizOutcome itself — a
+      // no-op unless this quiz is on an assignment's document.
+      submitQuizOutcome({ paragraphIndex: question.paragraphIndex, questionId: question.id, correct, confidence });
 
       appendNextButton(card, record, index);
     };
@@ -225,6 +257,11 @@ function renderQuestion(record, index) {
           questionIndex: index, chosenIndex: null, correct: null, confidence,
           gradingMethod: 'none', level, answerText, answeredAt: Date.now(),
         });
+        // correct stays out of this call entirely (null, not a boolean) —
+        // adversarial is never graded, and submitQuizOutcome/outcomes.js
+        // only ever includes `correct` when it is a real boolean, the same
+        // rule the inline path already follows.
+        submitQuizOutcome({ paragraphIndex: question.paragraphIndex, questionId: question.id, confidence });
         appendNextButton(card, record, index);
         return;
       }
@@ -266,6 +303,14 @@ function renderQuestion(record, index) {
         questionIndex: index, chosenIndex: null,
         correct: verdict === 'unknown' ? null : verdict === 'correct',
         confidence, gradingMethod: 'model', level, verdict, answerText, answeredAt: Date.now(),
+      });
+      // An 'unknown' verdict reports no `correct` at all (undefined, not
+      // false) — same reasoning as the inline path: an inconclusive grade
+      // is not evidence of a wrong answer.
+      submitQuizOutcome({
+        paragraphIndex: question.paragraphIndex, questionId: question.id,
+        correct: verdict === 'unknown' ? undefined : verdict === 'correct',
+        confidence,
       });
 
       appendNextButton(card, record, index);

@@ -886,6 +886,113 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  /* Item 13i: quiz outcomes. session-recall.js is text-keyed and runQuiz()'s
+   * ordinary path batches several paragraphs into one combined fetchQuestions
+   * call ("runQuiz groups picked paragraphs..." above, unchanged by this
+   * item) — a question from a combined call cannot be attributed back to
+   * one specific paragraph, so it could never carry a real paragraph_index.
+   * Under assignment context specifically, runQuiz() generates one call per
+   * picked paragraph instead, so every resulting question can. */
+  describe('runQuiz() under assignment context generates per-paragraph, not batched (item 13i)', () => {
+    // session-recall.js's own MIN_WORDS floor (40) needs real length —
+    // matches tests/session-recall.test.js's own para() helper, so a
+    // paragraph here is never accidentally discarded as "too short to be
+    // a candidate" the way a few hand-written sentences originally were.
+    const longPara = (label) => `paragraph-${label} ` + Array.from({ length: 60 }, (_, i) => `w${i}`).join(' ');
+
+    it('one fetchQuestions call per picked paragraph, each question tagged with that paragraph\'s real index', async () => {
+      const bodies = [];
+      globalThis.__sendMessageImpl = (msg, cb) => {
+        if (msg.url?.includes('/api/questions')) {
+          bodies.push(msg.body);
+          // Respects the requested count, same as every other mock in this
+          // file — QUIZ_MIN_QUESTIONS (5) applies across BOTH calls
+          // combined, so a mock returning only one question per call would
+          // make runQuiz() correctly bail before writing anything, for a
+          // reason that has nothing to do with what this test is about.
+          const count = msg.body.count || 1;
+          cb({ ok: true, data: { questions: Array.from({ length: count }, (_, i) => ({ q: `Q${i} from "${msg.body.text.slice(0, 10)}"?`, options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: msg.body.text.slice(0, 15) })) } });
+        } else {
+          cb({ ok: true, data: {} });
+        }
+      };
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+
+      const { setOrchestrator, sessionRecall, runQuiz } = await createHost(assignmentDeps());
+      setOrchestrator({ documentKey: () => 'doc-1' });
+
+      const textA = longPara('a');
+      const textB = longPara('b');
+      sessionRecall.recordRead(textA, 5000, 4);
+      sessionRecall.recordRead(textB, 5000, 9);
+
+      await runQuiz();
+
+      // Two picked paragraphs -> two separate calls, never combined text.
+      expect(bodies.length).toBe(2);
+      const texts = bodies.map((b) => b.text).sort();
+      expect(texts).toEqual([textA, textB].sort());
+
+      const pendingSet = chrome._store.sra_quiz_pending;
+      // Each call yields several questions (count > 1), all correctly
+      // sharing their own call's paragraphIndex — the DISTINCT indices
+      // present are what proves per-paragraph attribution, not a 1:1
+      // question:paragraph count.
+      const indices = [...new Set(pendingSet.questions.map((q) => q.paragraphIndex))].sort();
+      expect(indices).toEqual([4, 9]);
+    });
+
+    it('appends assignmentId to the quiz page URL it opens', async () => {
+      globalThis.__sendMessageImpl = (msg, cb) => {
+        if (msg.url?.includes('/api/questions')) {
+          // A single picked paragraph asks for count: QUIZ_TARGET_COUNT (8)
+          // in one call — QUIZ_MIN_QUESTIONS (5) needs at least that many
+          // back, or runQuiz() correctly bails before ever opening a page.
+          const count = msg.body.count || 1;
+          cb({ ok: true, data: { questions: Array.from({ length: count }, (_, i) => ({ q: `Q${i}?`, options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'span text here' })) } });
+        } else {
+          cb({ ok: true, data: {} });
+        }
+      };
+      const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      chrome.runtime.sendMessage = sendMessage;
+
+      const { setOrchestrator, sessionRecall, runQuiz } = await createHost(assignmentDeps());
+      setOrchestrator({ documentKey: () => 'doc-1' });
+      sessionRecall.recordRead(longPara('c'), 5000, 2);
+
+      await runQuiz();
+
+      const openTabCall = sendMessage.mock.calls.find((c) => c[0].action === 'openTab');
+      expect(openTabCall).toBeTruthy();
+      expect(openTabCall[0].url).toContain('assignmentId=assign-42');
+      expect(openTabCall[0].url).toContain('key=doc-1');
+    });
+
+    it('a question whose paragraph had no recorded index gets paragraphIndex: null, never fabricated', async () => {
+      // sessionRecall.select() can still return an entry with no index if
+      // MIN_WORDS was cleared but recordRead() was never called with one —
+      // guards against ever inventing a number rather than reporting the
+      // absence honestly (outcomes.js's own guard then refuses to submit).
+      globalThis.__sendMessageImpl = (msg, cb) => {
+        if (msg.url?.includes('/api/questions')) {
+          const count = msg.body.count || 1;
+          cb({ ok: true, data: { questions: Array.from({ length: count }, (_, i) => ({ q: `Q${i}?`, options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'span text here' })) } });
+        } else cb({ ok: true, data: {} });
+      };
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+
+      const { setOrchestrator, sessionRecall, runQuiz } = await createHost(assignmentDeps());
+      setOrchestrator({ documentKey: () => 'doc-1' });
+      sessionRecall.recordRead(longPara('d'), 5000); // no index arg
+
+      await runQuiz();
+
+      const pendingSet = chrome._store.sra_quiz_pending;
+      expect(pendingSet.questions[0].paragraphIndex).toBeNull();
+    });
+  });
 });
 
 /* Item 13a — the self-report mechanism's three affordances, from host.js's
