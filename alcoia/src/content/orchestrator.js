@@ -129,9 +129,15 @@ export async function createOrchestrator(deps) {
         : '';
       if (transition.left.el) {
         host.setPrevParagraphText(leftText.slice(0, 800));
-        // Session recall needs to know what was read and for how long.
+        // Session recall needs to know what was read, for how long, and
+        // now (item 13i) its real ordinal — session-recall.js was
+        // text-keyed on purpose (nothing it produced was ever submitted
+        // anywhere before this), and the index is only needed so a quiz
+        // question generated from a candidate it selects can carry a real
+        // paragraph_index when reporting a quiz outcome under assignment
+        // context.
         if (host.onParagraphRead) {
-          try { host.onParagraphRead(leftText, transition.left.dwellMs); } catch (e) {}
+          try { host.onParagraphRead(leftText, transition.left.dwellMs, transition.left.index); } catch (e) {}
         }
       }
       // Feeds coverage-gate.js — "read enough to offer the quiz on".

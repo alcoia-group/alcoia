@@ -37,8 +37,19 @@ export function createSessionRecall(opts = {}) {
   }
 
   /* Call on every paragraph exit. Dwell accumulates — a reader who comes back
-   * to a paragraph has spent more time on it, and that counts. */
-  function recordRead(text, dwellMs) {
+   * to a paragraph has spent more time on it, and that counts.
+   *
+   * paragraphIndex (item 13i): additive, optional. This module was built
+   * text-keyed on purpose — "nothing here is submitted anywhere" per its
+   * own header, so a numeric ordinal was never needed. It is needed now
+   * only so a quiz question generated from a candidate this function
+   * selected can be attributed back to a real paragraph_index when
+   * reporting a quiz outcome under assignment context (host.js's runQuiz).
+   * The FIRST real index recorded for a key wins and is never overwritten
+   * by a later read of the same paragraph (e.g. scrolled back to) — an
+   * ordinal should describe where the paragraph actually is, not the most
+   * recent visit. */
+  function recordRead(text, dwellMs, paragraphIndex) {
     const key = keyFor(text);
     if (!key) return;
     // Was a whitespace split, which is 1 for a whole CJK paragraph — so no
@@ -47,8 +58,12 @@ export function createSessionRecall(opts = {}) {
     const words = countWords(text, getLang());
     if (words < minWords) return;
 
-    const entry = seen.get(key) || { text: String(text).trim(), dwellMs: 0, struggles: 0, answeredCorrectly: false };
+    const entry = seen.get(key)
+      || { text: String(text).trim(), dwellMs: 0, struggles: 0, answeredCorrectly: false, paragraphIndex: null };
     entry.dwellMs += Math.max(0, dwellMs || 0);
+    if (entry.paragraphIndex == null && Number.isInteger(paragraphIndex) && paragraphIndex >= 0) {
+      entry.paragraphIndex = paragraphIndex;
+    }
     seen.set(key, entry);
   }
 
