@@ -390,8 +390,14 @@ export async function createHost(deps) {
   });
 
   // ── Quiz generation ─────────────────────────────────────────────────────
+  // Item 13i: assignmentId, if this page has one, rides along on the quiz
+  // URL exactly the way assignments.js already appends it to the PDF
+  // viewer URL — quiz.js is a separate extension page (no content-script
+  // context to inherit it from) and reads it back the same way viewer.js
+  // does, to know it should report outcomes for this specific quiz.
   function openQuizPage(key) {
-    const url = chrome.runtime.getURL('src/popup/quiz.html') + (key ? '?key=' + encodeURIComponent(key) : '');
+    let url = chrome.runtime.getURL('src/popup/quiz.html') + (key ? '?key=' + encodeURIComponent(key) : '');
+    if (assignmentId) url += (key ? '&' : '?') + 'assignmentId=' + encodeURIComponent(assignmentId);
     try { chrome.runtime.sendMessage({ action: 'openTab', url }); } catch (e) {}
   }
 
@@ -406,41 +412,66 @@ export async function createHost(deps) {
       const picked = sessionRecall.select(QUIZ_TARGET_COUNT);
       if (!picked.length) return false;
 
-      // Item 44: quiz questions get generated at whatever level each picked
-      // paragraph's session history calls for, not always recognition — but
-      // this stays ONE fetchQuestions call per distinct level needed
-      // (bounded at 4, the ladder's own size), not one per paragraph.
-      // tests/contract/questions.js only accepts one level per call, so
-      // paragraphs that land on the same level are combined into the same
-      // request, same as the un-escalated version of this function always
-      // combined all of them into one. In practice most paragraphs have no
-      // prior attempt this session and land on 'recognition' together, so
-      // this is usually still the same single call it always was.
-      const groups = new Map(); // level -> paragraph texts
-      for (const p of picked) {
-        const paragraphKey = p.text.slice(0, 80).trim();
-        const level = pickLevel(paragraphKey);
-        if (!groups.has(level)) groups.set(level, []);
-        groups.get(level).push(p.text);
-      }
-
-      // `count` requests how many QUESTIONS to write from the combined text,
-      // not how many paragraphs are in it — a single paragraph can and does
-      // yield several questions (this is exactly what the un-escalated
-      // version of this function always asked for: QUIZ_TARGET_COUNT
-      // questions from however many paragraphs got picked). Splitting into
-      // level groups must not silently shrink that request to "one question
-      // per paragraph" — each group's share of QUIZ_TARGET_COUNT is
-      // proportional to how many of the picked paragraphs landed in it, so
-      // the single-group case (the common one — most paragraphs have no
-      // prior attempt yet) asks for exactly QUIZ_TARGET_COUNT, same as before.
       const questions = [];
-      for (const [level, texts] of groups) {
-        const share = Math.max(1, Math.round((QUIZ_TARGET_COUNT * texts.length) / picked.length));
-        const opts = { count: share, kind: 'recall' };
-        if (level !== 'recognition') opts.level = level;
-        const qs = await fetchQuestions(texts.join('\n\n'), opts);
-        questions.push(...qs);
+      if (assignmentId) {
+        // Item 13i: a quiz outcome needs a real paragraph_index per
+        // question (13g's server contract), and a question generated from
+        // several paragraphs' COMBINED text (the ordinary path below)
+        // cannot be attributed back to just one of them. So under
+        // assignment context specifically, generation is one
+        // fetchQuestions() call per picked paragraph instead — more AI
+        // calls than the ordinary path, deliberately, only here — and each
+        // resulting question is tagged with the real paragraphIndex
+        // sessionRecall recorded it under (session-recall.js's own
+        // comment on recordRead()). A paragraph with no recorded index
+        // (shouldn't happen in practice, but not assumed) yields questions
+        // with paragraphIndex: null — outcomes.js's own guard already
+        // refuses to submit those rather than guessing one.
+        for (const p of picked) {
+          const paragraphKey = p.text.slice(0, 80).trim();
+          const level = pickLevel(paragraphKey);
+          const opts = { count: Math.max(1, Math.round(QUIZ_TARGET_COUNT / picked.length)), kind: 'recall' };
+          if (level !== 'recognition') opts.level = level;
+          const qs = await fetchQuestions(p.text, opts);
+          for (const q of qs) q.paragraphIndex = Number.isInteger(p.paragraphIndex) ? p.paragraphIndex : null;
+          questions.push(...qs);
+        }
+      } else {
+        // Item 44: quiz questions get generated at whatever level each picked
+        // paragraph's session history calls for, not always recognition — but
+        // this stays ONE fetchQuestions call per distinct level needed
+        // (bounded at 4, the ladder's own size), not one per paragraph.
+        // tests/contract/questions.js only accepts one level per call, so
+        // paragraphs that land on the same level are combined into the same
+        // request, same as the un-escalated version of this function always
+        // combined all of them into one. In practice most paragraphs have no
+        // prior attempt this session and land on 'recognition' together, so
+        // this is usually still the same single call it always was.
+        const groups = new Map(); // level -> paragraph texts
+        for (const p of picked) {
+          const paragraphKey = p.text.slice(0, 80).trim();
+          const level = pickLevel(paragraphKey);
+          if (!groups.has(level)) groups.set(level, []);
+          groups.get(level).push(p.text);
+        }
+
+        // `count` requests how many QUESTIONS to write from the combined text,
+        // not how many paragraphs are in it — a single paragraph can and does
+        // yield several questions (this is exactly what the un-escalated
+        // version of this function always asked for: QUIZ_TARGET_COUNT
+        // questions from however many paragraphs got picked). Splitting into
+        // level groups must not silently shrink that request to "one question
+        // per paragraph" — each group's share of QUIZ_TARGET_COUNT is
+        // proportional to how many of the picked paragraphs landed in it, so
+        // the single-group case (the common one — most paragraphs have no
+        // prior attempt yet) asks for exactly QUIZ_TARGET_COUNT, same as before.
+        for (const [level, texts] of groups) {
+          const share = Math.max(1, Math.round((QUIZ_TARGET_COUNT * texts.length) / picked.length));
+          const opts = { count: share, kind: 'recall' };
+          if (level !== 'recognition') opts.level = level;
+          const qs = await fetchQuestions(texts.join('\n\n'), opts);
+          questions.push(...qs);
+        }
       }
       if (questions.length < QUIZ_MIN_QUESTIONS) return false;
 
@@ -645,7 +676,7 @@ export async function createHost(deps) {
     setCurrentParagraph: (p) => { currentParagraph = p; },
     setPrevParagraphText: (t) => { prevParagraphText = t; },
     setCogState: (label) => { lastCogState = label; },
-    onParagraphRead: (text, dwellMs) => sessionRecall.recordRead(text, dwellMs),
+    onParagraphRead: (text, dwellMs, paragraphIndex) => sessionRecall.recordRead(text, dwellMs, paragraphIndex),
     onStruggle: (text, paragraphIndex, substate, selfReported) => {
       sessionRecall.recordStruggle(text);
       // Item S6/E4 follow-up — see submitOutcome's own header just above.
