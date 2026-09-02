@@ -208,7 +208,12 @@ function renderQuestion(record, index) {
       });
       // Item 13i: source:'quiz', added by submitQuizOutcome itself — a
       // no-op unless this quiz is on an assignment's document.
-      submitQuizOutcome({ paragraphIndex: question.paragraphIndex, questionId: question.id, correct, confidence });
+      // Item 13j-1: `selected` is the real chosen option index — the same
+      // discrete-option identifier question-card.js's inline path sends.
+      submitQuizOutcome({
+        paragraphIndex: question.paragraphIndex, questionId: question.id, correct, confidence,
+        selectedAnswer: selected,
+      });
 
       appendNextButton(card, record, index);
     };
@@ -261,7 +266,12 @@ function renderQuestion(record, index) {
         // adversarial is never graded, and submitQuizOutcome/outcomes.js
         // only ever includes `correct` when it is a real boolean, the same
         // rule the inline path already follows.
-        submitQuizOutcome({ paragraphIndex: question.paragraphIndex, questionId: question.id, confidence });
+        // Item 13j-1: adversarial has no discrete option at all — explicit
+        // null, never fabricated.
+        submitQuizOutcome({
+          paragraphIndex: question.paragraphIndex, questionId: question.id, confidence,
+          selectedAnswer: null,
+        });
         appendNextButton(card, record, index);
         return;
       }
@@ -307,10 +317,12 @@ function renderQuestion(record, index) {
       // An 'unknown' verdict reports no `correct` at all (undefined, not
       // false) — same reasoning as the inline path: an inconclusive grade
       // is not evidence of a wrong answer.
+      // Item 13j-1: free_recall/scenario are free-text — no discrete
+      // option to record, explicit null, never fabricated.
       submitQuizOutcome({
         paragraphIndex: question.paragraphIndex, questionId: question.id,
         correct: verdict === 'unknown' ? undefined : verdict === 'correct',
-        confidence,
+        confidence, selectedAnswer: null,
       });
 
       appendNextButton(card, record, index);

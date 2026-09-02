@@ -14,7 +14,7 @@
  * directly, not assumed:
  *   POST /api/assignments/:id/outcomes
  *     { paragraph_index, struggled?, question_id?, correct?, confidence?,
- *       reached?, substate?, self_reported?, source? } -> 201 { recorded: true }
+ *       reached?, substate?, self_reported?, source?, selected_answer? } -> 201 { recorded: true }
  * `correct` requires `question_id` to also be present (server-enforced,
  * 422 correct_requires_question_id otherwise) — this module does not
  * duplicate that check; its two real callers in host.js only ever set
@@ -63,7 +63,7 @@ export function createOutcomesManager(opts = {}) {
    * (invalid_paragraph_index, no_session, no_outcomes_url, network_error). */
   async function submit({
     paragraphIndex, struggled, questionId, correct, confidence, reached,
-    substate, selfReported, source,
+    substate, selfReported, source, selectedAnswer,
   } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
@@ -95,6 +95,23 @@ export function createOutcomesManager(opts = {}) {
       body.substate = null;
     }
     if (source === 'inline' || source === 'quiz') body.source = source;
+
+    // Item 13j-1: which specific option — correct or incorrect — the
+    // reader chose, for a recognition-level (real discrete options)
+    // question only. Explicit null when the caller passed one — a
+    // free-text/scenario/adversarial-level answer has no discrete option
+    // to record, and that absence is reported honestly, not omitted as if
+    // the caller had never considered it. undefined (never mentioned at
+    // all) leaves the key fully absent, identical to every caller that
+    // predates this field — same three-way shape substate already uses,
+    // above. The server accepts either a string or a number and treats it
+    // as an opaque identifier (src/http/routes/outcomes.js, confirmed
+    // directly) — sent through as given, not coerced to a string here.
+    if (typeof selectedAnswer === 'string' || typeof selectedAnswer === 'number') {
+      body.selected_answer = selectedAnswer;
+    } else if (selectedAnswer === null) {
+      body.selected_answer = null;
+    }
 
     try {
       const resp = await fetchImpl(outcomesUrl, {

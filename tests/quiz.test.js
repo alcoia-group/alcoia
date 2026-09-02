@@ -178,9 +178,81 @@ describe('quiz.js outcome reporting (item 13i)', () => {
     const body = JSON.parse(seenInit.body);
     expect(body).toEqual({
       paragraph_index: 3, question_id: 'q-server-1', correct: true, confidence: 'high', source: 'quiz',
+      // Item 13j-1: the real chosen option (index 0, the one clicked above).
+      selected_answer: 0,
     });
     expect(body).not.toHaveProperty('pseudonym');
     expect(seenInit.headers.Authorization).toBe('Bearer sess-tok-1');
+  });
+
+  it('a wrong quiz answer under assignment context sends the real WRONG option as selected_answer', async () => {
+    installFakeIndexedDB();
+    loadQuizBody();
+    setLocation('?key=doc4&assignmentId=assign-1');
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_quiz_pending: { key: 'doc4', questions: [RECOGNITION_QUESTION], createdAt: Date.now() },
+      sra_session: { token: 'sess-tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
+      TOKEN_URL: 'https://api.alcoia.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
+    });
+
+    let seenInit = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenInit = init; return { ok: true, json: async () => ({ recorded: true }) }; });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    await importFreshQuizJs();
+    await vi.waitFor(() => expect(document.querySelector('.sra-q-option[data-index="1"]')).not.toBeNull());
+
+    document.querySelector('.sra-q-option[data-index="1"]').click(); // wrong — answerIndex is 0
+    await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
+    document.querySelector('[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    const body = JSON.parse(seenInit.body);
+    expect(body.correct).toBe(false);
+    expect(body.selected_answer).toBe(1);
+  });
+
+  it('a free-text-level quiz question (adversarial) sends selected_answer: null explicitly', async () => {
+    installFakeIndexedDB();
+    loadQuizBody();
+    setLocation('?key=doc5&assignmentId=assign-1');
+    const adversarialQuestion = {
+      id: 'q-server-adv', q: 'Argue against this claim.', level: 'adversarial',
+      span: 'The relationship is real but weak.', paragraphIndex: 6,
+    };
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_quiz_pending: { key: 'doc5', questions: [adversarialQuestion], createdAt: Date.now() },
+      sra_session: { token: 'sess-tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
+      TOKEN_URL: 'https://api.alcoia.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
+    });
+
+    let seenInit = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenInit = init; return { ok: true, json: async () => ({ recorded: true }) }; });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    await importFreshQuizJs();
+    await vi.waitFor(() => expect(document.querySelector('.sra-q-answer-input')).not.toBeNull());
+
+    const textarea = document.querySelector('.sra-q-answer-input');
+    textarea.value = 'a counter-argument';
+    textarea.dispatchEvent(new Event('input'));
+    document.querySelector('.sra-q-submit-text').click();
+    await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
+    document.querySelector('[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    const body = JSON.parse(seenInit.body);
+    expect(body.paragraph_index).toBe(6);
+    expect(body).not.toHaveProperty('correct'); // adversarial is never graded
+    expect(body).toHaveProperty('selected_answer', null);
   });
 
   it('a quiz taken on ordinary (non-assignment) reading produces ZERO network calls — explicit regression', async () => {

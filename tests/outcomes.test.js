@@ -163,3 +163,36 @@ describe('submit — validation and failure handling', () => {
     await expect(m.submit({ paragraphIndex: 1, struggled: true })).resolves.toEqual({ ok: false, error: 'network_error' });
   });
 });
+
+/* Item 13j-1: selected_answer. Field name and shape (a string OR number
+ * option identifier, or explicit null) copied from reading alcoiaServer's
+ * src/http/routes/outcomes.js directly. */
+describe('submit — selected_answer (item 13j-1)', () => {
+  async function bodyFor(fields) {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
+    await m.submit(fields);
+    return seenBody;
+  }
+
+  it('a real chosen option index is sent as selected_answer', async () => {
+    const body = await bodyFor({ paragraphIndex: 3, questionId: 'q-1', correct: false, selectedAnswer: 2 });
+    expect(body.selected_answer).toBe(2);
+  });
+
+  it('index 0 is a real answer, not falsy-and-dropped', async () => {
+    const body = await bodyFor({ paragraphIndex: 3, questionId: 'q-1', correct: true, selectedAnswer: 0 });
+    expect(body).toHaveProperty('selected_answer', 0);
+  });
+
+  it('selectedAnswer: null (no discrete option — free-text/scenario/adversarial) is sent as explicit null, never omitted', async () => {
+    const body = await bodyFor({ paragraphIndex: 3, questionId: 'q-1', correct: null, selectedAnswer: null });
+    expect(body).toHaveProperty('selected_answer', null);
+  });
+
+  it('selectedAnswer never mentioned at all (undefined) stays fully absent — identical to every pre-13j-1 caller', async () => {
+    const body = await bodyFor({ paragraphIndex: 3, struggled: true });
+    expect(body).not.toHaveProperty('selected_answer');
+  });
+});
