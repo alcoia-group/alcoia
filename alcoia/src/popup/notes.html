@@ -86,12 +86,12 @@
     .note-card {
       display: flex; flex-direction: column;
       background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 15px 16px 13px;
-      transition: border-color 0.15s;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      padding: 16px 17px 14px;
+      transition: background 0.15s;
     }
-    .note-card:hover { border-color: var(--border-2); }
+    .note-card:hover { background: var(--paper-2); }
     .note-header {
       display: flex; align-items: center; justify-content: space-between;
       gap: 10px; margin-bottom: 10px;
@@ -127,7 +127,7 @@
 
     .note-text {
       font-family: var(--alc-serif);
-      font-size: 14px; line-height: 1.7; color: var(--text);
+      font-size: 14px; line-height: 1.6; color: var(--text);
       max-height: 8.5em; overflow: hidden;
       white-space: pre-wrap; word-break: break-word;
     }

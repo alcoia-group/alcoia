@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="../styles/panel.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--paper); color: var(--text); font-family: var(--alc-ui); font-size: 13px;
+    body { background: var(--paper); color: var(--text); font-family: var(--alc-ui); font-size: 14px; line-height: 1.6;
            min-height: 100vh; }
 
     .header {
@@ -15,8 +15,8 @@
       background: var(--paper); border-bottom: 1px solid var(--border);
       padding: 16px 22px 12px; display: flex; align-items: center; justify-content: space-between;
     }
-    .brand { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
-    .count-badge { font-size: 11px; color: var(--muted); }
+    .brand { font-family: var(--alc-serif); font-size: 17px; font-weight: 600; }
+    .count-badge { font-family: var(--alc-ui); font-size: 11px; color: var(--faint); }
 
     .controls {
       padding: 10px 22px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
@@ -24,8 +24,8 @@
     }
     .filter-btn {
       padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border);
-      background: none; cursor: pointer; font-family: var(--alc-ui); font-size: 11px;
-      color: var(--muted); transition: all 0.15s;
+      background: none; cursor: pointer; font-family: var(--alc-ui); font-size: 12px; font-weight: 600;
+      color: var(--muted); transition: border-color 0.15s, color 0.15s, background 0.15s;
     }
     .filter-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
     .filter-swatch {
@@ -34,41 +34,52 @@
     }
     .clear-all {
       margin-left: auto; background: none; border: none; font-family: var(--alc-ui);
-      font-size: 11px; color: var(--wrong); cursor: pointer;
+      font-size: 12px; font-weight: 600; color: var(--wrong); cursor: pointer;
       padding: 4px 8px; border-radius: 6px; transition: background 0.12s;
     }
     .clear-all:hover { background: rgba(180,121,95,0.1); }
 
-    [data-hl-list] { padding: 14px 22px 40px; display: flex; flex-direction: column; gap: 10px; }
+    /* Type scale (this pass): body 14px/1.6, labels 12px/1.4, timestamps 11px.
+       A highlight is a reading artifact, not a quote block: the passage
+       stays in Literata (the voice it was read in), the note the reader
+       attached is Inter (the reader's own voice, not the page's), and
+       date/source recede to the timestamp weight. No box, no left border —
+       hairline dividers between entries do the separating instead, the
+       same "elevation is a hairline" rule every other page here follows. */
+    [data-hl-list] { padding: 6px 22px 40px; display: flex; flex-direction: column; }
 
     .hl-card {
-      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-      padding: 13px 16px; position: relative; cursor: pointer;
-      border-left: 4px solid #ccc;
-      transition: box-shadow 0.15s;
+      padding: 18px 2px; position: relative; cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.15s;
     }
-    .hl-card:hover { box-shadow: 0 3px 14px rgba(0,0,0,0.06); }
-    .hl-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    [data-hl-list] .hl-card:first-child { padding-top: 8px; }
+    .hl-card:hover { background: var(--paper-2); }
+    .hl-card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .hl-text {
-      font-size: 13px; line-height: 1.6; margin-bottom: 8px;
+      font-family: var(--alc-serif);
+      font-size: 15px; line-height: 1.6; margin-bottom: 9px;
       color: var(--text);
+      padding-right: 22px; /* clears .hl-delete without needing its own box */
     }
     .hl-explanation {
-      margin: 0 0 8px;
+      margin: 0 0 9px;
     }
     .hl-explanation summary {
-      cursor: pointer; font-size: 10px; color: var(--accent); list-style: none;
+      cursor: pointer; font-family: var(--alc-ui); font-size: 12px; font-weight: 600;
+      color: var(--accent-2); list-style: none;
       display: inline-flex; align-items: center; gap: 4px;
     }
     .hl-explanation summary::-webkit-details-marker { display: none; }
     .hl-explanation summary::before { content: '▸'; font-size: 9px; transition: transform 0.12s; }
     .hl-explanation[open] summary::before { transform: rotate(90deg); }
     .hl-explanation-text {
-      font-size: 12px; line-height: 1.6; color: var(--text); margin-top: 6px;
-      padding: 8px 10px; background: var(--accent-sf); border-radius: 8px;
+      font-family: var(--alc-ui);
+      font-size: 14px; line-height: 1.6; color: var(--text); margin-top: 7px;
     }
     .hl-meta {
-      font-size: 10px; color: var(--muted); display: flex; gap: 10px; align-items: center;
+      font-family: var(--alc-ui);
+      font-size: 11px; color: var(--faint); display: flex; gap: 10px; align-items: center;
       flex-wrap: wrap;
     }
     .hl-site { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -76,20 +87,21 @@
     .hl-doc-delete { flex-shrink: 0; color: var(--muted); cursor: pointer; text-decoration: underline; }
     .hl-doc-delete:hover { color: var(--wrong); }
     .hl-delete {
-      position: absolute; top: 10px; right: 12px;
-      background: none; border: none; cursor: pointer; font-size: 16px;
+      position: absolute; top: 18px; right: 2px;
+      background: none; border: none; cursor: pointer; font-size: 15px;
       color: var(--faint); transition: color 0.12s; line-height: 1; padding: 2px;
     }
     .hl-delete:hover { color: var(--wrong); }
 
     .hl-empty {
       text-align: center; padding: 60px 22px; color: var(--muted);
+      font-family: var(--alc-ui);
     }
-    .hl-empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
-    .hl-empty p { font-size: 13px; line-height: 1.7; }
+    .hl-empty-icon { display: none; } /* no emoji/icon-as-decoration in the interface */
+    .hl-empty p { font-size: 14px; line-height: 1.7; }
     .hl-empty code {
       background: var(--accent-sf); border-radius: 4px; padding: 1px 6px;
-      font-size: 11px; color: var(--accent);
+      font-size: 12px; color: var(--accent-2);
     }
   </style>
 </head>
