@@ -1965,8 +1965,9 @@ await writeHighlightStore({});
 // viewer page's own escape-hatch button and print control exist and work.
 let pdfViewerResult;
 try {
+  // Item 15a-1: pdfTakeoverToggle moved from popup.html to settings.html.
   const settingsHelper = await ctx.newPage();
-  await settingsHelper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await settingsHelper.goto(`chrome-extension://${extId}/src/popup/settings.html`);
   const defaultValue = await settingsHelper.evaluate(() => new Promise((r) =>
     chrome.storage.local.get({ sra_pdf_takeover: true }, (res) => r(res.sra_pdf_takeover))));
   await settingsHelper.evaluate(() => document.getElementById('pdfTakeoverToggle').click());
@@ -2580,14 +2581,15 @@ try {
 }
 
 // ── Pin / auto-dismiss exclusivity (item 34) ────────────────────────────────
-// A real popup.html load, checking the UI itself rather than just the
-// source text: clicking "Keep cards until I close them" must force "Clear
-// cards automatically" off and disable it, and clicking it off again must
+// A real settings.html load (item 15a-1: this control moved out of
+// popup.html), checking the UI itself rather than just the source text:
+// clicking "Keep cards until I close them" must force "Clear cards
+// automatically" off and disable it, and clicking it off again must
 // re-enable the other control.
 let pinAutohideResult;
 try {
   const popupPage = await ctx.newPage();
-  await popupPage.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await popupPage.goto(`chrome-extension://${extId}/src/popup/settings.html`);
   await popupPage.waitForTimeout(300);
 
   await popupPage.evaluate(() => new Promise((r) => chrome.storage.local.set(

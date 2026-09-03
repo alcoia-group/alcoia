@@ -100,12 +100,20 @@ describe('backend origin configuration', () => {
     const background = fs.readFileSync(path.join(ROOT, 'alcoia/background.js'), 'utf8');
     expect(background).toMatch(/self\.ALCOIA_CONFIG\.SUMMARIZE_URL/);
 
-    const popupJs = fs.readFileSync(path.join(ROOT, 'alcoia/src/popup/popup.js'), 'utf8');
-    expect(popupJs).toMatch(/sra_backend_url:\s*self\.ALCOIA_CONFIG\.SUMMARIZE_URL/);
+    // Item 15a-1: popup.js no longer holds its own copy of this default —
+    // it stopped broadcasting settings to content.js entirely (settings.js
+    // owns that now, the sole place a settings message is composed and
+    // sent). settings.js's own DEFAULTS is what has to match config.js.
+    const settingsJs = fs.readFileSync(path.join(ROOT, 'alcoia/src/popup/settings.js'), 'utf8');
+    expect(settingsJs).toMatch(/sra_backend_url:\s*self\.ALCOIA_CONFIG\.SUMMARIZE_URL/);
 
     const popupHtml = fs.readFileSync(path.join(ROOT, 'alcoia/src/popup/popup.html'), 'utf8');
     expect(popupHtml).toMatch(/src="\.\.\/shared\/config\.js"/);
     expect(popupHtml).not.toMatch(/localhost:3000/);
+
+    const settingsHtml = fs.readFileSync(path.join(ROOT, 'alcoia/src/popup/settings.html'), 'utf8');
+    expect(settingsHtml).toMatch(/src="\.\.\/shared\/config\.js"/);
+    expect(settingsHtml).not.toMatch(/localhost:3000/);
 
     // Item 33: the editable backend-URL field moved to the diagnostics page
     // (developer-only, sra_debug-gated) — popup.js/popup.html no longer show
@@ -116,7 +124,7 @@ describe('backend origin configuration', () => {
     expect(diagnosticsHtml).toMatch(/src="\.\.\/shared\/config\.js"/);
 
     // No file goes back to hardcoding the origin instead of reading config.
-    for (const [label, text] of [['content.js', content], ['background.js', background], ['popup.js', popupJs], ['diagnostics.js', diagnosticsJs]]) {
+    for (const [label, text] of [['content.js', content], ['background.js', background], ['settings.js', settingsJs], ['diagnostics.js', diagnosticsJs]]) {
       expect(text, `${label} should not hardcode localhost:3000`).not.toMatch(/http:\/\/localhost:3000/);
     }
   });
