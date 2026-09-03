@@ -116,6 +116,9 @@ $('signInFormEl').addEventListener('submit', async (e) => {
 });
 
 $('signOutBtn').addEventListener('click', async () => {
+  // Matches popup.js/settings.js's own confirm() — same control, same
+  // one-click-too-easy concern. Nothing local is deleted by signing out.
+  if (!confirm('Sign out of alcoia? You can sign back in any time — nothing on this device is deleted.')) return;
   await session.clearSession();
   showForm();
 });
