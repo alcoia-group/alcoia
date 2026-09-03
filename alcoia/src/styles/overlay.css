@@ -56,12 +56,23 @@
   --alc-sage-sf:   #EAEFEA;
   --alc-warn:      #9A6B2F;
   --alc-wrong:     #B4795F;
-  --alc-radius:    14px;
-  --alc-radius-sm: 10px;
+  /* Tightened from 14px/10px (item 15a-2) — the card's most-designed surface
+     reads as considered at a tighter radius; a softer one drifted toward
+     the generic rounded-card look this pass moves away from. 8px is the
+     ceiling on the card itself; --alc-radius-sm follows proportionally. */
+  --alc-radius:    8px;
+  --alc-radius-sm: 6px;
+  /* Three layers, not one flat rgba(0,0,0,.1): a hairline that keeps the
+     card legible against arbitrary page backgrounds (unchanged reason —
+     see this file's header), a close, slightly firmer contact shadow so
+     the card reads as sitting just above the page rather than glued to
+     it, and a soft, wide ambient falloff that gives it real depth without
+     going dramatic. Still quiet — "high trust, not high energy" — just no
+     longer the same weight as a flat default. */
   --alc-shadow:
     0 0 0 1px var(--alc-border),
-    0 1px 2px rgba(51,51,51,0.05),
-    0 8px 24px -12px rgba(51,51,51,0.16);
+    0 2px 5px rgba(51,51,51,0.07),
+    0 16px 36px -16px rgba(51,51,51,0.24);
 }
 
 /* ── Paragraph highlight — the passage a card is talking about ───────────── */
@@ -283,15 +294,24 @@
   margin: 0 0 9px;
 }
 .sra-q-text {
+  /* Explicit, not just inherited from .sra-popup — this is the one line in
+     the card that most needs to read as "quoting the reading", so it
+     shouldn't depend on the card's own default holding. */
+  font-family: var(--alc-serif);
   font-size: 15px;
   font-weight: 700;
   line-height: 1.55;
   margin: 0 0 12px;
 }
 .sra-q-options { display: flex; flex-direction: column; gap: 6px; }
+/* Item 15a-2: answer/button text is Inter (var(--alc-ui)), not the reading
+   serif — these are controls the reader operates, not prose they read; the
+   question above stays Literata because it quotes the passage, but a
+   clickable option is UI, and now reads as one at a glance. */
 .sra-q-option {
   text-align: left;
-  font-family: var(--alc-serif);
+  font-family: var(--alc-ui);
+  font-weight: 550;
   font-size: 13.5px;
   line-height: 1.5;
   padding: 9px 12px;
@@ -335,18 +355,35 @@
   margin: 0 0 7px;
 }
 .sra-q-confidence-options { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* Item 15a-2: "Not sure" and "Pretty sure" used to be visually identical —
+   the same neutral button twice. They mean different things, so they carry
+   different weight now. "Pretty sure" gets the brand lilac: a reader
+   committing to confidence is doing something more deliberate, and the
+   accent marks that. "Not sure" stays deliberately plain paper/border — not
+   sage (sage is reserved for what the system itself produced: the evidence
+   badge, the quoted span, a correct answer — never a reader's own choice),
+   and not a "lesser" or warning colour either, since low confidence isn't a
+   wrong answer. "Rather not say" (.sra-q-conf-skip) already recedes further
+   still, as understated underlined text — that three-tier weight (skip <
+   not sure < pretty sure) is the hierarchy, not three equal buttons. */
 .sra-q-conf-btn {
   font-family: var(--alc-ui);
   font-size: 12.5px;
-  padding: 6px 11px;
+  font-weight: 550;
+  padding: 6px 12px;
   border-radius: var(--alc-radius-sm);
   border: 1px solid var(--alc-border);
   background: rgba(255,255,255,0.55);
   color: inherit;
   cursor: pointer;
-  transition: background 0.13s, border-color 0.13s;
+  transition: background 0.13s, border-color 0.13s, color 0.13s;
 }
 .sra-q-conf-btn:hover { background: var(--alc-accent-sf); border-color: var(--alc-border-2); }
+.sra-q-conf-btn[data-conf="high"] {
+  border-color: var(--alc-border-2);
+  color: var(--alc-accent-2);
+}
+.sra-q-conf-btn[data-conf="high"]:hover { background: var(--alc-accent-sf); }
 .sra-q-conf-skip {
   font-family: var(--alc-ui);
   font-size: 12px;

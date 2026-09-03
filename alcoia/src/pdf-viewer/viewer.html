@@ -52,9 +52,15 @@
     }
     .tb-divider { width: 1px; align-self: stretch; margin: 10px 4px; background: var(--border-2); }
 
+    /* Item 15a-2: tightened to 4px (this pass's ceiling on toolbar buttons).
+       Font stays system-ui — item 39's own decision, restated in CLAUDE.md
+       §8, is that this chrome matches Chrome's native PDF viewer exactly
+       except for colour, which the 15a-2 brief's "Inter 13px" prescription
+       would undo. Flagged rather than silently overridden or silently
+       kept without comment. */
     .tb-icon-btn {
       background: none; border: none; color: var(--text); cursor: pointer;
-      width: 32px; height: 32px; border-radius: 6px; display: flex;
+      width: 32px; height: 32px; border-radius: 4px; display: flex;
       align-items: center; justify-content: center; flex-shrink: 0;
     }
     .tb-icon-btn:hover:not(:disabled) { background: rgba(230,227,219,0.10); }
