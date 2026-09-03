@@ -102,7 +102,13 @@
     }
     .entry-list .entry-btn:last-child { border-bottom: none; }
     .entry-btn:hover { background: var(--paper-2); }
+    .entry-btn:disabled { cursor: not-allowed; }
+    .entry-btn:disabled:hover { background: none; }
+    .entry-btn:disabled .entry-btn-name { color: var(--faint); }
     .entry-btn-name { font-size: 13px; font-weight: 500; color: var(--text); }
+    .quiz-gate-note {
+      margin: 6px 16px 0; font-family: var(--alc-ui); font-size: 11px; color: var(--faint);
+    }
     .entry-badge {
       display: inline-block; padding: 1px 6px;
       border-radius: 10px; background: var(--warn); color: #fff;
@@ -205,13 +211,23 @@
       <button class="entry-btn" id="notesBtn">
         <span class="entry-btn-name">Notes</span>
       </button>
-      <button class="entry-btn" id="quizBtn">
-        <span class="entry-btn-name">Quiz</span>
-      </button>
       <button class="entry-btn" id="highlightsBtn">
         <span class="entry-btn-name">Highlights</span>
       </button>
+      <!-- Last in the list — quizGateNote sits directly beneath it, and
+           with Quiz any other position that note read as explaining
+           whichever row happened to be last, not specifically Quiz. -->
+      <button class="entry-btn" id="quizBtn" disabled>
+        <span class="entry-btn-name">Quiz</span>
+      </button>
     </div>
+    <!-- Quiz is generated from whatever tab was active when this popup
+         opened, not browsed generically — greyed out (see popup.js's
+         refreshQuizGate) until that tab has enough tracked reading, same
+         threshold coverage-gate.js's evaluate() uses for the end-of-reading
+         offer. This note carries the real reason from content.js's own
+         response, never a guess. -->
+    <p class="quiz-gate-note" id="quizGateNote">not enough reading tracked on this page yet</p>
 
     <!-- Orphaned by the reading/home split below — not reading-page-specific
          (page summary, recall, receipt, reading-speed calibration stay
