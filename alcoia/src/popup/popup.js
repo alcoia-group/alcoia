@@ -183,6 +183,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   openPage('signInBtn', 'src/popup/account.html');
   $('signOutBtn')?.addEventListener('click', async () => {
+    // One click used to sign out immediately — too easy to hit by accident
+    // in a compact popup. Nothing local is deleted by signing out (CLAUDE.md:
+    // notes/highlights/quizzes stay on-device either way), but it does drop
+    // paid-feature access until signing back in, which is worth a pause.
+    if (!confirm('Sign out of alcoia? You can sign back in any time — nothing on this device is deleted.')) return;
     await session.clearSession();
     refreshAccountStatus();
   });
@@ -205,13 +210,57 @@ document.addEventListener('DOMContentLoaded', () => {
   openPage('joinClassBtn',     'src/popup/join-class.html');
   openPage('upgradeBtn',       'src/popup/upgrade.html');
 
-  // Quiz: an entry point to quiz.html now, alongside Notes/Highlights,
-  // per the task's own home-mode spec. The old popup's per-page
-  // coverage-gated "start a quiz on THIS page" flow (checkQuizCoverage /
-  // startQuiz messages) has no home in either mode as specified — reading
-  // mode is capped at three controls, home mode's Quiz is a plain entry
-  // point like its neighbours. Dropped, not hidden; flagged in the report.
-  openPage('quizBtn', 'src/popup/quiz.html');
+  // Quiz (restored — see this file's git history / the 15a-1 report for
+  // the mistake this corrects): quiz.html requires a ?key= identifying
+  // which document's quiz to show (quiz.js's boot(): "No quiz to show" is
+  // the ENTIRE result of opening it bare) — there is no generic quiz
+  // browser to link to. This has to stay the same coverage-gated
+  // generate-and-open flow the old popup used: checkQuizCoverage decides
+  // whether the active tab has enough tracked reading (coverage-gate.js's
+  // evaluate(), the same threshold the end-of-reading offer itself reads —
+  // CLAUDE.md, "The quiz — decided"), and startQuiz is what actually
+  // generates one and navigates content.js's own tab to quiz.html?key=...
+  // on success. Gated on the tab active when the popup opened, which in
+  // home mode is usually not a reading page — greyed out is the accurate,
+  // not broken, result of that.
+  const quizBtn = $('quizBtn');
+  const quizGateNote = $('quizGateNote');
+  let quizGateTab = null;
+
+  function refreshQuizGate() {
+    if (!quizBtn) return;
+    if (!quizGateTab) {
+      quizBtn.disabled = true;
+      if (quizGateNote) {
+        quizGateNote.hidden = false;
+        quizGateNote.textContent = 'not enough reading tracked on this page yet';
+      }
+      return;
+    }
+    sendToTab(quizGateTab.id, { action: 'checkQuizCoverage' }, (resp, err) => {
+      const ready = !err && resp && resp.ready === true;
+      quizBtn.disabled = !ready;
+      if (quizGateNote) {
+        quizGateNote.hidden = ready;
+        quizGateNote.textContent = (!err && resp && resp.reason)
+          || 'not enough reading tracked on this page yet';
+      }
+    });
+  }
+
+  quizBtn?.addEventListener('click', () => {
+    if (quizBtn.disabled || !quizGateTab) return;
+    const idle = quizBtn.querySelector('.entry-btn-name')?.textContent;
+    quizBtn.disabled = true;
+    const nameEl = quizBtn.querySelector('.entry-btn-name');
+    if (nameEl) nameEl.textContent = 'Preparing…';
+    sendToTab(quizGateTab.id, { action: 'startQuiz' }, (resp, err) => {
+      if (!err && resp && resp.started) { window.close(); return; }
+      quizBtn.disabled = false;
+      if (nameEl && idle) nameEl.textContent = idle;
+      if (quizGateNote) quizGateNote.textContent = "Couldn't prepare a quiz right now — try again in a moment.";
+    });
+  });
 
   // Highlights: preserves the sidebar-first behavior with a full-page
   // fallback when no content script is reachable on the active tab.
@@ -226,11 +275,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  function enterHomeMode() {
+  function enterHomeMode(tab) {
     readingMode.hidden = true;
     homeMode.hidden = false;
     refreshAccountStatus();
     refreshUpgradeBanner();
+    quizGateTab = tab || null;
+    refreshQuizGate();
   }
 
   // ═══════════════════════ Mode detection ═══════════════════════════════
@@ -241,7 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!chrome.runtime.lastError && resp && resp.state) {
         enterReadingMode(tab);
       } else {
-        enterHomeMode();
+        enterHomeMode(tab);
       }
     });
   });

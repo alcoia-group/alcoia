@@ -115,6 +115,11 @@ describe('popup.js\'s Account section renders the real email end to end', () => 
     });
     vi.stubGlobal('chrome', chrome);
     vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize' });
+    // Sign-out now confirms first (jsdom's own window.confirm is
+    // unimplemented and returns undefined, which would otherwise make this
+    // click a silent no-op) — stubbed to accept, since this test is about
+    // what happens AFTER a reader confirms, not the confirmation itself.
+    vi.stubGlobal('confirm', () => true);
 
     await importFreshPopupJs();
     await vi.waitFor(() => expect(document.getElementById('accountSignedIn').hidden).toBe(false));
