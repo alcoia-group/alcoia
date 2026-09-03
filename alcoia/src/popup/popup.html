@@ -7,279 +7,113 @@
   <link rel="stylesheet" href="../styles/fonts.css">
   <link rel="stylesheet" href="../styles/panel.css">
   <style>
-    /* Popup-specific layout. Shared primitives — pills, buttons, fields, key
-       caps, the colour tokens — live in panel.css. */
+    /* See the header/state-card/footer comments this file used to carry —
+       unchanged reasoning, just less markup below them now that the
+       toggle-heavy body moved to settings.html (item 15a-1). */
+    body { width: 360px; }
 
-    /* Chrome and Firefox (build.mjs's only two targets — there is no
-       Safari build here despite the comment this replaced) both size the
-       toolbar popup TO this content, up to ~800x600. `100vw` inside that
-       popup resolves against the popup's OWN width — which the browser is
-       simultaneously trying to derive FROM this content's measured size.
-       That circular dependency is what caused a real, reproduced bug: the
-       popup flickering open/closed and changing size continuously, with no
-       console error, confirmed via bisection to have started on the exact
-       commit that introduced `100vw` here. A plain fixed width has no such
-       loop to fall into. If a narrower host ever needs supporting, that is
-       a `max-width` added deliberately later, not a viewport unit reached
-       for by default in a context that has no real viewport of its own. */
-    body { width: 400px; }
-
-    /* ── Header ── */
     .header {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
       padding: 14px 16px 13px;
       background: var(--paper-2);
       border-bottom: 1px solid var(--border);
     }
-    /* The wordmark is the logo — there is no separate symbol, so setting the
-       name in type beside it would be saying it twice.
-
-       `align-items: flex-start` is load-bearing: a column flex container
-       stretches its children across the cross axis by default, which pulls
-       the image to the full header width while its height stays pinned and
-       squashes the letterforms. */
     .brand { display: flex; align-items: flex-start; min-width: 0; }
-    .brand-mark {
-      display: block;
-      height: 26px;
-      width: auto;          /* never both dimensions — that is what distorts it */
-      max-width: 100%;
-      object-fit: contain;
-    }
-    /* The supplied wordmark is drawn in black and would vanish on the dark
-       panel, so dark mode swaps to the white-lettered cut of the same art. */
+    .brand-mark { display: block; height: 26px; width: auto; max-width: 100%; object-fit: contain; }
     body.dark-mode .brand-mark.on-paper { display: none; }
     .brand-mark.on-dark { display: none; }
     body.dark-mode .brand-mark.on-dark { display: block; }
 
-    /* ── Reading-state card ──────────────────────────────────────────────
-       The honest summary of what the extension currently knows: the fused
-       state estimate, and the one signal source that drives it. */
-    .state-card {
-      margin: 12px 16px 0;
-      padding: 12px 14px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-    }
-    .state-top { display: flex; align-items: center; gap: 9px; }
-    .state-dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--faint); flex: none;
-      transition: background 0.3s, box-shadow 0.3s;
-    }
-    /* on pace is a sage moment — the system is satisfied, not branded. */
-    .state-dot.live     { background: var(--sage-2); box-shadow: 0 0 0 3px var(--sage-sf); }
-    .state-dot.attn     { background: var(--warn);   box-shadow: 0 0 0 3px rgba(154,107,47,0.12); }
-    .state-dot.loading  { background: var(--gold);   animation: blink 1.1s ease infinite; }
-    .state-dot.error    { background: var(--wrong); }
-    @keyframes blink { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
-
-    .state-name {
-      font-family: var(--alc-serif);
-      font-size: 15px; font-weight: 600; line-height: 1.3;
-      flex: 1; min-width: 0;
-    }
-    .state-why {
-      margin: 6px 0 0 17px;
-      font-size: 11.5px; line-height: 1.5; color: var(--muted);
-    }
-    .state-sources {
-      display: flex; gap: 6px; flex-wrap: wrap;
-      margin: 10px 0 0 17px;
-    }
-    .src-chip {
-      display: inline-flex; align-items: center; gap: 5px;
-      font-size: 10.5px; font-weight: 600;
-      padding: 3px 8px;
-      border-radius: 20px;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      background: var(--paper);
-    }
-    .src-chip.on { color: var(--sage-2); border-color: rgba(111,128,112,0.32); background: var(--sage-sf); }
-    .src-chip.err { color: var(--wrong); border-color: rgba(180,121,95,0.28); }
-    .src-chip i {
-      width: 5px; height: 5px; border-radius: 50%;
-      background: currentColor; opacity: 0.55; font-style: normal;
-    }
-
-    /* ── Tabs ── */
-    .tab-bar { display: flex; gap: 2px; padding: 12px 16px 0; }
-    .tab-btn {
-      flex: 1;
-      padding: 7px 6px 9px;
-      background: none; border: none;
-      border-bottom: 2px solid transparent;
-      font-family: var(--alc-ui);
-      font-size: 11.5px; font-weight: 600;
-      color: var(--muted);
-      cursor: pointer;
-      transition: color 0.15s, border-color 0.15s;
-    }
-    .tab-btn:hover:not(.active) { color: var(--text); }
-    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-    .tab-strip { height: 1px; background: var(--border); margin: 0 0 0; }
-
-    .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
-
-    /* ── Toggle rows and cells ── */
-    .toggle-row {
-      display: flex; align-items: center; justify-content: space-between; gap: 12px;
-      padding: 8px 2px;
-      cursor: pointer;
-      border-radius: 8px;
-    }
-    .toggle-row:hover { background: var(--accent-sf); }
-    .toggle-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .toggle-name { font-size: 12.5px; font-weight: 600; }
-    .toggle-desc { font-size: 11px; color: var(--muted); line-height: 1.45; }
-
-    .toggle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .toggle-cell {
-      display: flex; flex-direction: column; gap: 4px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 10px 11px 11px;
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .toggle-cell:hover { border-color: var(--border-2); background: var(--accent-sf); }
-    .toggle-cell-top {
-      display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
-    }
-    .toggle-cell-name { font-size: 12px; font-weight: 600; line-height: 1.35; }
-    .toggle-cell-desc { font-size: 10.5px; color: var(--muted); line-height: 1.45; }
-
-    /* Marks a control as not part of the default setup. */
-    .opt-tag {
-      font-size: 9.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
-      color: var(--faint); white-space: nowrap;
-    }
-
-    /* ── Reading modes ── */
-    .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-    .mode-btn {
-      text-align: left;
-      padding: 9px 11px 10px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text);
-      font-family: var(--alc-ui);
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s, color 0.15s;
-    }
-    .mode-btn:hover { border-color: var(--border-2); background: var(--accent-sf); }
-    .mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .mode-btn .m-name { display: block; font-size: 12px; font-weight: 700; }
-    .mode-btn .m-desc { display: block; font-size: 10.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
-    .mode-btn.active .m-desc { color: rgba(255,255,255,0.85); }
-
-    /* ── Reading-state legend ── */
-    .chips { display: flex; flex-wrap: wrap; gap: 5px; }
-    .chip {
-      font-size: 10.5px; font-weight: 600;
-      padding: 3px 9px;
-      border-radius: 20px;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      background: var(--surface);
-      transition: all 0.2s;
-    }
-    /* Each state gets a hue that cannot be mistaken for the brand lilac —
-       otherwise "the system acted here" and "this is alcoia" read the same. */
-    .chip.on            { border-color: var(--sage-2); color: var(--sage-2); background: var(--sage-sf); }
-    .chip.on-struggling { border-color: var(--warn);   color: var(--warn);   background: rgba(154,107,47,0.08); }
-    .chip.on-drifting   { border-color: #7E6E5A;       color: #7E6E5A;       background: rgba(90,75,138,0.07); }
-    .chip.on-skimming   { border-color: #5B7A99;       color: #5B7A99;       background: rgba(91,122,153,0.07); }
-
-    /* ── Shortcuts ── */
-    .kbd-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 11px 12px;
-    }
-    .kbd-grid {
-      display: grid; grid-template-columns: auto 1fr;
-      gap: 6px 11px; align-items: center;
-      font-size: 11px;
-    }
-    /* Key caps hug their own label rather than stretching to the width of the
-       longest one, which turned the column into a wall of equal grey boxes. */
-    .kbd-grid kbd { justify-self: start; }
-    .kbd-desc { color: var(--muted); }
-
-    #dyslexiaOptions { padding: 2px 0 0; }
-
     .perm-banner {
-      margin: 12px 16px 0;
-      padding: 12px 14px;
-      background: var(--accent-sf);
-      border: 1px solid var(--accent-sf2);
-      border-radius: var(--radius);
+      margin: 12px 16px 0; padding: 12px 14px;
+      background: var(--accent-sf); border: 1px solid var(--accent-sf2); border-radius: var(--radius);
     }
     .perm-banner p { margin: 0 0 10px; font-size: 12px; line-height: 1.5; }
     .perm-banner .btn { width: 100%; }
-    /* Without host access there is no reading state to show, so do not show a
-       stale one. */
-    body.no-host-access .state-card { display: none; }
 
-    /* Switched off: the panel stays usable but says so, rather than showing
-       a live reading state it is no longer producing. */
-    body.assistant-off .state-card { opacity: 0.55; }
-    body.assistant-off .tab-panel  { opacity: 0.6; }
-
-    /* ── Touch and narrow viewports ── */
-    /* 360px, not 400px: the Chrome popup body *is* 400px wide, so a
-       max-width:400px query fires in the ordinary case and collapses both
-       grids to a single column on every desktop install. */
-    @media (max-width: 360px) {
-      .toggle-grid, .mode-grid, .btn-grid { grid-template-columns: 1fr; }
-      .section { padding: 12px 14px; }
-      .state-card { margin: 12px 14px 0; }
+    /* ── Reading mode ─────────────────────────────────────────────────── */
+    .page-line {
+      margin: 14px 16px 0;
+      display: flex; align-items: center; gap: 9px;
     }
+    .page-favicon { width: 16px; height: 16px; flex: none; border-radius: 3px; }
+    .page-title {
+      font-family: var(--alc-serif); font-size: 13.5px; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+    }
+    .state-card {
+      margin: 10px 16px 0; padding: 12px 14px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    }
+    .state-top { display: flex; align-items: center; gap: 9px; }
+    .state-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; transition: background 0.3s, box-shadow 0.3s; }
+    .state-dot.live { background: var(--sage-2); box-shadow: 0 0 0 3px var(--sage-sf); }
+    .state-dot.attn { background: var(--warn); box-shadow: 0 0 0 3px rgba(154,107,47,0.12); }
+    .state-name { font-family: var(--alc-serif); font-size: 15px; font-weight: 600; line-height: 1.3; flex: 1; min-width: 0; }
+    .state-why { margin: 6px 0 0 17px; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+
+    .reading-actions {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
+      margin: 14px 16px 16px;
+    }
+    .reading-actions .btn { padding: 10px 4px; font-size: 11.5px; }
+
+    /* ── Home mode ────────────────────────────────────────────────────── */
+    .account-line {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      margin: 14px 16px 0; padding: 11px 13px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    }
+    .account-line p.section-note { margin: 0; font-size: 12.5px; }
+    .account-line .btn { padding: 6px 12px; font-size: 11.5px; }
+
+    .upgrade-banner {
+      margin: 12px 16px 0; padding: 12px 14px;
+      background: var(--accent-sf); border: 1px solid var(--accent-sf2); border-radius: var(--radius);
+    }
+    .upgrade-banner p { margin: 0 0 10px; font-size: 12px; line-height: 1.5; }
+    .upgrade-banner .btn { width: 100%; }
+
+    .entry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 16px 0; }
+    .entry-btn {
+      display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+      text-align: left; padding: 11px 12px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      font-family: var(--alc-ui); cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .entry-btn:hover { border-color: var(--border-2); background: var(--accent-sf); }
+    .entry-btn-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+    .entry-badge {
+      display: inline-block; margin-left: 6px; padding: 1px 6px;
+      border-radius: 10px; background: var(--warn); color: #fff;
+      font-size: 9.5px; font-weight: 700;
+    }
+
+    .home-links { margin: 14px 16px 0; }
+    .home-links .btn-row { flex-wrap: wrap; }
+
+    .settings-row { margin: 14px 16px 16px; }
+    .settings-row .btn { width: 100%; }
+
+    body.no-host-access .state-card, body.no-host-access .reading-actions { display: none; }
+    body.assistant-off .state-card { opacity: 0.55; }
+
     @media (pointer: coarse) {
       .btn { min-height: 44px; }
       .pill { width: 44px; height: 26px; }
       .pill-track::after { width: 20px; height: 20px; }
       .pill input:checked + .pill-track::after { transform: translateX(18px); }
-      .tab-btn { padding: 12px 6px 13px; }
-      .toggle-row { padding: 12px 2px; }
-      .field-input { min-height: 44px; }
-      /* Hover states latch after a tap on touch and read as selection. */
-      .toggle-cell:hover, .mode-btn:hover, .toggle-row:hover {
-        border-color: var(--border); background: var(--surface);
-      }
-      .toggle-row:hover { background: none; }
     }
 
-    /* ── Footer ── */
     .footer {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 11px 16px 13px;
-      border-top: 1px solid var(--border);
-      background: var(--paper-2);
+      padding: 11px 16px 13px; border-top: 1px solid var(--border); background: var(--paper-2);
     }
-    /* `align-items: center` is not optional here: a flex row stretches its
-       children across the cross axis by default, which would pull the logo's
-       height and distort it against the fixed width. */
-    .footer-brand {
-      display: inline-flex; align-items: center; gap: 6px;
-      font-size: 11px; color: var(--muted); text-decoration: none;
-    }
+    .footer-brand { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); text-decoration: none; }
     .footer-brand:hover { color: var(--text); }
-    .footer-brand:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 3px; }
-    .cj-logo {
-      display: block; flex: none;
-      height: 15px; width: auto;      /* never both — that is what distorts it */
-      opacity: 0.7; transition: opacity 0.15s;
-    }
+    .cj-logo { display: block; flex: none; height: 15px; width: auto; opacity: 0.7; transition: opacity 0.15s; }
     .footer-brand:hover .cj-logo { opacity: 1; }
-    /* Black on paper, white on the dark panel — same swap as the wordmark. */
     body.dark-mode .cj-logo.on-paper { display: none; }
     .cj-logo.on-dark { display: none; }
     body.dark-mode .cj-logo.on-dark { display: block; }
@@ -287,405 +121,95 @@
 </head>
 <body>
 
-  <!-- ── Header ─────────────────────────────────────────────────────────── -->
   <div class="header">
     <div class="brand">
-      <img class="brand-mark on-paper" id="sra-logo-img"
-           src="../../assets/alcoia-wordmark.png" alt="alcoia">
-      <img class="brand-mark on-dark" id="sra-logo-img-dark"
-           src="../../assets/alcoia-wordmark-white.png" alt="">
+      <img class="brand-mark on-paper" id="sra-logo-img" src="../../assets/alcoia-wordmark.png" alt="alcoia">
+      <img class="brand-mark on-dark" id="sra-logo-img-dark" src="../../assets/alcoia-wordmark-white.png" alt="">
     </div>
+    <!-- Master on/off — also in settings.html's Detection group. Both write
+         sra_enabled and rely on chrome.storage.onChanged to stay in sync. -->
     <label class="pill" title="Turn alcoia off on every page — like uninstalling it, without uninstalling it">
       <input type="checkbox" id="assistantToggle" checked>
       <span class="pill-track"></span>
     </label>
   </div>
 
-  <!-- Firefox MV3 only: host permissions are optional and must be asked for. -->
   <div class="perm-banner" id="permBanner" hidden>
     <p>alcoia needs permission to read the pages you open. Nothing is read until you allow it.</p>
     <button class="btn btn-primary" id="permGrantBtn">Allow access to pages</button>
   </div>
 
-  <!-- ── Reading state ──────────────────────────────────────────────────── -->
-  <div class="state-card">
-    <div class="state-top">
-      <span class="state-dot" id="stateDot"></span>
-      <span class="state-name" id="stateName">Not reading yet</span>
+  <!-- ════════════════════ READING MODE ════════════════════ -->
+  <div id="readingMode" hidden>
+    <div class="page-line">
+      <img class="page-favicon" id="pageFavicon" alt="">
+      <span class="page-title" id="pageTitle">This page</span>
     </div>
-    <div class="state-why" id="stateWhy">Open an article and start reading — the estimate appears here.</div>
-    <div class="state-sources">
-      <span class="src-chip on" id="signalChip"><i></i><span id="signalStatus">Noticing</span></span>
+
+    <div class="state-card">
+      <div class="state-top">
+        <span class="state-dot" id="stateDot"></span>
+        <span class="state-name" id="stateName">Not reading yet</span>
+      </div>
+      <div class="state-why" id="stateWhy">Start reading — the estimate appears here.</div>
+    </div>
+
+    <div class="reading-actions">
+      <button class="btn btn-ghost" id="pauseBtn" title="Pause reminders for 15 minutes. Reading detection keeps running.">Pause</button>
+      <button class="btn btn-ghost" id="selfReportBtn" title="Bring you back to the page — the self-report button there (or Alt+C) is always available.">Self-report</button>
+      <button class="btn btn-ghost" id="settingsBtnReading">⚙ Settings</button>
     </div>
   </div>
 
-  <!-- ── Tabs ───────────────────────────────────────────────────────────── -->
-  <div class="tab-bar">
-    <button class="tab-btn active" data-tab="assist">Assist</button>
-    <button class="tab-btn"        data-tab="access">Reading</button>
-    <button class="tab-btn"        data-tab="session">Session</button>
-  </div>
-  <div class="tab-strip"></div>
-
-  <!-- ════════════════════ TAB 1 — ASSIST ════════════════════ -->
-  <div class="tab-panel active" id="tab-assist">
-
-    <div class="section">
-      <div class="section-label">Reading mode</div>
-      <div class="mode-grid">
-        <button class="mode-btn" data-persona="research">
-          <span class="m-name">Research</span>
-          <span class="m-desc">Cards stay pinned · focus ruler</span>
-        </button>
-        <button class="mode-btn" data-persona="study">
-          <span class="m-name">Study</span>
-          <span class="m-desc">Read aloud · cards clear after 10s</span>
-        </button>
-        <button class="mode-btn" data-persona="casual">
-          <span class="m-name">Casual</span>
-          <span class="m-desc">Only when you select text</span>
-        </button>
-        <button class="mode-btn" data-persona="speed">
-          <span class="m-name">Speed</span>
-          <span class="m-desc">Focus ruler · cards clear after 4s</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- Reading signals are the only detection path and need no permission. -->
-    <div class="section">
-      <div class="section-label">What it watches</div>
-      <div class="toggle-grid">
-
-        <label class="toggle-cell" for="comprehensionToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Notice when I'm struggling</span>
-            <label class="pill"><input type="checkbox" id="comprehensionToggle" checked><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Your pace against the difficulty of the text, re-reads, and where you stop. No permission needed.</span>
-        </label>
-
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-label">How it helps</div>
-      <div class="toggle-grid">
-
-        <label class="toggle-cell" for="selToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Explain text I select</span>
-            <label class="pill"><input type="checkbox" id="selToggle" checked><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Look up a word, explain an image, or summarise a passage — on selection or Ctrl+hover. Nothing is kept; uses one assist each time.</span>
-        </label>
-
-        <label class="toggle-cell" for="highlightToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Outline the paragraph</span>
-            <label class="pill"><input type="checkbox" id="highlightToggle" checked><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Outline the paragraph a card refers to</span>
-        </label>
-
-        <label class="toggle-cell" for="highlightColorToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Highlight colour</span>
-            <label class="pill"><input type="checkbox" id="highlightColorToggle" checked><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Ctrl+drag to mark a passage in colour. Costs nothing — stays on your device.</span>
-        </label>
-
-        <label class="toggle-cell" for="highlightPersistToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Keep highlights when I leave the page</span>
-            <label class="pill"><input type="checkbox" id="highlightPersistToggle" checked><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">On: saved, and there when you come back. Off: lasts only for this visit, never saved.</span>
-        </label>
-
-        <label class="toggle-cell" for="highlightSummarizeToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Save an explanation with each highlight</span>
-            <label class="pill"><input type="checkbox" id="highlightSummarizeToggle"><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Asks the AI to explain what you highlighted, keeps the explanation with the highlight, and shows it on the Highlights page. Uses one assist each time.</span>
-        </label>
-
-        <label class="toggle-cell" for="ttsToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Read aloud</span>
-            <label class="pill"><input type="checkbox" id="ttsToggle"><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Speak the passage · <kbd>Alt+T</kbd></span>
-        </label>
-
-        <label class="toggle-cell" for="focusRulerToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Reading guide</span>
-            <label class="pill"><input type="checkbox" id="focusRulerToggle"><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Dim everything but the current line · <kbd>Alt+F</kbd></span>
-        </label>
-
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-label">Behaviour</div>
-      <div class="toggle-grid">
-
-        <label class="toggle-cell" for="autohideToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Clear cards automatically</span>
-            <label class="pill"><input type="checkbox" id="autohideToggle"><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Clear cards after a timeout. Off while "Keep cards until I close them" is on — the two contradict, and keeping wins.</span>
-        </label>
-
-        <label class="toggle-cell" for="pinDefaultToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Keep cards until I close them</span>
-            <label class="pill"><input type="checkbox" id="pinDefaultToggle"><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Cards stay open until you dismiss them. Turns off automatic clearing above.</span>
-        </label>
-
-        <label class="toggle-cell" for="darkModeToggle">
-          <div class="toggle-cell-top">
-            <span class="toggle-cell-name">Dark mode</span>
-            <label class="pill"><input type="checkbox" id="darkModeToggle"><span class="pill-track"></span></label>
-          </div>
-          <span class="toggle-cell-desc">Dark cards, sidebar and panels</span>
-        </label>
-
-      </div>
-
-      <div class="field-row-inline" id="timeoutRow" style="display:none;margin-top:10px">
-        <span class="field-label">Dismiss after</span>
-        <input class="field-input field-input-sm" id="autohideTimeout" type="number" min="3" max="120" value="12">
-      </div>
-
-      <p class="section-note">
-        However these are set, you are interrupted at most once every three minutes,
-        never twice on the same paragraph, and the more you read the more of a
-        cushion you earn — not the other way round.
-      </p>
-    </div>
-
-    <div class="section">
-      <div class="section-label">Reminders</div>
-      <div id="snoozeActive" hidden>
-        <p class="section-note" id="snoozeActiveNote"></p>
-        <div class="btn-row"><button class="btn btn-ghost" id="cancelSnoozeBtn">Cancel snooze</button></div>
-      </div>
-      <div id="snoozeInactive">
-        <p class="section-note">Pause the assistant's questions and nudges for a while. Reading
-          detection keeps running, so coverage and the quiz still work — only interruptions stop.</p>
-        <div class="btn-grid" id="snoozeOptions"></div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-label">PDF &amp; PPTX documents</div>
-      <label class="toggle-row" for="pdfTakeoverToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Open local PDF/PPTX files in alcoia</span>
-          <span class="toggle-desc">Off leaves them to your browser's own handling instead — its
-            full native viewer for a PDF, its default download behaviour for a PPTX — with no
-            alcoia detection either way</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="pdfTakeoverToggle" checked><span class="pill-track"></span></label>
-      </label>
-      <p class="section-note">
-        Every alcoia viewer page has its own "Open in browser viewer" button too, for a document
-        you have already opened. You are never stuck in a viewer you did not want.
-      </p>
-
-      <label class="toggle-row" for="webPdfTakeoverToggle" style="margin-top:10px">
-        <div class="toggle-info">
-          <span class="toggle-name">Also open PDFs linked from the web</span>
-          <span class="toggle-desc">Off by default. On means a PDF opened from a website — not just
-            a file on your computer — opens in alcoia too. Only whole-tab links; a PDF embedded in a
-            page (an iframe) is never redirected. A PDF that fails to load this way always falls
-            back to your browser's own viewer rather than showing an error.</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="webPdfTakeoverToggle"><span class="pill-track"></span></label>
-      </label>
-    </div>
-
-  </div>
-
-  <!-- ════════════════════ TAB 2 — READING ════════════════════ -->
-  <div class="tab-panel" id="tab-access">
-
-    <div class="section">
-      <div class="section-label">Dyslexia support</div>
-
-      <label class="toggle-row" for="dyslexiaToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Dyslexia mode</span>
-          <span class="toggle-desc">Cleaner face, wider spacing, and a slower hand on interruptions</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="dyslexiaToggle"><span class="pill-track"></span></label>
-      </label>
-
-      <div id="dyslexiaOptions" style="display:none">
-        <label class="toggle-row" for="bionicToggle">
-          <div class="toggle-info">
-            <span class="toggle-name">Bionic reading</span>
-            <span class="toggle-desc">Bold the first half of each word to lead the eye</span>
-          </div>
-          <label class="pill"><input type="checkbox" id="bionicToggle"><span class="pill-track"></span></label>
-        </label>
-        <div class="field-row" style="padding:6px 2px 2px">
-          <span class="field-label">Colour overlay</span>
-          <select id="dyslexiaColorSelect" class="field-input">
-            <option value="">None</option>
-            <option value="rgba(255,243,180,0.12)">Warm yellow</option>
-            <option value="rgba(180,220,255,0.12)">Light blue</option>
-            <option value="rgba(200,255,200,0.10)">Soft green</option>
-            <option value="rgba(255,200,200,0.10)">Pale rose</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-label">Reading pace</div>
-      <div class="btn-row">
-        <button class="btn btn-ghost" id="readingCalBtn">Measure my reading speed</button>
-      </div>
-      <p class="section-note">
-        You read a short passage at your normal pace and say when you are done. That
-        sets the baseline every pace signal is compared against. No camera involved.
-        Without it, your baseline is learned slowly from ordinary reading — which is
-        exactly the period when the pace judgements are least reliable.
-      </p>
-    </div>
-
-    <div class="section">
-      <div class="section-label">Developer</div>
-      <label class="toggle-row" for="debugTogglePopup">
-        <div class="toggle-info">
-          <span class="toggle-name">Debug overlay</span>
-          <span class="toggle-desc">Narrate detection state to the console</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="debugTogglePopup"><span class="pill-track"></span></label>
-      </label>
-      <p class="section-note">
-        More developer tools — a backend URL override and a state simulator, for local testing —
-        live on the diagnostics page once this is on.
-      </p>
-      <div class="btn-row" style="padding-top:10px">
-        <button class="btn btn-ghost" id="diagnosticsBtn">Diagnostics</button>
-      </div>
-    </div>
-
-  </div>
-
-  <!-- ════════════════════ TAB 3 — SESSION ════════════════════ -->
-  <div class="tab-panel" id="tab-session">
-
-    <!-- Item S3. Free features (retrieval questions, reading signals,
-         snooze) never need this — it gates only the paid ones. -->
-    <div class="section">
-      <div class="section-label">Account</div>
+  <!-- ════════════════════ HOME MODE ════════════════════ -->
+  <div id="homeMode" hidden>
+    <div class="account-line">
       <div id="accountSignedOut">
-        <p class="section-note">Sign in for the paid features — your own documents, portable
-          receipts, sync. Everything else works without an account.</p>
-        <div class="btn-row">
-          <button class="btn btn-ghost" id="signInBtn">Sign in</button>
-        </div>
+        <p class="section-note">Not signed in</p>
       </div>
       <div id="accountSignedIn" hidden>
         <p class="section-note">Signed in as <strong id="accountEmail"></strong></p>
-        <div class="btn-row">
-          <button class="btn btn-ghost" id="signOutBtn">Sign out</button>
-        </div>
       </div>
-      <!-- Item S6. Reachable whether signed in or not — join-class.js
-           itself routes a signed-out click through sign-in and back. -->
-      <div class="btn-row" style="margin-top:10px">
-        <button class="btn btn-ghost" id="joinClassBtn">Join a class</button>
-        <!-- Item S6/E4 follow-up. assignments.js itself shows an honest
-             "sign in to see your assignments" state when signed out,
-             rather than this button routing through sign-in the way
-             joinClassBtn does — there is nothing pending to resume after
-             signing in (no invite code, no ack), just a list to load. -->
-        <button class="btn btn-ghost" id="assignmentsBtn">Assignments</button>
-      </div>
+      <button class="btn btn-ghost" id="signInBtn">Sign in</button>
+      <button class="btn btn-ghost" id="signOutBtn" hidden>Sign out</button>
     </div>
 
-    <div class="section">
-      <div class="section-label">This page</div>
+    <div class="upgrade-banner" id="upgradeBanner" hidden>
+      <p>Free improves the reading you're doing. Paid keeps it — your own documents, portable receipts, sync.</p>
+      <button class="btn btn-primary" id="upgradeBtn">See plans</button>
+    </div>
+
+    <div class="entry-grid">
+      <button class="entry-btn" id="assignmentsBtn">
+        <span class="entry-btn-name">Assignments</span>
+      </button>
+      <button class="entry-btn" id="notesBtn">
+        <span class="entry-btn-name">Notes</span>
+      </button>
+      <button class="entry-btn" id="quizBtn">
+        <span class="entry-btn-name">Quiz</span>
+      </button>
+      <button class="entry-btn" id="highlightsBtn">
+        <span class="entry-btn-name">Highlights</span>
+      </button>
+    </div>
+
+    <!-- Orphaned by the reading/home split below — not reading-page-specific
+         (page summary, recall, receipt, reading-speed calibration stay
+         keyboard-shortcut-only, Alt+S/R/I and the Reading-tab button, none
+         of it touched) but not a natural "entry point" tile either. Kept
+         reachable, not dropped. -->
+    <div class="home-links">
       <div class="btn-row">
-        <button class="btn btn-primary" id="pageSummaryBtn">What is this page about?</button>
-        <div class="btn-grid">
-          <button class="btn btn-ghost" id="recallBtn">Test my recall</button>
-          <button class="btn btn-ghost" id="receiptBtn">Reading receipt</button>
-        </div>
-      </div>
-      <p class="section-note">
-        The receipt is yours. It is built on your machine, shown to you before it
-        goes anywhere, and never sent on its own.
-      </p>
-    </div>
-
-    <div class="section">
-      <div class="section-label">Quiz</div>
-      <div class="btn-row">
-        <button class="btn btn-ghost" id="quizBtn" disabled>Take the quiz</button>
-      </div>
-      <p class="section-note" id="quizGateNote">Checking how much of this page you've read…</p>
-    </div>
-
-    <div class="section">
-      <div class="section-label">Reading state</div>
-      <div class="chips">
-        <span class="chip" id="chip-on_pace">on pace</span>
-        <span class="chip" id="chip-skimming">skimming</span>
-        <span class="chip" id="chip-struggling">struggling</span>
-        <span class="chip" id="chip-drifting">drifting</span>
-        <span class="chip" id="chip-absent">away</span>
-        <span class="chip" id="chip-unknown">unknown</span>
-      </div>
-      <p class="section-note">
-        These describe what was observed, not what you were feeling.
-        <b>Unknown</b> is the normal answer when the signals do not agree — nothing
-        interrupts you on it.
-      </p>
-    </div>
-
-    <div class="section">
-      <div class="section-label">Saved work</div>
-      <div class="btn-grid">
         <button class="btn btn-ghost" id="sessionReportBtn">Session report</button>
-        <button class="btn btn-ghost" id="notesBtn">Notes</button>
-        <button class="btn btn-ghost" id="viewHighlightsBtn">Highlights</button>
         <button class="btn btn-ghost" id="exportBtn">Export</button>
+        <button class="btn btn-ghost" id="joinClassBtn">Join a class</button>
       </div>
     </div>
 
-    <div class="section">
-      <div class="section-label">Shortcuts</div>
-      <div class="kbd-card">
-        <div class="kbd-grid">
-          <kbd>Alt+S</kbd><span class="kbd-desc">Explain the paragraph you are on</span>
-          <kbd>Alt+T</kbd><span class="kbd-desc">Read aloud</span>
-          <kbd>Alt+F</kbd><span class="kbd-desc">Focus ruler — dims all but the reading line</span>
-          <kbd>Alt+M</kbd><span class="kbd-desc">Reading map sidebar</span>
-          <kbd>Alt+R</kbd><span class="kbd-desc">Test my recall</span>
-          <kbd>Alt+I</kbd><span class="kbd-desc">Reading receipt</span>
-          <kbd>Alt+N</kbd><span class="kbd-desc">Notes</span>
-          <kbd>Alt+G</kbd><span class="kbd-desc">Session report</span>
-          <kbd>Ctrl+drag</kbd><span class="kbd-desc">Highlight the selection</span>
-          <kbd>Ctrl+hover</kbd><span class="kbd-desc">Define a word in context</span>
-          <kbd>Esc</kbd><span class="kbd-desc">Close open cards</span>
-        </div>
-      </div>
+    <div class="settings-row">
+      <button class="btn btn-ghost" id="settingsBtnHome">⚙ Settings</button>
     </div>
-
   </div>
 
   <div class="footer">
@@ -696,10 +220,9 @@
       <img class="cj-logo on-paper" id="cjLogo" src="../../assets/logo-cj-black.png" alt="CJ">
       <img class="cj-logo on-dark" id="cjLogoDark" src="../../assets/logo-cj-white.png" alt="">
     </a>
-    <button class="btn-quiet" id="upgradeBtn">Premium →</button>
   </div>
 
 <script src="../shared/config.js"></script>
-<script src="popup.js"></script>
+<script type="module" src="popup.js"></script>
 </body>
 </html>

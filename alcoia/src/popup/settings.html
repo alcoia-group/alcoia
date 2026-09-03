@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Settings · alcoia</title>
+  <link rel="stylesheet" href="../styles/fonts.css">
+  <link rel="stylesheet" href="../styles/panel.css">
+  <!-- settings.js is a real ES module (imports src/shared/session.js
+       directly for the Account group), same shape as account.js — see that
+       file's own header for why background.js, a classic service worker,
+       cannot do the same. -->
+  <script src="../shared/config.js"></script>
+  <style>
+    /* Page chrome only — every toggle/section/pill class below is reused
+       verbatim from popup.html (panel.css defines the shared primitives);
+       this item reorganizes WHERE controls live, not their appearance
+       (visual redesign is a separate item, 15a-2). */
+    body { padding-bottom: 48px; }
+
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; padding: 16px 24px;
+      background: var(--paper-2); border-bottom: 1px solid var(--border);
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .logo-img { display: block; flex: none; height: 22px; width: auto; }
+    body.dark-mode .logo-img.on-paper { display: none; }
+    .logo-img.on-dark { display: none; }
+    body.dark-mode .logo-img.on-dark { display: block; }
+    .logo-sub {
+      font-family: var(--alc-serif); font-size: 15px; color: var(--muted);
+      padding-left: 14px; border-left: 1px solid var(--border);
+    }
+
+    .wrap { max-width: 640px; margin: 0 auto; padding: 28px 24px 0; }
+
+    .settings-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 6px 20px 8px; margin-bottom: 18px;
+    }
+    .settings-group-title {
+      font-family: var(--alc-serif); font-size: 15px; font-weight: 600;
+      padding: 14px 0 2px;
+    }
+    .settings-group-note { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin: 0 0 8px; }
+
+    /* Ported from popup.html verbatim — same classes, same look. */
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 10px 2px; cursor: pointer; border-radius: 8px;
+    }
+    .toggle-row:hover { background: var(--accent-sf); }
+    .toggle-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .toggle-name { font-size: 12.5px; font-weight: 600; }
+    .toggle-desc { font-size: 11px; color: var(--muted); line-height: 1.45; }
+    .toggle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 4px 0 12px; }
+    .toggle-cell {
+      display: flex; flex-direction: column; gap: 4px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 10px 11px 11px;
+      cursor: pointer; transition: border-color 0.15s, background 0.15s;
+    }
+    .toggle-cell:hover { border-color: var(--border-2); background: var(--accent-sf); }
+    .toggle-cell-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .toggle-cell-name { font-size: 12px; font-weight: 600; line-height: 1.35; }
+    .toggle-cell-desc { font-size: 10.5px; color: var(--muted); line-height: 1.45; }
+    #dyslexiaOptions { padding: 2px 0 8px 4px; }
+    .divider { height: 1px; background: var(--border); margin: 4px 0; }
+
+    .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 4px 0 14px; }
+    .mode-btn {
+      text-align: left; padding: 9px 11px 10px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border); background: var(--surface); color: var(--text);
+      font-family: var(--alc-ui); cursor: pointer;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+    .mode-btn:hover { border-color: var(--border-2); background: var(--accent-sf); }
+    .mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .mode-btn .m-name { display: block; font-size: 12px; font-weight: 700; }
+    .mode-btn .m-desc { display: block; font-size: 10.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+    .mode-btn.active .m-desc { color: rgba(255,255,255,0.85); }
+
+    .advanced-toggle {
+      background: none; border: none; padding: 8px 2px; margin: 4px 0;
+      font-family: var(--alc-ui); font-size: 11.5px; font-weight: 600;
+      color: var(--muted); cursor: pointer;
+    }
+    .advanced-toggle:hover { color: var(--text); }
+    #accountAdvanced { display: none; padding: 0 0 12px; }
+
+    .section-note { font-size: 11px; color: var(--muted); line-height: 1.55; margin: 6px 0 12px; }
+
+    /* ── Shortcuts ── ported from popup.html's old "Shortcuts" section
+       (dropped by accident in the 15a-1 split — flagged and restored). */
+    .kbd-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 11px 12px; margin: 4px 0 12px;
+    }
+    .kbd-grid {
+      display: grid; grid-template-columns: auto 1fr;
+      gap: 6px 11px; align-items: center; font-size: 11px;
+    }
+    .kbd-grid kbd { justify-self: start; }
+    .kbd-desc { color: var(--muted); }
+
+    @media (max-width: 480px) {
+      .header, .wrap { padding-left: 16px; padding-right: 16px; }
+      .logo-sub { display: none; }
+      .toggle-grid, .mode-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <img id="logo-img" class="logo-img on-paper" src="../../assets/alcoia-wordmark.png" alt="alcoia">
+    <img id="logo-img-dark" class="logo-img on-dark" src="../../assets/alcoia-wordmark-white.png" alt="">
+    <div class="logo-sub">Settings</div>
+  </div>
+  <button class="btn btn-ghost" id="closeBtn">Close</button>
+</header>
+
+<div class="wrap">
+
+  <!-- ════════════════════ Detection ════════════════════ -->
+  <div class="settings-card">
+    <div class="settings-group-title">Detection</div>
+    <label class="toggle-row" for="assistantToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Extension on</span>
+        <span class="toggle-desc">Off is like uninstalling alcoia on every page, without uninstalling it. Also shown in the popup itself.</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="assistantToggle" checked><span class="pill-track"></span></label>
+    </label>
+    <label class="toggle-row" for="comprehensionToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Notice when I'm struggling</span>
+        <span class="toggle-desc">Your pace against the difficulty of the text, re-reads, and where you stop. No permission needed.</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="comprehensionToggle" checked><span class="pill-track"></span></label>
+    </label>
+  </div>
+
+  <!-- ════════════════════ Interventions ════════════════════
+       The task's own suggested items here ("self-report button visible",
+       "question-mark pulse on struggle") do not exist anywhere in this
+       codebase — the self-report trigger is unconditionally always shown
+       (ui-controller.js's own comment: "not conditional on any detected
+       state"), so there is nothing to toggle. This group instead holds the
+       real card-behaviour switches that were homeless in the task's
+       original four groups. -->
+  <div class="settings-card">
+    <div class="settings-group-title">Interventions</div>
+    <p class="settings-group-note">
+      How question and explanation cards behave once one appears. (The self-report button on the
+      page and the struggle-detection cue are always available — there is no separate visibility
+      switch for either in this codebase today.)
+    </p>
+    <label class="toggle-row" for="pinDefaultToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Keep cards until I close them</span>
+        <span class="toggle-desc">Cards stay open until you dismiss them. Turns off automatic clearing below.</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="pinDefaultToggle"><span class="pill-track"></span></label>
+    </label>
+    <label class="toggle-row" for="autohideToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Clear cards automatically</span>
+        <span class="toggle-desc">Off while "Keep cards until I close them" is on — the two contradict, and keeping wins.</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="autohideToggle"><span class="pill-track"></span></label>
+    </label>
+    <div class="field-row-inline" id="timeoutRow" style="display:none;padding:4px 2px 12px">
+      <span class="field-label">Dismiss after</span>
+      <input class="field-input field-input-sm" id="autohideTimeout" type="number" min="3" max="120" value="12">
+    </div>
+    <p class="section-note">
+      However these are set, you are interrupted at most once every three minutes, never twice on
+      the same paragraph, and the more you read the more of a cushion you earn.
+    </p>
+  </div>
+
+  <!-- ════════════════════ Explain & Highlight ════════════════════
+       Not one of the task's suggested groups — flagged: these six switches
+       had no suggested home, so they're grouped by what they share
+       (on-page explanation and highlighting), matching popup.html's own
+       former "How it helps" section. -->
+  <div class="settings-card">
+    <div class="settings-group-title">Explain &amp; highlight</div>
+    <div class="toggle-grid">
+      <label class="toggle-cell" for="selToggle">
+        <div class="toggle-cell-top">
+          <span class="toggle-cell-name">Explain text I select</span>
+          <label class="pill"><input type="checkbox" id="selToggle" checked><span class="pill-track"></span></label>
+        </div>
+        <span class="toggle-cell-desc">Look up a word, explain an image, or summarise a passage — on selection or Ctrl+hover. Uses one assist each time.</span>
+      </label>
+      <label class="toggle-cell" for="highlightToggle">
+        <div class="toggle-cell-top">
+          <span class="toggle-cell-name">Outline the paragraph</span>
+          <label class="pill"><input type="checkbox" id="highlightToggle" checked><span class="pill-track"></span></label>
+        </div>
+        <span class="toggle-cell-desc">Outline the paragraph a card refers to</span>
+      </label>
+      <label class="toggle-cell" for="highlightColorToggle">
+        <div class="toggle-cell-top">
+          <span class="toggle-cell-name">Highlight colour</span>
+          <label class="pill"><input type="checkbox" id="highlightColorToggle" checked><span class="pill-track"></span></label>
+        </div>
+        <span class="toggle-cell-desc">Ctrl+drag to mark a passage in colour. Costs nothing — stays on your device.</span>
+      </label>
+      <label class="toggle-cell" for="highlightPersistToggle">
+        <div class="toggle-cell-top">
+          <span class="toggle-cell-name">Keep highlights when I leave the page</span>
+          <label class="pill"><input type="checkbox" id="highlightPersistToggle" checked><span class="pill-track"></span></label>
+        </div>
+        <span class="toggle-cell-desc">On: saved, and there when you come back. Off: lasts only for this visit.</span>
+      </label>
+      <label class="toggle-cell" for="highlightSummarizeToggle">
+        <div class="toggle-cell-top">
+          <span class="toggle-cell-name">Save an explanation with each highlight</span>
+          <label class="pill"><input type="checkbox" id="highlightSummarizeToggle"><span class="pill-track"></span></label>
+        </div>
+        <span class="toggle-cell-desc">Asks the AI to explain what you highlighted. Uses one assist each time.</span>
+      </label>
+    </div>
+  </div>
+
+  <!-- ════════════════════ Reading aids ════════════════════
+       Also not a task-suggested group — flagged: TTS, focus ruler,
+       dyslexia support, and dark mode had no suggested home either. -->
+  <div class="settings-card">
+    <div class="settings-group-title">Reading aids</div>
+    <div class="toggle-grid">
+      <label class="toggle-cell" for="ttsToggle">
+        <div class="toggle-cell-top">
+          <span class="toggle-cell-name">Read aloud</span>
+          <label class="pill"><input type="checkbox" id="ttsToggle"><span class="pill-track"></span></label>
+        </div>
+        <span class="toggle-cell-desc">Speak the passage · Alt+T</span>
+      </label>
+      <label class="toggle-cell" for="focusRulerToggle">
+        <div class="toggle-cell-top">
+          <span class="toggle-cell-name">Reading guide</span>
+          <label class="pill"><input type="checkbox" id="focusRulerToggle"><span class="pill-track"></span></label>
+        </div>
+        <span class="toggle-cell-desc">Dim everything but the current line · Alt+F</span>
+      </label>
+      <label class="toggle-cell" for="darkModeToggle">
+        <div class="toggle-cell-top">
+          <span class="toggle-cell-name">Dark mode</span>
+          <label class="pill"><input type="checkbox" id="darkModeToggle"><span class="pill-track"></span></label>
+        </div>
+        <span class="toggle-cell-desc">Dark cards, sidebar and panels</span>
+      </label>
+    </div>
+
+    <div class="divider"></div>
+
+    <label class="toggle-row" for="dyslexiaToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Dyslexia mode</span>
+        <span class="toggle-desc">Cleaner face, wider spacing, and a slower hand on interruptions</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="dyslexiaToggle"><span class="pill-track"></span></label>
+    </label>
+    <div id="dyslexiaOptions">
+      <label class="toggle-row" for="bionicToggle">
+        <div class="toggle-info">
+          <span class="toggle-name">Bionic reading</span>
+          <span class="toggle-desc">Bold the first half of each word to lead the eye</span>
+        </div>
+        <label class="pill"><input type="checkbox" id="bionicToggle"><span class="pill-track"></span></label>
+      </label>
+      <div class="field-row" style="padding:6px 2px 2px">
+        <span class="field-label">Colour overlay</span>
+        <select id="dyslexiaColorSelect" class="field-input">
+          <option value="">None</option>
+          <option value="rgba(255,243,180,0.12)">Warm yellow</option>
+          <option value="rgba(180,220,255,0.12)">Light blue</option>
+          <option value="rgba(200,255,200,0.10)">Soft green</option>
+          <option value="rgba(255,200,200,0.10)">Pale rose</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════ Reading mode presets ════════════════════
+       Not an individual switch, but the bulk-apply mechanism popup.html
+       used to host — moved here since it writes several of the switches
+       above at once. -->
+  <div class="settings-card">
+    <div class="settings-group-title">Reading mode presets</div>
+    <div class="mode-grid">
+      <button class="mode-btn" data-persona="research">
+        <span class="m-name">Research</span>
+        <span class="m-desc">Cards stay pinned · focus ruler</span>
+      </button>
+      <button class="mode-btn" data-persona="study">
+        <span class="m-name">Study</span>
+        <span class="m-desc">Read aloud · cards clear after 10s</span>
+      </button>
+      <button class="mode-btn" data-persona="casual">
+        <span class="m-name">Casual</span>
+        <span class="m-desc">Only when you select text</span>
+      </button>
+      <button class="mode-btn" data-persona="speed">
+        <span class="m-name">Speed</span>
+        <span class="m-desc">Focus ruler · cards clear after 4s</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════════════════ Documents ════════════════════ -->
+  <div class="settings-card">
+    <div class="settings-group-title">Documents</div>
+    <label class="toggle-row" for="pdfTakeoverToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Open local PDF/PPTX files in alcoia</span>
+        <span class="toggle-desc">Off leaves them to your browser's own handling instead, with no alcoia detection.</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="pdfTakeoverToggle" checked><span class="pill-track"></span></label>
+    </label>
+    <label class="toggle-row" for="webPdfTakeoverToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Also open PDFs linked from the web</span>
+        <span class="toggle-desc">Off by default. On means a PDF opened from a website, not just a file on your computer, opens in alcoia too.</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="webPdfTakeoverToggle"><span class="pill-track"></span></label>
+    </label>
+  </div>
+
+  <!-- ════════════════════ Account ════════════════════ -->
+  <div class="settings-card">
+    <div class="settings-group-title">Account</div>
+    <div id="accountSignedOut">
+      <p class="section-note">Sign in for the paid features — your own documents, portable receipts, sync.</p>
+      <div class="btn-row"><button class="btn btn-ghost" id="signInBtn">Sign in</button></div>
+    </div>
+    <div id="accountSignedIn" hidden>
+      <p class="section-note">Signed in as <strong id="accountEmail"></strong></p>
+      <div class="btn-row"><button class="btn btn-ghost" id="signOutBtn">Sign out</button></div>
+    </div>
+
+    <button type="button" class="advanced-toggle" id="advancedToggle">Advanced ▾</button>
+    <div id="accountAdvanced">
+      <div class="field-row">
+        <label class="field-label" for="backendUrlInput">Backend URL</label>
+        <input class="field-input" id="backendUrlInput" type="text" placeholder="https://api.example.com/api/summarize">
+      </div>
+      <p class="section-note">
+        Also editable on the Diagnostics page. For pointing a dev build at a local backend —
+        leave this alone otherwise.
+      </p>
+    </div>
+  </div>
+
+  <!-- ════════════════════ Developer ════════════════════ -->
+  <div class="settings-card">
+    <div class="settings-group-title">Developer</div>
+    <label class="toggle-row" for="debugToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Debug overlay</span>
+        <span class="toggle-desc">Narrate detection state to the console</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="debugToggle"><span class="pill-track"></span></label>
+    </label>
+    <p class="section-note">
+      More developer tools — a backend URL override and a state simulator, for local testing —
+      live on the Diagnostics page once this is on.
+    </p>
+    <div class="btn-row" style="padding-top:4px 0 12px"><button class="btn btn-ghost" id="diagnosticsBtn">Diagnostics</button></div>
+  </div>
+
+  <!-- ════════════════════ Shortcuts ════════════════════
+       Reference only, no toggles — dropped from popup.html in the 15a-1
+       split without a new home; restored here. Alt+C (self-report) is
+       added below: it was missing from this legend even before this pass,
+       confirmed against content.js's real keydown handler while restoring
+       the rest of this list, and it's the one shortcut most relevant to
+       this same task's popup.html rewrite (the Self-report button there
+       points here). -->
+  <div class="settings-card">
+    <div class="settings-group-title">Shortcuts</div>
+    <div class="kbd-card">
+      <div class="kbd-grid">
+        <kbd>Alt+S</kbd><span class="kbd-desc">Explain the paragraph you are on</span>
+        <kbd>Alt+T</kbd><span class="kbd-desc">Read aloud</span>
+        <kbd>Alt+F</kbd><span class="kbd-desc">Focus ruler — dims all but the reading line</span>
+        <kbd>Alt+M</kbd><span class="kbd-desc">Reading map sidebar</span>
+        <kbd>Alt+R</kbd><span class="kbd-desc">Test my recall</span>
+        <kbd>Alt+I</kbd><span class="kbd-desc">Reading receipt</span>
+        <kbd>Alt+N</kbd><span class="kbd-desc">Notes</span>
+        <kbd>Alt+G</kbd><span class="kbd-desc">Session report</span>
+        <kbd>Alt+C</kbd><span class="kbd-desc">Self-report how reading is going</span>
+        <kbd>Ctrl+drag</kbd><span class="kbd-desc">Highlight the selection</span>
+        <kbd>Ctrl+hover</kbd><span class="kbd-desc">Define a word in context</span>
+        <kbd>Esc</kbd><span class="kbd-desc">Close open cards</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script type="module" src="settings.js"></script>
+</body>
+</html>
