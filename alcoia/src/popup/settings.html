@@ -37,18 +37,25 @@
 
     .settings-card {
       background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 6px 20px 8px; margin-bottom: 18px;
+      border-radius: var(--radius); padding: 8px 20px 12px; margin-bottom: 28px;
     }
+    /* The one permitted use of uppercase in this UI (item 15a-2) — a
+       settings-page group label, not a headline, so it takes the same
+       small-caps treatment panel.css's own .section-label already uses
+       elsewhere in these extension pages, not a serif heading. */
     .settings-group-title {
-      font-family: var(--alc-serif); font-size: 15px; font-weight: 600;
-      padding: 14px 0 2px;
+      font-family: var(--alc-ui); font-size: 11px; font-weight: 700;
+      letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint);
+      padding: 16px 0 10px;
     }
     .settings-group-note { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin: 0 0 8px; }
 
-    /* Ported from popup.html verbatim — same classes, same look. */
+    /* Ported from popup.html verbatim — same classes, same look. 16px
+       between items within a group (8px padding top + bottom on each row
+       gives 16px between two adjacent rows). */
     .toggle-row {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
-      padding: 10px 2px; cursor: pointer; border-radius: 8px;
+      padding: 8px 2px; cursor: pointer; border-radius: 8px;
     }
     .toggle-row:hover { background: var(--accent-sf); }
     .toggle-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

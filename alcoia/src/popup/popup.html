@@ -32,13 +32,17 @@
     .perm-banner .btn { width: 100%; }
 
     /* ── Reading mode ─────────────────────────────────────────────────── */
+    /* Quiet status, not a headline (item 15a-2) — Inter, not the reading
+       serif, and toned down to --muted ("ink/60"). The page being read is
+       the foreground; this line is just orientation ("where am I"), not
+       something asking to be read as content in its own right. */
     .page-line {
       margin: 14px 16px 0;
-      display: flex; align-items: center; gap: 9px;
+      display: flex; align-items: center; gap: 8px;
     }
-    .page-favicon { width: 16px; height: 16px; flex: none; border-radius: 3px; }
+    .page-favicon { width: 14px; height: 14px; flex: none; border-radius: 3px; opacity: 0.85; }
     .page-title {
-      font-family: var(--alc-serif); font-size: 13.5px; font-weight: 600;
+      font-family: var(--alc-ui); font-size: 12px; font-weight: 500; color: var(--muted);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
     }
     .state-card {
@@ -52,11 +56,20 @@
     .state-name { font-family: var(--alc-serif); font-size: 15px; font-weight: 600; line-height: 1.3; flex: 1; min-width: 0; }
     .state-why { margin: 6px 0 0 17px; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
 
+    /* A contained bottom action area, not three floating buttons (item
+       15a-2) — separated from the status area above by a 1px hairline
+       (var(--border), the same "ink/10" hairline every other divider in
+       this product uses) rather than just whitespace. No assists-this-
+       month line above it: that display doesn't exist anywhere in this
+       codebase (no real usage-count data source), so nothing is drawn
+       here rather than inventing one. */
     .reading-actions {
-      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
-      margin: 14px 16px 16px;
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px;
+      margin: 18px 0 0;
+      padding: 10px 12px;
+      border-top: 1px solid var(--border);
     }
-    .reading-actions .btn { padding: 10px 4px; font-size: 11.5px; }
+    .reading-actions .btn { padding: 10px 4px; font-size: 11.5px; border-radius: var(--radius-sm); }
 
     /* ── Home mode ────────────────────────────────────────────────────── */
     .account-line {
@@ -74,18 +87,24 @@
     .upgrade-banner p { margin: 0 0 10px; font-size: 12px; line-height: 1.5; }
     .upgrade-banner .btn { width: 100%; }
 
-    .entry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 16px 0; }
+    /* A clean list, not a card grid (item 15a-2). No matching icon exists
+       in this extension's asset set (assets/ holds brand marks and the
+       toolbar's own PDF-viewer-specific glyphs, nothing for Assignments/
+       Notes/Quiz/Highlights) — rather than invent new icon assets, this
+       stays text-only, separated by hairlines like everywhere else here. */
+    .entry-list { margin: 6px 0 0; }
     .entry-btn {
-      display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-      text-align: left; padding: 11px 12px;
-      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      width: 100%; text-align: left; padding: 13px 16px;
+      background: none; border: none; border-bottom: 1px solid var(--border);
       font-family: var(--alc-ui); cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
+      transition: background 0.15s;
     }
-    .entry-btn:hover { border-color: var(--border-2); background: var(--accent-sf); }
-    .entry-btn-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+    .entry-list .entry-btn:last-child { border-bottom: none; }
+    .entry-btn:hover { background: var(--paper-2); }
+    .entry-btn-name { font-size: 13px; font-weight: 500; color: var(--text); }
     .entry-badge {
-      display: inline-block; margin-left: 6px; padding: 1px 6px;
+      display: inline-block; padding: 1px 6px;
       border-radius: 10px; background: var(--warn); color: #fff;
       font-size: 9.5px; font-weight: 700;
     }
@@ -179,7 +198,7 @@
       <button class="btn btn-primary" id="upgradeBtn">See plans</button>
     </div>
 
-    <div class="entry-grid">
+    <div class="entry-list">
       <button class="entry-btn" id="assignmentsBtn">
         <span class="entry-btn-name">Assignments</span>
       </button>
