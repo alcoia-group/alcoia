@@ -12,9 +12,7 @@ not appropriate for a product that handles reading data and is sold to instituti
 
 **Report to:** TODO — a security contact email or a private reporting form.
 
-**Scope:** TODO — state explicitly what is in scope (the browser extension client in this
-repository) and what is not (the API server, which lives in a separate private repository and is
-out of scope for reports filed here).
+**Scope:** see "What is in scope" / "What is out of scope" below.
 
 **Response time:** TODO — an acknowledgement SLA (e.g. "within N business days") once the owner has
 committed to one. Do not invent a number here.
