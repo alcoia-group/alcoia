@@ -1,215 +1,135 @@
 <p align="center">
-  <img src="alcoia/assets/alcoia-wordmark-cream.png" width="520" alt="alcoia">
+  <img src="alcoia/assets/alcoia-wordmark-cream.png" width="440" alt="alcoia">
 </p>
 
 <p align="center">
-  <em>/ælˈkɔɪ.ə/ · al-KOY-uh</em>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="License: AGPL-3.0"></a>
+  <img src="https://img.shields.io/badge/version-0.2.0--pre--release-lightgrey.svg" alt="Version 0.2.0 (pre-release)">
 </p>
 
-<p align="center">
-  It notices when you have stopped reading, and asks you about it.
-</p>
+<!--
+  TODO(owner): a CI badge belongs here once a workflow exists — there is no
+  .github/workflows/ in this repo yet, so none is added rather than pointing
+  at a badge that would 404 or always read "no status".
+-->
 
----
+<!--
+  TODO(owner): screenshot or short demo GIF of the retrieval-question card
+  appearing on a real article. No placeholder image is included here on
+  purpose — an AI-generated stand-in would misrepresent what the product
+  looks like, which is worse than a visible gap. Drop the real capture at
+  docs/demo.gif (or similar) and reference it here, e.g.:
+  ![alcoia asking a retrieval question on a real article](docs/demo.gif)
+-->
 
-alcoia is a browser extension that notices when you are struggling with a page and offers help
-with that specific passage. 
+alcoia is a browser extension that notices when you've stopped reading and asks you a short
+question about the passage instead of summarising it for you. It's built for anyone who reads
+long things online and wants to actually retain them — students, researchers, anyone tired of
+skimming and forgetting. It's open source so you can verify what it does with your reading data
+rather than take that claim on trust.
 
-===TO BE REWRITEN. IT DOESN'T MONITOR, IT DETECTS===
+## Quick start
 
-It does this by watching **how you read** — how fast you move through a paragraph compared with
-how dense that paragraph is and how fast you normally read, whether you scroll back to re-read
-something, whether you select or copy text, whether you leave the tab. None of that needs a
-permission prompt, and none of it needs a camera.
+**From the Chrome Web Store** (recommended once published):
 
-When something looks off, it does not summarise at you. It **asks you a question** about the
-passage you just read, with the sentence containing the answer quoted underneath. Answering is
-the only thing in the system that produces ground truth: getting it right ends the interruption,
-getting it wrong is when an explanation appears.
+<!-- TODO(owner): replace with the real Chrome Web Store listing URL once published. -->
+[Chrome Web Store listing — not yet published](https://chrome.google.com/webstore)
 
-There is no webcam mode. Detection runs on reading signals only — no camera, no permission prompt,
-no video of any kind, ever.
-
----
-
-## The signal hierarchy
-
-Two sources, in order of authority. This ordering is the product, not an implementation detail.
-
-1. **Reader responses** — answers to retrieval questions. The only ground truth here. An answer
-   outranks anything a reading signal says. A correct answer resolves to `on_pace` and stops the
-   system pressing; a dismissal asserts nothing at all, because declining to be tested says
-   nothing about comprehension.
-2. **Browser reading signals** — reading rate against text difficulty and your own baseline,
-   scroll regressions, selection, copy, blur, idle. Precise, always available, no permission
-   needed. **This is the only detection path.**
-
-## Reading states
-
-Six, and every one of them names an **observation**, not a feeling:
-
-`on_pace` · `skimming` · `struggling` · `drifting` · `absent` · `unknown`
-
-There is deliberately no `confused` and no `overloaded`. Those are internal states that cannot be
-measured from a browser, and claiming to detect them would be claiming something the software
-cannot support. `unknown` is a valid, correct and common answer — nothing ever interrupts on it.
-
-## Interruption policy
-
-Reader attention is the scarcest resource in this product, and a wrong interruption is worse than
-a missed one.
-
-- At most one interruption every 3 minutes
-- A session cap that scales with how much you've actually read — a few paragraphs into an
-  article and a few chapters into a textbook do not earn the same number of interruptions —
-  with an absolute ceiling so nothing runs away
-- Closing questions without answering, three times in a row, raises the bar before the system
-  backs off entirely — a clearer signal than anything it can infer on its own
-- Never twice on the same paragraph
-- Never on `unknown`
-- Every interruption carries visible evidence — "You slowed down a lot here" — which turns an
-  inference into an observation the reader can check
-
-## The reading receipt
-
-Press `Alt+I` and alcoia builds a record of what you covered and what you actually recalled. It
-is built on your machine, you see the whole thing before it goes anywhere, and nothing is ever
-submitted in the background.
-
-It can be signed. **A valid signature means the receipt is unaltered since the server issued
-it — nothing more.** It is not evidence that the reading happened: the figures come from your own
-browser. That caveat is a field of the artifact itself, so it travels with the file.
-
-The recall block is the substance. Coverage alone records that pages were scrolled through, which
-is not evidence of reading and is trivial to fake — so when nothing was answered, the panel says
-so in those words.
-
-## Languages
-
-Word and sentence counting goes through `Intl.Segmenter`, so the pace signals work in scripts
-that do not put spaces between words — Chinese, Japanese, Thai, Khmer, Lao, Burmese — as well as
-in space-delimited ones. Sentence splitting handles the Arabic question mark, the Urdu full stop
-and the Devanagari danda, not only ASCII punctuation. Difficulty falls back to sentence and
-clause structure where Flesch-Kincaid does not apply, with per-script anchors so ordinary prose
-in Arabic or Chinese is not scored as unusually dense.
-
-Reading-rate baselines are kept per language.
-
-## Privacy
-
-- **There is no camera path.** No webcam is ever started, by a message or otherwise — the code
-  that could have started one is not in the extension.
-- **No video, image or webcam frame is ever transmitted.** Verified by an automated browser test
-  that inspects every outbound request body.
-- **No analytics, no usage data sent to a vendor, no crash reporting, no third-party fonts or scripts.**
-  Verified: zero third-party requests in the browser test.
-- **There is no covert mode**, and there will not be one. Not behind a flag, not for an
-  institution, not for testing.
-
-Passage text **is** sent to a server to generate questions and explanations. That is the one
-thing that leaves your machine, and it is stated here rather than buried.
-
-**Reading content is kept on disk in a few places, all local-only.** Colour highlights you draw
-with Ctrl+drag are the oldest of these: the highlighted text and a little surrounding context, so
-the same passage can be found again on a later visit. If you also turn on "Save an explanation
-with each highlight," the AI's explanation is kept with it too — capped shorter than what the
-one-time popup shows — and appears on the Highlights page; that toggle is off by default, and
-turning it on never retroactively summarises highlights you already made. The quiz is newer: take
-it from the end-of-page offer or the popup, and the questions, your answers and your confidence
-ratings are saved on your device — in IndexedDB, not synced, not sent anywhere — so you can review
-a result later. The passage itself is never part of that record: there is no retake, so there is
-nothing regeneration would need it for. Every one of these is deletable — a single highlight,
-every highlight on a page, or all of them; a single quiz or all of them — and deletion actually
-removes the record.
-
-Full data map, including everything stored locally and the disclosure obligations that follow
-from it: [`LEGAL-DISCLOSURE-MAP.md`](LEGAL-DISCLOSURE-MAP.md).
-
-## On accuracy
-
-**No real-participant evaluation has been performed, and no accuracy figure for this project
-should be treated as meaningful.**
-
-There used to be a gaze classifier shipping in `alcoia/src/content/classifier.js`, trained on
-synthetic data — rows generated from hand-written rules, then duplicated with Gaussian noise and
-split randomly, so a row's noisy twin could sit in the test set while the original sat in
-training. It has been deleted along with the rest of the webcam gaze path, so there is no longer
-an accuracy figure of any kind in the shipped extension. A historical version of that training
-pipeline still exists under `tldr classifier/` for provenance; it produces no code that ships.
-
-Earlier drafts of this README carried an 88% figure and a "75–82% real-world" estimate for that
-classifier. Both were removed before the classifier itself was.
-
-## Install
+**Load unpacked, for development or to inspect the code yourself:**
 
 ```bash
 git clone <this repo>
 cd alcoia
-npm install          # tooling only; the extension itself ships unbundled
+npm install          # tooling only — the extension itself ships unbundled
 ```
 
-Then load `alcoia/` as an unpacked extension at `chrome://extensions` with Developer mode on.
+Then open `chrome://extensions`, enable **Developer mode**, and **Load unpacked** pointing at the
+`alcoia/` directory.
 
-The backend (question generation, explanations, receipt signing) lives in a separate private
-repository — it is not part of this repo. See [`alcoia/README.md`](alcoia/README.md) for the
-extension's own setup, keyboard shortcuts and configuration reference.
+## How it works
 
-## Verify
+- Watches **reading signals only** — pace against text difficulty and against your own baseline,
+  re-reading, selection, tab focus. No camera, ever.
+- When it looks like you've stopped following the text, it asks a short **retrieval question**
+  about the passage you just read, with the sentence containing the answer quoted underneath.
+- Answering is the only thing that produces ground truth: a correct answer ends the interaction
+  with confirmation only; a wrong one gets an explanation. Dismissing a question asserts nothing.
+- An interruption budget (at most one every 3 minutes, never twice on the same paragraph, never
+  on an inconclusive read) keeps it from becoming the thing that interrupts your reading.
+- Full mechanism, in more technical detail than belongs here: [`alcoia/README.md`](alcoia/README.md)
+  and [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+<!--
+  TODO(owner): once the marketing site exists (WEBSITE-BRIEF.md §9.2), link
+  its /how-it-works page here instead of / alongside the two files above —
+  it does not resolve yet (see alcoia/src/shared/config.js's own comment on
+  WEB_APP_ORIGIN), so no live URL is included.
+-->
+
+## Privacy
+
+**No camera, no permissions beyond what's shown, reading data stays on your device except passage
+text sent for question generation.** That's the whole claim; everything else in this project is
+in service of it staying true. The one thing that leaves your machine is the passage text needed
+to generate a question or an explanation — no video or image data, no analytics, no third-party
+scripts, and no covert mode, ever.
+
+<!--
+  This deliberately does NOT link PRIVACY.md — that file is an explicitly
+  marked internal scaffold ("SCAFFOLD ONLY — NOT PUBLISHABLE... Do not let
+  an agent fill it in", per CLAUDE.md §9's "requires human approval" list)
+  and is not a real, published policy. Until one exists, the honest link is
+  the code-derived data map below, not a document that says not to link it.
+-->
+For exactly what is stored, where, and for how long: [`LEGAL-DISCLOSURE-MAP.md`](LEGAL-DISCLOSURE-MAP.md).
+*(A plain-language, human-approved privacy policy is planned for the public site; it does not
+exist yet, so it isn't linked here — see that file's own status note.)*
+
+## Why only the extension is public
+
+The backend that generates questions and explanations lives in a separate, private repository —
+this repo is the browser extension client only. It's public because a claim like the one above
+("your reading data stays on your device") only means something if someone other than the people
+making it can check it: the detection logic, the interruption budget, and everything that touches
+your reading are all sitting right here, readable end to end. What isn't published is the account,
+billing and question-generation server, which handles things — payment details, institutional
+data — that being public wouldn't make more trustworthy, only more exposed.
+
+## Development setup
 
 ```bash
+git clone <this repo>
+cd alcoia
+npm install                     # tooling only — the extension ships unbundled
+
 npm run lint                    # ESLint — a defect linter, not a style linter
-npm test                        # 462 tests
-npm run test:browser            # loads the extension in Chromium, English article
+npm test                        # Vitest — the unit/integration suite
+npm run test:browser            # loads the extension in real Chromium, English article
 PAGE=zh npm run test:browser    # same checklist against a Chinese article
+
+node build.mjs                  # builds both targets to dist/chrome and dist/firefox
 ```
 
-The browser check asserts the things that matter and that unit tests cannot see: that the content
-script injects with no page errors, that **zero** `getUserMedia` calls ever happen, that no image
-or video data appears in any request, that no third-party request is made, that the overlay
-stylesheet actually reaches its elements, and that every keyboard shortcut still fires.
+See [`CLAUDE.md`](CLAUDE.md) for repository conventions and current file map before making
+changes, and [`alcoia/README.md`](alcoia/README.md) for the extension's own configuration and
+keyboard-shortcut reference.
 
-## Layout
+## Contributing
 
-```
-alcoia/                  the extension (AGPL-3.0)
-  src/content/           content scripts — detection, fusion, UI
-    signals/              the detectors; each exports { update(), signal() }
-  src/popup/             the toolbar panel and its pages
-  src/shared/config.js   the one place the backend origin is defined
-  src/shared/install-token.js  the opaque per-install token that gates every AI call
-  src/styles/            fonts.css, overlay.css, panel.css
-  src/libs/              pdf.js, jszip, fonts (SIL OFL 1.1)
-tests/                   Vitest suites and the Chromium browser check
-  contract/              vendored, dependency-free snapshots of the (separate-repo) server's
-                         pure question/receipt logic, kept under test here only
-CLAUDE.md                repository context — read before changing anything
-WEBSITE-BRIEF.md         build brief for the marketing site
-LEGAL-DISCLOSURE-MAP.md  code-derived data map for the privacy policy
-NOTICE.md                licence scope and third-party components
-```
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## Licence
+## Security
 
-The extension client is **AGPL-3.0**, by choice — not because of a bundled dependency. It used to
-also bundle WebGazer (GPLv3), which made the shipped package a combined copyleft work; WebGazer
-has been removed along with the rest of the webcam gaze path (see `NOTICE.md`), and everything
-still bundled under `src/libs/` is permissive or OFL.
+Found a vulnerability? Do not open a public issue — see [`SECURITY.md`](SECURITY.md) for how to
+report it privately.
 
-Fonts (Literata, Plus Jakarta Sans) are **SIL OFL 1.1**, with their licences alongside the
-binaries. The API server is a separate program in a separate private repository and was never
-covered by this grant. Details in [`NOTICE.md`](NOTICE.md).
+## Code of conduct
 
-## About this repository
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md).
 
-This repository is public **for transparency and verification** — so anyone can read exactly what
-the extension does with a reader's data, rather than take a claim on trust. It is not a
-solicitation for contributions. Issues and pull requests may be read but are not actively triaged,
-and an unsolicited PR is not likely to be merged. If you have found a security issue, see
-[`SECURITY.md`](SECURITY.md) instead of opening a public issue.
+## License
 
-[`ARCHITECTURE.md`](ARCHITECTURE.md) explains how the system works in more detail than this file.
-The team's own internal engineering-context file, which additionally tracks line-by-line
-implementation status and in-progress work, is not published.
-
-The code is [AGPL-3.0](LICENSE), as above — see that file and `NOTICE.md` for exactly what it
-covers.
+The extension client is **[AGPL-3.0](LICENSE)**. Fonts bundled under `alcoia/src/libs/` are SIL
+OFL 1.1; other bundled third-party code is permissive-licensed. The API server is a separate
+program in a separate private repository and was never covered by this grant. Full scope and
+attributions: [`NOTICE.md`](NOTICE.md).
