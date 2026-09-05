@@ -21,8 +21,25 @@ import { renderPage, watchDevicePixelRatio } from './render.js';
 import { createPdfHighlights } from './pdf-highlights.js';
 import { createSidebar } from './sidebar.js';
 import { ICONS } from './icons.js';
+import { shouldSubmitKinematics } from '../shared/kinematics.js';
 
 let bridge = null;
+// Item DC-1a. This page has no sessionTracker.save()-style persistence of
+// its own to reuse for a duration (a pre-existing gap, not this item's to
+// fix) — a plain open-to-unload timestamp is all the 30s floor needs, and
+// is simpler than wiring in host.js's sessionTracker for one number.
+const readingStartedAt = Date.now();
+
+window.addEventListener('beforeunload', () => {
+  if (!bridge) return; // never attached (no assignmentId, or attachment failed) — nothing to submit either way
+  try {
+    const durationMs = Date.now() - readingStartedAt;
+    const kinematics = bridge.orchestrator.kinematicsSummary();
+    if (shouldSubmitKinematics({ durationMs, kinematics })) {
+      bridge.submitKinematics({ ...kinematics, duration_ms: durationMs });
+    }
+  } catch (e) {}
+});
 
 (async () => {
   const params  = new URLSearchParams(location.search);
