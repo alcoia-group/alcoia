@@ -1005,6 +1005,92 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
   });
 });
 
+/* Item DC-1a — the same assignmentId+getSession gate as outcome reporting
+ * just above, mirrored for exactly the reason its own header states: the
+ * real server endpoint (confirmed against alcoiaServer's
+ * src/http/routes/scroll-sessions.js directly) requires a real assignment
+ * and an active class seat, so this stays inert for every ordinary
+ * content.js page, unchanged. kinematics.js is loaded via the real
+ * loadModule() shim, not mocked, same philosophy as the outcome tests. */
+describe('scroll-kinematics reporting to the server (item DC-1a)', () => {
+  const KINEMATICS_URL = 'https://api.test.invalid/api/sessions/kinematics';
+  const VALID_KINEMATICS = {
+    duration_ms: 45230, scroll_events: 128, velocity_p50: 0.42, velocity_p95: 1.8,
+    velocity_variance: 0.06, jitter_score: 0.11, micro_correction_count: 7,
+    micro_correction_rate: 0.0547, acceleration_events: 4, direction_changes: 12,
+    smooth_scroll_ratio: 0.83,
+  };
+
+  function assignmentDeps(overrides = {}) {
+    return baseDeps({
+      assignmentId: 'assign-42',
+      getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+      TOKEN_URL: 'https://api.test.invalid/api/token',
+      KINEMATICS_URL,
+    });
+  });
+
+  it('a completed signed-in session of sufficient length POSTs the correct payload shape', async () => {
+    let seenUrl = null, seenInit = null;
+    const fetchImpl = vi.fn(async (url, init) => {
+      seenUrl = url; seenInit = init;
+      return { ok: true, json: async () => ({ recorded: true }) };
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { submitKinematics } = await createHost(assignmentDeps());
+    submitKinematics(VALID_KINEMATICS);
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenUrl).toBe(KINEMATICS_URL);
+    expect(seenInit.headers.Authorization).toBe('Bearer tok-1');
+    expect(JSON.parse(seenInit.body)).toEqual({ assignmentId: 'assign-42', kinematics: VALID_KINEMATICS });
+  });
+
+  it('a non-signed-in user (getSession resolves null) sends nothing', async () => {
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { submitKinematics } = await createHost(assignmentDeps({ getSession: async () => null }));
+    submitKinematics(VALID_KINEMATICS);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('ordinary reading (no assignmentId) never calls the kinematics endpoint at all', async () => {
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+    // No assignmentId/getSession — content.js's own real construction for
+    // ordinary web pages.
+    const { submitKinematics } = await createHost(baseDeps());
+
+    submitKinematics(VALID_KINEMATICS);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('a failed POST is swallowed — no throw, nothing surfaced, and it does not block anything else on the host', async () => {
+    const fetchImpl = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { submitKinematics, host } = await createHost(assignmentDeps());
+    expect(() => submitKinematics(VALID_KINEMATICS)).not.toThrow();
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    // The host is still fully usable afterwards — a failed kinematics call
+    // has no effect on anything else host.js does.
+    expect(typeof host.onIntervention).toBe('function');
+  });
+});
+
 /* Item 13a — the self-report mechanism's three affordances, from host.js's
  * own side of the wiring. Each is verified independently, per this task's
  * own Tests requirement. */

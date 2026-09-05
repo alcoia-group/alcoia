@@ -119,5 +119,11 @@
     ASSIGNMENTS_MINE_URL: BACKEND_ORIGIN + '/api/assignments/mine',
     ASSIGNMENTS_URL: BACKEND_ORIGIN + '/api/assignments',
     DOCUMENTS_URL: BACKEND_ORIGIN + '/api/documents',
+    // Item DC-1a — src/shared/kinematics.js and host.js's submitKinematics.
+    // Confirmed by reading alcoiaServer's src/http/routes/scroll-sessions.js
+    // directly: POST here with { assignmentId, kinematics, collectionLabel? }
+    // -> { recorded: true }. Not nested under ASSIGNMENTS_URL like outcomes —
+    // this is a flat route with assignmentId as a body field, not a path param.
+    KINEMATICS_URL: BACKEND_ORIGIN + '/api/sessions/kinematics',
   });
 })(typeof self !== 'undefined' ? self : this);
