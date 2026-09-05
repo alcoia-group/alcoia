@@ -65,13 +65,16 @@ export async function createOrchestrator(deps) {
   // paragraph tracking in particular used to hang off a webcam gaze point,
   // so none of this fired unless a camera was running. It no longer does.
   const [paraTrackModule, regressionModule, interactionModule,
-         dynamicsModule, cursorModule, entropyModule] = await Promise.all([
+         dynamicsModule, cursorModule, entropyModule, kinematicsTrackerModule] = await Promise.all([
     loadModule('src/content/signals/paragraph-tracker.js'),
     loadModule('src/content/signals/scroll-regression.js'),
     loadModule('src/content/signals/interaction-signals.js'),
     loadModule('src/content/signals/scroll-dynamics.js'),
     loadModule('src/content/signals/cursor-tracking.js'),
     loadModule('src/content/signals/progression-entropy.js'),
+    // Not a signals/ detector despite the neighbouring path — see its own
+    // header for why (item DC-1a): it feeds nothing into state-engine.js.
+    loadModule('src/content/scroll-kinematics-tracker.js'),
   ]);
 
   const paragraphTracker   = paraTrackModule.createParagraphTracker({ minWords: 20, ...(paragraphTrackerOpts || {}) });
@@ -80,6 +83,7 @@ export async function createOrchestrator(deps) {
   const scrollDynamics     = dynamicsModule.createScrollDynamics();
   const cursorTracker      = cursorModule.createCursorTracker();
   const progressionEntropy = entropyModule.createProgressionEntropy();
+  const scrollKinematicsTracker = kinematicsTrackerModule.createScrollKinematicsTracker();
 
   let idleTimer = null;
   let interventionInFlight = false;
@@ -262,6 +266,10 @@ export async function createOrchestrator(deps) {
       if (!s().comprehensionCheckEnabled) return;
       try {
         scrollDynamics.update(window.scrollY);
+        // Same gate as scrollDynamics above — a reader who turned off
+        // "Notice when I'm struggling" gets no scroll-derived collection of
+        // any kind, not just no detection (item DC-1a).
+        scrollKinematicsTracker.update(window.scrollY);
         syncParagraph();
         const signal = comprehensionMonitor.onScroll();
         if (signal) pumpSignals(signal);
@@ -380,6 +388,10 @@ export async function createOrchestrator(deps) {
     progressionStats: () => progressionEntropy.stats(),
     regressionStats: () => scrollRegression.stats(),
     interactionStats: () => interactionSignals.stats(),
+    // Item DC-1a — null when there isn't enough scroll history to summarise
+    // yet (scroll-kinematics-tracker.js's own threshold, independent of this
+    // session's 30s minimum, which the caller checks separately).
+    kinematicsSummary: () => scrollKinematicsTracker.summary(),
     getActiveParagraphEl: () => paragraphTracker.getActive()?.el || null,
     // Exposed for the popup's manual paths and for tests.
     stateEngine,
