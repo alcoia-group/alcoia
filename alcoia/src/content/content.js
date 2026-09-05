@@ -214,6 +214,10 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   // ── Receipt ────────────────────────────────────────────────────────────
   // Reader-generated only. Nothing below runs on a timer, and nothing leaves
   // the machine without a click in the preview panel.
+  // Item DC-1a — loaded here (not lazily inside the beforeunload handler,
+  // which cannot itself be async-awaited meaningfully) so shouldSubmitKinematics
+  // is ready by the time the page might unload.
+  const kinematicsModule = await loadModule('src/shared/kinematics.js');
   const receiptModule = await loadModule('src/content/receipt.js');
   const receiptPanel = receiptModule.createReceiptPanel({
     esc,
@@ -1662,6 +1666,19 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   checkLastVisit();
   window.addEventListener('beforeunload', () => {
     try { sessionTracker.save(); } catch (e) {}
+    // Item DC-1a. hostApi.submitKinematics is always a no-op on an ordinary
+    // page (content.js never constructs a host with assignmentId/getSession
+    // — see host.js's own header) — called unconditionally anyway, the same
+    // way submitOutcome's gate is trusted rather than duplicated at each
+    // call site. shouldSubmitKinematics() (kinematics.js) owns the 30s
+    // floor, shared with viewer.js's identical beforeunload hook.
+    try {
+      const durationMs = sessionTracker.snapshot().durationMs;
+      const kinematics = orchestrator?.kinematicsSummary?.();
+      if (kinematicsModule.shouldSubmitKinematics({ durationMs, kinematics })) {
+        hostApi.submitKinematics({ ...kinematics, duration_ms: durationMs });
+      }
+    } catch (e) {}
     saveLastVisit();
   });
 

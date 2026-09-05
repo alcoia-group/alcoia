@@ -86,6 +86,29 @@ export async function createHost(deps) {
     };
   }
 
+  // ── Scroll-kinematics reporting (item DC-1a) ────────────────────────────
+  // Identical gate to submitOutcome above, for the identical reason: the
+  // real server endpoint (confirmed by reading alcoiaServer's
+  // src/http/routes/scroll-sessions.js directly, not assumed) requires a
+  // real assignmentId and an active seat in that assignment's class — there
+  // is no server-side path for a general "any signed-in reader" corpus, so
+  // this stays a no-op for every ordinary content.js page exactly the way
+  // submitOutcome already does, unchanged from before this item. Called once
+  // per session, at unload (content.js's/viewer.js's own beforeunload
+  // handler), never mid-session — see kinematics.js's own header for why
+  // that specific moment needs keepalive:true, unlike submitOutcome's calls.
+  let submitKinematics = () => {};
+  if (assignmentId && getSession) {
+    const kinematicsModule = await loadModule('src/shared/kinematics.js');
+    const kinematicsManager = kinematicsModule.createKinematicsManager({
+      getSession,
+      kinematicsUrl: self.ALCOIA_CONFIG.KINEMATICS_URL,
+    });
+    submitKinematics = (kinematics) => {
+      kinematicsManager.submit({ assignmentId, kinematics }).catch(() => {});
+    };
+  }
+
   const {
     reservePopup, showPopup, closePopup, highlightElement,
     showNudge, showSimulateToast, showStatusToast,
@@ -722,6 +745,11 @@ export async function createHost(deps) {
     // them directly, not just through orchestrator.js's view of `host`.
     sessionTracker,
     focusRuler,
+    // Item DC-1a — content.js's/viewer.js's own beforeunload handler calls
+    // this directly, the same top-level-exposure reason as sessionTracker
+    // just above. Always safe to call unconditionally: a no-op unless this
+    // host was constructed with assignmentId+getSession (see above).
+    submitKinematics,
     fetchSummary,
     fetchQuestions,
     fetchGrading,

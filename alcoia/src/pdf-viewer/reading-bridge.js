@@ -215,5 +215,9 @@ export async function attachReadingBridge({ sourceUrl, assignmentId, debug } = {
     // (in-flight state pointing at DOM that no longer exists), so this
     // reuses that exact reset path rather than inventing a new one.
     handleRebuild() { try { orchestrator.handleRouteChange(); } catch (e) {} },
+    // Item DC-1a — viewer.js's own beforeunload handler calls this; a no-op
+    // unless this bridge was attached with a real assignmentId (see
+    // host.js's own gate, unchanged here).
+    submitKinematics: hostApi.submitKinematics,
   };
 }
