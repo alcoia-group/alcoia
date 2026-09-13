@@ -24,7 +24,7 @@ const STATE_UI = {
   skimming:   { name: 'Skimming',     dot: 'live', why: 'Moving faster than this text usually takes to read.' },
   struggling: { name: 'Struggling',   dot: 'attn', why: 'Slower than your usual pace here, or going back over it.' },
   drifting:   { name: 'Drifting',     dot: 'attn', why: 'Movement on the page has stalled without you leaving it.' },
-  absent:     { name: 'Away',         dot: '',     why: 'Nothing to read from — you are away from the page.' },
+  absent:     { name: 'Away',         dot: '',     why: 'Nothing to read from. You are away from the page.' },
   unknown:    { name: 'Not sure yet', dot: '',     why: 'The signals do not agree. Nothing interrupts you on this.' },
 };
 
@@ -187,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // in a compact popup. Nothing local is deleted by signing out (CLAUDE.md:
     // notes/highlights/quizzes stay on-device either way), but it does drop
     // paid-feature access until signing back in, which is worth a pause.
-    if (!confirm('Sign out of alcoia? You can sign back in any time — nothing on this device is deleted.')) return;
+    if (!confirm('Sign out of alcoia? You can sign back in any time. Nothing on this device is deleted.')) return;
     await session.clearSession();
     refreshAccountStatus();
   });
@@ -258,7 +258,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!err && resp && resp.started) { window.close(); return; }
       quizBtn.disabled = false;
       if (nameEl && idle) nameEl.textContent = idle;
-      if (quizGateNote) quizGateNote.textContent = "Couldn't prepare a quiz right now — try again in a moment.";
+      if (quizGateNote) quizGateNote.textContent = "Couldn't prepare a quiz right now. Try again in a moment.";
     });
   });
 

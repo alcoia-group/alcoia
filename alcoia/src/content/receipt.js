@@ -244,7 +244,7 @@ export function createReceiptPanel(deps = {}) {
       try {
         await navigator.clipboard.writeText(JSON.stringify(current, null, 2));
         status.textContent = 'Copied to your clipboard.';
-      } catch (e) { status.textContent = 'Could not copy — use Download instead.'; }
+      } catch (e) { status.textContent = 'Could not copy. Use Download instead.'; }
     };
 
     panel.querySelector('.sra-r-download').onclick = () => {
@@ -271,7 +271,7 @@ export function createReceiptPanel(deps = {}) {
         current = signed;
         const raw = panel.querySelector('.sra-r-raw pre');
         if (raw) raw.textContent = JSON.stringify(current, null, 2);
-        status.textContent = 'Signed. A signature shows this file has not been edited since — it is not proof the reading happened.';
+        status.textContent = 'Signed. A signature shows this file has not been edited since it was issued. It is not proof the reading happened.';
       };
     }
 

@@ -11,11 +11,11 @@
 export const CALIBRATION_COPY = Object.freeze({
   correct: {
     high: 'Correct, and appropriately confident.',
-    low:  "Correct — you knew more than you thought.",
+    low:  'Correct. You knew more than you thought.',
   },
   incorrect: {
-    high: "Not quite — you were sure, and that's worth noticing.",
-    low:  "Not quite — you weren't sure, and that's good calibration.",
+    high: "Not quite, and you were sure. That's worth noticing.",
+    low:  "Not quite, and you weren't sure. That's good calibration.",
   },
 });
 

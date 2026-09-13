@@ -274,7 +274,7 @@ $('signOutBtn').addEventListener('click', async () => {
   // immediately with no way back but signing in again. Nothing local is
   // deleted (CLAUDE.md: notes/highlights/quizzes stay on-device either
   // way), but losing paid-feature access is worth a pause first.
-  if (!confirm('Sign out of alcoia? You can sign back in any time — nothing on this device is deleted.')) return;
+  if (!confirm('Sign out of alcoia? You can sign back in any time. Nothing on this device is deleted.')) return;
   await session.clearSession();
   refreshAccountStatus();
 });

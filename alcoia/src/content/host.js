@@ -247,7 +247,7 @@ export async function createHost(deps) {
    * message handler (still in content.js). */
   async function startSnooze(durationMs, label) {
     const until = await snoozeControl.snooze(durationMs);
-    showStatusToast(`Snoozed${label ? ' for ' + label : ''} — reminders paused`);
+    showStatusToast(`Snoozed${label ? ' for ' + label : ''}. Reminders paused.`);
     return until;
   }
 

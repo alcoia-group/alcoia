@@ -55,13 +55,13 @@ function renderReport(session) {
           ${txt}
         </div>`;
       }).join('')
-    : '<p style="color:var(--muted);font-style:italic;font-size:12px">No struggle signals this session — great reading!</p>';
+    : '<p style="color:var(--muted);font-style:italic;font-size:12px">No struggle signals this session. Nice reading.</p>';
 
   const dateStr = session.startedAt ? new Date(session.startedAt).toLocaleString([], { dateStyle:'medium', timeStyle:'short' }) : '—';
   const pageTitle = (session.title || session.url || '').slice(0, 80);
 
   return `
-    <p class="page-info">${pageTitle} &mdash; ${dateStr}</p>
+    <p class="page-info">${pageTitle} · ${dateStr}</p>
 
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-value">${dur(totalMs)}</div><div class="stat-label">Time on Page</div></div>

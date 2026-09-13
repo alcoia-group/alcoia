@@ -88,7 +88,7 @@ function buildMarkdown(notes, highlights, sessions) {
       if (s.signals?.length) {
         lines.push(`**Events:**`);
         s.signals.slice(0, 10).forEach(sig => {
-          lines.push(`- [${sig.type}] ${sig.subtype || ''} — "${(sig.text || '').slice(0, 80)}"`);
+          lines.push(`- [${sig.type}] ${sig.subtype || ''} · "${(sig.text || '').slice(0, 80)}"`);
         });
       }
       lines.push('');
