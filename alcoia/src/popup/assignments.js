@@ -47,7 +47,7 @@ function showError(text) {
 function fetchErrorMessage(code) {
   switch (code) {
     case 'no_session': return 'Sign in to see your assignments.';
-    default: return "Couldn't load your assignments just now — try again.";
+    default: return "Couldn't load your assignments just now. Try again.";
   }
 }
 
@@ -76,7 +76,7 @@ function openablePdf(a) {
 async function openPdf(assignmentId, documentId, title) {
   const result = await assignments.getDownloadUrl(documentId);
   if (!result.ok) {
-    showError("Couldn't open that document just now — try again.");
+    showError("Couldn't open that document just now. Try again.");
     return;
   }
   const viewerUrl = chrome.runtime.getURL('src/pdf-viewer/viewer.html')
@@ -89,7 +89,7 @@ async function openPdf(assignmentId, documentId, title) {
 async function downloadInstead(documentId) {
   const result = await assignments.getDownloadUrl(documentId);
   if (!result.ok) {
-    showError("Couldn't fetch that file just now — try again.");
+    showError("Couldn't fetch that file just now. Try again.");
     return;
   }
   chrome.tabs.create({ url: result.url });

@@ -114,25 +114,25 @@ function showMember(classId) {
 
 function joinErrorMessage(code) {
   switch (code) {
-    case 'invalid_invite':          return "That invite code isn't recognised — double check the link or code.";
+    case 'invalid_invite':          return "That invite code isn't recognised. Double check the link or code.";
     case 'invite_revoked':          return 'This invite has been cancelled by the instructor.';
-    case 'invite_expired':          return 'This invite has expired — ask your instructor for a new one.';
+    case 'invite_expired':          return 'This invite has expired. Ask your instructor for a new one.';
     case 'domain_mismatch':         return "This invite is limited to a specific email domain, and your account's email doesn't match.";
     case 'already_a_member':        return "You're already in this class.";
-    case 'invite_full':             return 'This invite has reached its limit — ask your instructor for a new one.';
+    case 'invite_full':             return 'This invite has reached its limit. Ask your instructor for a new one.';
     case 'seat_capacity_exceeded':  return "This class doesn't have any open seats right now.";
-    case 'no_session':              return 'Something went wrong signing you in — try again.';
+    case 'no_session':              return 'Something went wrong signing you in. Try again.';
     case 'no_token':                return 'Paste an invite link or code first.';
-    // LTI entry (item S6/E4 follow-up) — server codes from
+    // LTI entry (item S6/E4 follow-up) -- server codes from
     // POST /api/lti/disclosure/ack, confirmed by reading
     // alcoiaServer's src/http/routes/lti.js directly.
-    case 'invalid_code':            return 'This launch link has expired — go back to Canvas and open the reading again.';
-    case 'code_already_used':       return 'This launch was already confirmed — go back to Canvas and open the reading again.';
-    case 'code_expired':            return 'This launch link has expired — go back to Canvas and open the reading again.';
+    case 'invalid_code':            return 'This launch link has expired. Go back to Canvas and open the reading again.';
+    case 'code_already_used':       return 'This launch was already confirmed. Go back to Canvas and open the reading again.';
+    case 'code_expired':            return 'This launch link has expired. Go back to Canvas and open the reading again.';
     case 'acknowledgement_required':
-    case 'no_ack_code':             return 'Something went wrong confirming this — go back to Canvas and try again.';
+    case 'no_ack_code':             return 'Something went wrong confirming this. Go back to Canvas and try again.';
     case 'no_seat_id':              return "This class membership came from your school's system and can't be left here.";
-    default:                        return "Couldn't join that class just now — try again.";
+    default:                        return "Couldn't join that class just now. Try again.";
   }
 }
 
@@ -142,7 +142,7 @@ async function completeJoin() {
   // inside the disclosure's own DOM subtree), kept as a hard stop rather
   // than trusting the HTML alone.
   if (!disclosureRendered) {
-    throw new Error('join-class.js: completeJoin() called without the disclosure having rendered — this must never happen');
+    throw new Error('join-class.js: completeJoin() called without the disclosure having rendered -- this must never happen');
   }
 
   const confirmBtn = $('confirmJoinBtn');

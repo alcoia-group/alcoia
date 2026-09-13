@@ -391,7 +391,7 @@ function renderResults(record) {
 }
 
 async function boot() {
-  if (!documentKey) { showEmpty('No quiz to show — go back to the article and use "Take the quiz".'); return; }
+  if (!documentKey) { showEmpty('No quiz to show. Go back to the article and use "Take the quiz".'); return; }
 
   const settings = await new Promise((resolve) =>
     chrome.storage.local.get({ sra_quiz_pending: null, sra_backend_url: '' }, resolve));
@@ -407,7 +407,7 @@ async function boot() {
     record = existing.find((r) => !r.completedAt) || null;
   }
 
-  if (!record) { showEmpty('No quiz ready yet — go back to the article and use "Take the quiz".'); return; }
+  if (!record) { showEmpty('No quiz ready yet. Go back to the article and use "Take the quiz".'); return; }
 
   const nextIndex = record.answers.length; // resume where a reader left off
   if (nextIndex >= record.questions.length) {

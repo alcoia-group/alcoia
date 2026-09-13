@@ -151,7 +151,7 @@ export function pickLevelForConcept(paragraphKey, history = []) {
  * had. */
 export function evidenceLineForLevel(level) {
   if (level === 'adversarial') {
-    return "You've been getting this right, confidently — here's a harder edge of it";
+    return 'You have been right and confident on this. Here is a harder edge of it.';
   }
   return null;
 }
