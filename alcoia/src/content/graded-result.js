@@ -47,6 +47,6 @@ export function gradedResultMarkup({ verdict, level, question, esc }) {
 export function respondedResultMarkup() {
   return {
     className: 'sra-q-result sra-q-result-responded',
-    innerHTML: `<strong>Thanks for working through that.</strong> This one isn't graded — the value was in making the argument.`,
+    innerHTML: `<strong>Thanks for working through that.</strong> This one isn't graded. The value was in making the argument.`,
   };
 }

@@ -1179,7 +1179,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     if (_fp) inFlightFingerprints.add(_fp);
 
     const mode = reason === 'overloaded' ? 'simplify' : reason === 'confused' ? 'explain_more' : 'tldr';
-    const triggerLabel = { confused:'— confused', overloaded:'— overloaded', zoning_out:'— zoning out' }[reason] || reason;
+    const triggerLabel = { confused:'confused', overloaded:'overloaded', zoning_out:'zoning out' }[reason] || reason;
 
     if (el) {
       highlightElement(el, 6000);

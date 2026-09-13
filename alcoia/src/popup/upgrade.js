@@ -119,11 +119,11 @@ const billing = createBillingManager({
 
 function checkoutErrorMessage(code) {
   switch (code) {
-    case 'billing_not_configured': return "Checkout isn't available yet — try again later.";
-    case 'invalid_session':        return 'Your session expired — sign in again to continue.';
-    case 'invalid_plan':           return "That plan isn't recognised — try reloading this page.";
+    case 'billing_not_configured': return "Checkout isn't available yet. Try again later.";
+    case 'invalid_session':        return 'Your session expired. Sign in again to continue.';
+    case 'invalid_plan':           return "That plan isn't recognised. Try reloading this page.";
     case 'no_subscription':        return "You don't have a subscription to manage yet.";
-    default:                       return "Couldn't reach that just now — try again.";
+    default:                       return "Couldn't reach that just now. Try again.";
   }
 }
 
@@ -268,7 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
       readerBtn.disabled = true;
       readerBtn.textContent = 'Waiting…';
       if (studentBtn) studentBtn.disabled = true;
-      const processing = "Processing — this can take a few seconds after you finish on Creem's page. Come back to this tab once you're done there.";
+      const processing = "Processing. This can take a few seconds after you finish on Creem's page. Come back to this tab once you're done there.";
       showStateNote(stateNote, processing, null);
       showStateNote(studentStateNote, processing, null);
     } else {

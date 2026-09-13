@@ -212,7 +212,7 @@ export function createPretestOcclusion(deps = {}) {
 
       const decision = interventionPolicy.evaluateContentTrigger({
         paragraphKey: paragraphKeyFor(rawText),
-        evidence: [`This passage says "${occlusion.trigger}" — something is about to be revealed`],
+        evidence: [`This passage says "${occlusion.trigger}". Something is about to be revealed.`],
       });
       if (!decision.allow) continue;   // budget said no — try the next candidate, nothing was spent
 

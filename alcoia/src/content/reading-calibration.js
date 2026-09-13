@@ -82,7 +82,7 @@ export function runSelfPacedCalibration(opts = {}) {
 
     const intro = document.createElement('p');
     intro.textContent =
-      'Read this at the pace you would normally read an article — not faster. '
+      'Read this at your normal article-reading pace. '
       + 'Press the button the moment you finish the last word.';
     Object.assign(intro.style, {
       fontSize: '13.5px', lineHeight: '1.6', margin: '0 0 20px',
