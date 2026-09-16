@@ -10,10 +10,7 @@
  * the Chrome service worker — so attaching to `self` reaches all three
  * without needing a module system any of them actually has.
  *
- * No production origin has been assigned yet. BACKEND_ORIGIN below is a
- * placeholder on the reserved `.invalid` TLD (RFC 2606) so it fails DNS
- * cleanly instead of silently resolving somewhere unintended — replace it
- * with the real deployed origin before any public release.
+ * BACKEND_ORIGIN is the real production origin: https://server.alcoia.app.
  *
  * A developer running a local backend does not need to edit this file or
  * the manifest: open the popup's Settings and set "Backend URL" (stored as
@@ -31,7 +28,7 @@
  * entry, by hand, together.
  */
 (function (root) {
-  const BACKEND_ORIGIN = 'http://localhost:3000';
+  const BACKEND_ORIGIN = 'https://server.alcoia.app';
 
   // *** DEV VALUE — NOT LIVE. *** alcoia.app does not resolve yet; this
   // whole roadmap is designed to work without it. The port is Vite's
