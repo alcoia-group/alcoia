@@ -58,7 +58,6 @@ const webPdfTakeoverToggle     = $('webPdfTakeoverToggle');
 
 // ── Defaults — identical to popup.js's own DEFAULTS object ────────────────
 const DEFAULTS = {
-  sra_backend_url: self.ALCOIA_CONFIG.SUMMARIZE_URL,
   sra_selection: true, sra_highlight_para: true,
   sra_highlight_color: true, sra_highlight_summarize: false,
   sra_highlight_persist: true,
@@ -140,6 +139,16 @@ function saveAndBroadcast() {
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (!tabs?.[0]) return;
+    // sra_backend_url has no field on THIS page any more (removed — see
+    // settings.html's Account card), but this read is not settings-page
+    // load/save logic for that field; it forwards whatever value is
+    // CURRENTLY stored (set, if ever, from the Diagnostics page's own
+    // dev-only field) into the broadcast every other toggle change here
+    // already sends. Diagnostics.js itself never messages the tab on
+    // change, so this is the only path that pushes a Diagnostics-set
+    // backend URL into an already-open tab without a reload — removing it
+    // would silently break that, which is exactly the "override mechanism
+    // stays functional" this key is supposed to keep doing.
     chrome.storage.local.get({ sra_backend_url: self.ALCOIA_CONFIG.SUMMARIZE_URL }, (r) => {
       chrome.tabs.sendMessage(tabs[0].id, {
         type: 'settings',
@@ -284,24 +293,6 @@ $('signOutBtn').addEventListener('click', async () => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (self.ALCOIA_CONFIG.SESSION_STORAGE_KEY in changes) refreshAccountStatus();
-});
-
-// ── Backend URL (advanced, collapsible) ────────────────────────────────────
-// Same read/write pattern diagnostics.js's own dev-tools field already
-// uses for this exact key — kept there too (see settings.html's own note);
-// this is an additive second place to reach it, not a replacement.
-$('advancedToggle').addEventListener('click', () => {
-  const el = $('accountAdvanced');
-  const open = el.style.display === 'block';
-  el.style.display = open ? 'none' : 'block';
-  $('advancedToggle').textContent = open ? 'Advanced ▾' : 'Advanced ▴';
-});
-$('backendUrlInput').placeholder = self.ALCOIA_CONFIG.SUMMARIZE_URL;
-chrome.storage.local.get({ sra_backend_url: self.ALCOIA_CONFIG.SUMMARIZE_URL }, (res) => {
-  $('backendUrlInput').value = res.sra_backend_url;
-});
-$('backendUrlInput').addEventListener('change', () => {
-  chrome.storage.local.set({ sra_backend_url: $('backendUrlInput').value.trim() });
 });
 
 // ── Diagnostics link ────────────────────────────────────────────────────
