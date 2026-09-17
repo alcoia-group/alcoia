@@ -30,14 +30,9 @@
 (function (root) {
   const BACKEND_ORIGIN = 'https://server.alcoia.app';
 
-  // *** DEV VALUE — NOT LIVE. *** alcoia.app does not resolve yet; this
-  // whole roadmap is designed to work without it. The port is Vite's
-  // default and a GUESS at what alcoiaWeb (the Phase 1 landing page, a
-  // separate repo) actually runs on locally — confirm against that repo's
-  // own dev server output. Swap to 'https://alcoia.app' (and
-  // manifests/base.json's matching entry to 'https://alcoia.app/*')
-  // before any real launch.
-  const WEB_APP_ORIGIN = 'http://localhost:8080';
+  // The marketing site origin. Must match manifests/base.json's
+  // externally_connectable.matches entry — see build.mjs for details.
+  const WEB_APP_ORIGIN = 'https://alcoia.app';
 
   root.ALCOIA_CONFIG = Object.freeze({
     BACKEND_ORIGIN: BACKEND_ORIGIN,

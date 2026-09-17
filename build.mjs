@@ -33,18 +33,18 @@ const LICENSE = path.join(HERE, 'LICENSE');
 export const TARGETS = ['chrome', 'firefox'];
 
 /* manifests/base.json's `externally_connectable.matches` — JSON cannot hold
- * a comment, so the explanation lives here instead. It is currently
- * 'http://localhost:5173/*', a DEV VALUE: the Phase 1 landing page
- * (alcoiaWeb, a separate repo) that hands this extension a magic-link
- * sign-in code via chrome.runtime.sendMessage(). alcoia.app does not
- * resolve yet — the whole roadmap is designed to work without it — so this
- * MUST be swapped to 'https://alcoia.app/*' before any real launch, and
- * src/shared/config.js's WEB_APP_ORIGIN constant (the runtime origin check
- * background.js's onMessageExternal listener does, independent of this
- * manifest entry) must be swapped to match at the same time — the two are
- * not wired together and a mismatch would make one of them wrong silently.
- * The port here is Vite's default and a GUESS at what alcoiaWeb actually
- * runs on locally; confirm against that repo's own dev server output.
+ * a comment, so the explanation lives here instead. It is
+ * 'https://alcoia.app/*', the live marketing/sign-in site (alcoiaWeb, a
+ * separate repo) that hands this extension a magic-link sign-in code via
+ * chrome.runtime.sendMessage(). alcoia.app is confirmed live (verified
+ * directly, not assumed) as of the change that updated this entry from its
+ * earlier localhost dev placeholder. src/shared/config.js's WEB_APP_ORIGIN
+ * constant (the runtime origin check background.js's onMessageExternal
+ * listener does, independent of this manifest entry) must be kept in sync
+ * with this value — the two are not wired together, so editing one without
+ * the other makes one of them silently wrong. A developer testing sign-in
+ * locally against a differently-ported alcoiaWeb dev server needs to
+ * change both back, by hand, together.
  *
  * A second entry, 'https://console.alcoia.invalid/*', was added for the
  * LTI launch flow (item S6/E4 follow-up) — the page a Canvas launch
