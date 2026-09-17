@@ -33,6 +33,7 @@ export function createReadingMap() {
     if (document.getElementById(MAP_ID)) return;
 
     const style = document.createElement('style');
+    style.id = 'sra-reading-map-style';
     style.textContent = `
       #${MAP_ID} {
         position: fixed; top: 0; right: 0; bottom: 0;
@@ -251,5 +252,20 @@ export function createReadingMap() {
     if (visible) renderBody();
   }
 
-  return { toggle, recordEvent };
+  /* The master-switch hard-off teardown counterpart to ensureDOM() above.
+   * Removes every DOM node this module ever injects (tab, sidebar, its own
+   * <style>) and its own scroll listener, and resets internal state so a
+   * later ensureDOM() call — from a fresh toggle()/recordEvent() once the
+   * switch is back on — rebuilds cleanly rather than finding stale state. */
+  function destroy() {
+    try { window.removeEventListener('scroll', onScroll); } catch (e) {}
+    try { document.getElementById(MAP_ID)?.remove(); } catch (e) {}
+    try { document.getElementById(TAB_ID)?.remove(); } catch (e) {}
+    try { document.getElementById('sra-reading-map-style')?.remove(); } catch (e) {}
+    visible  = false;
+    headings = [];
+    events   = [];
+  }
+
+  return { toggle, recordEvent, destroy };
 }
