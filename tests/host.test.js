@@ -58,6 +58,26 @@ function fakeChrome() {
 // source tree — the same modules the shipped extension actually loads.
 const loadModule = (p) => import(/* @vite-ignore */ `../alcoia/${p}`);
 
+/* Every element createUIController() renders (question cards, self-report
+ * cards, etc.) now lives inside its own shadow-host.js shadow root (mode:
+ * 'open' — see that file's header), so a plain document.querySelector can
+ * no longer find any of it. These pierce every [data-alcoia-host] the way
+ * a real caller with .shadowRoot access still can. */
+function queryAlcoia(selector) {
+  for (const host of document.querySelectorAll('[data-alcoia-host]')) {
+    const found = host.shadowRoot?.querySelector(selector);
+    if (found) return found;
+  }
+  return null;
+}
+function queryAllAlcoia(selector) {
+  const results = [];
+  for (const host of document.querySelectorAll('[data-alcoia-host]')) {
+    results.push(...(host.shadowRoot?.querySelectorAll(selector) || []));
+  }
+  return results;
+}
+
 function baseDeps(overrides = {}) {
   const ui = createUIController({});
   return {
@@ -778,8 +798,8 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
 
     // Answer correctly (index 0), with high confidence — the real DOM
     // question-card.js rendered, not a re-implementation of its commit logic.
-    document.querySelector('.sra-q-option[data-index="0"]').click();
-    document.querySelector('.sra-q-conf-btn[data-conf="high"]').click();
+    queryAlcoia('.sra-q-option[data-index="0"]').click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenUrl).toBe(`${ASSIGNMENTS_URL}/assign-42/outcomes`);
@@ -810,8 +830,8 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     document.body.innerHTML = '<p id="t">A paragraph about the incorrect-answer case specifically, long enough to pass fetchQuestions\' own length floor before it will even try.</p>';
     await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 2);
 
-    document.querySelector('.sra-q-option[data-index="1"]').click(); // wrong
-    document.querySelector('.sra-q-conf-skip').click(); // no confidence given
+    queryAlcoia('.sra-q-option[data-index="1"]').click(); // wrong
+    queryAlcoia('.sra-q-conf-skip').click(); // no confidence given
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenBody.correct).toBe(false);
@@ -846,11 +866,11 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     document.body.innerHTML = '<p id="t">A paragraph about the adversarial-confidence case specifically, long enough to pass fetchQuestions\' own length floor before it will even try.</p>';
     await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 9);
 
-    const textarea = document.querySelector('.sra-q-answer-input');
+    const textarea = queryAlcoia('.sra-q-answer-input');
     textarea.value = 'a counter-argument';
     textarea.dispatchEvent(new Event('input'));
-    document.querySelector('.sra-q-submit-text').click();
-    document.querySelector('.sra-q-conf-btn[data-conf="high"]').click();
+    queryAlcoia('.sra-q-submit-text').click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenBody.paragraph_index).toBe(9);
@@ -892,7 +912,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     document.body.innerHTML = '<p id="t">A paragraph about the dismissed-question case specifically, long enough to pass fetchQuestions\' own length floor before it will even try.</p>';
     await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 1);
 
-    document.querySelector('.sra-close-btn').click();
+    queryAlcoia('.sra-close-btn').click();
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -1170,8 +1190,8 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
     document.body.innerHTML = `<p id="t">${paraText}</p>`;
     await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 7);
 
-    document.querySelector('.sra-q-option[data-index="0"]').click();
-    document.querySelector('.sra-q-conf-skip').click();
+    queryAlcoia('.sra-q-option[data-index="0"]').click();
+    queryAlcoia('.sra-q-conf-skip').click();
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenBody.explanation_preceded_attempt).toBe(true);
@@ -1277,7 +1297,7 @@ describe('self-report (item 13a)', () => {
     const shown = showSelfReportCard();
     expect(shown).toBe(true);
 
-    const opts = document.querySelectorAll('[data-self-report]');
+    const opts = queryAllAlcoia('[data-self-report]');
     expect(opts).toHaveLength(3);
     const subtypes = [...opts].map((b) => b.dataset.selfReport).sort();
     expect(subtypes).toEqual(['confusion', 'disengaged', 'overload']);
@@ -1290,7 +1310,7 @@ describe('self-report (item 13a)', () => {
     setOrchestrator({ pumpSignals });
 
     showSelfReportCard();
-    document.querySelector('[data-self-report="confusion"]').click();
+    queryAlcoia('[data-self-report="confusion"]').click();
 
     expect(pumpSignals).toHaveBeenCalledTimes(1);
     expect(pumpSignals).toHaveBeenCalledWith({ type: 'self_report', subtype: 'confusion' });
@@ -1312,7 +1332,7 @@ describe('self-report (item 13a)', () => {
     setOrchestrator({ pumpSignals: vi.fn(), interventionPolicy });
 
     showSelfReportCard();
-    document.querySelector('[data-self-report="disengaged"]').click();
+    queryAlcoia('[data-self-report="disengaged"]').click();
 
     expect(interventionPolicy.evaluate).not.toHaveBeenCalled();
     expect(interventionPolicy.record).not.toHaveBeenCalled();
@@ -1373,13 +1393,13 @@ describe('self-report (item 13a)', () => {
 
       showSelfReportCard();
       // Schedules a 900ms auto-close (host.js's own showSelfReportCard()).
-      document.querySelector('[data-self-report="confusion"]').click();
+      queryAlcoia('[data-self-report="confusion"]').click();
 
       // Closed EARLY via hidePopup() — Escape's own mechanism — well
       // before that 900ms auto-close would fire.
       ui.hidePopup();
       vi.advanceTimersByTime(300); // past the 250ms DOM-removal delay
-      expect(document.querySelectorAll('[data-self-report]')).toHaveLength(0);
+      expect(queryAllAlcoia('[data-self-report]')).toHaveLength(0);
 
       // A second card, the SAME fingerprint, opened before the first
       // card's now-orphaned 900ms timer would have fired.
@@ -1392,14 +1412,14 @@ describe('self-report (item 13a)', () => {
       // without removing it from the DOM — orphaned: visible, but no
       // longer reachable by any future hidePopup()/Escape call.
       vi.advanceTimersByTime(700); // 1000ms since the FIRST click — past its 900ms mark
-      expect(document.querySelectorAll('[data-self-report]')).toHaveLength(3);
+      expect(queryAllAlcoia('[data-self-report]')).toHaveLength(3);
 
       // The real assertion: closable via the SAME Escape-equivalent path,
       // proving openPopups still correctly tracks it rather than having
       // been silently deleted out from under it.
       ui.hidePopup();
       vi.advanceTimersByTime(300);
-      expect(document.querySelectorAll('[data-self-report]')).toHaveLength(0);
+      expect(queryAllAlcoia('[data-self-report]')).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }

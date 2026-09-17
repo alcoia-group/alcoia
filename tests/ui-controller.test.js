@@ -13,6 +13,26 @@ function build(settings = {}) {
   });
 }
 
+/* Every element createUIController() renders now lives inside its own
+ * shadow-host.js shadow root (mode: 'open' — see that file's header), so a
+ * plain document.querySelector/getElementById can no longer find any of it.
+ * These pierce every [data-alcoia-host] the way a real caller with
+ * .shadowRoot access (anything outside the page's own JS) still can. */
+function queryAlcoia(selector) {
+  for (const host of document.querySelectorAll('[data-alcoia-host]')) {
+    const found = host.shadowRoot?.querySelector(selector);
+    if (found) return found;
+  }
+  return null;
+}
+function queryAllAlcoia(selector) {
+  const results = [];
+  for (const host of document.querySelectorAll('[data-alcoia-host]')) {
+    results.push(...(host.shadowRoot?.querySelectorAll(selector) || []));
+  }
+  return results;
+}
+
 beforeEach(() => {
   document.body.innerHTML = '';
   delete window.__sra_resize_watcher;
@@ -44,7 +64,7 @@ describe('reservePopup', () => {
     const root = ui.reservePopup('abc');
     expect(root).toBeTruthy();
     expect(ui.openPopups.get('abc').el).toBe(root);
-    expect(document.querySelectorAll('.sra-popup')).toHaveLength(1);
+    expect(queryAllAlcoia('.sra-popup')).toHaveLength(1);
   });
 
   it('refuses a duplicate and flashes the card already on screen', () => {
@@ -52,7 +72,7 @@ describe('reservePopup', () => {
     const first = ui.reservePopup('abc');
     first.classList.add('show');
     expect(ui.reservePopup('abc')).toBeNull();
-    expect(document.querySelectorAll('.sra-popup')).toHaveLength(1);
+    expect(queryAllAlcoia('.sra-popup')).toHaveLength(1);
   });
 
   it('replaces a registration whose element has been removed from the page', () => {
@@ -96,7 +116,7 @@ describe('closePopup', () => {
     expect(ui.openPopups.has('abc')).toBe(false);
     expect(root.classList.contains('show')).toBe(false);
     vi.advanceTimersByTime(300);
-    expect(document.querySelectorAll('.sra-popup')).toHaveLength(0);
+    expect(queryAllAlcoia('.sra-popup')).toHaveLength(0);
     vi.useRealTimers();
   });
 });
@@ -146,13 +166,13 @@ describe('renderPopup', () => {
   it('renders nothing without text — there would be no dedup key', () => {
     const ui = build();
     ui.renderPopup(null, '<p>hi</p>', { text: '   ' });
-    expect(document.querySelectorAll('.sra-popup')).toHaveLength(0);
+    expect(queryAllAlcoia('.sra-popup')).toHaveLength(0);
   });
 
   it('escapes the trigger label it puts in the badge', () => {
     const ui = build();
     ui.renderPopup(null, '<div>body</div>', { text: 'some paragraph', trigger: '<script>x</script>' });
-    const badge = document.querySelector('.sra-state-badge');
+    const badge = queryAlcoia('.sra-state-badge');
     expect(badge.innerHTML).not.toContain('<script>');
     expect(badge.textContent).toContain('<script>x</script>');
   });
@@ -160,7 +180,7 @@ describe('renderPopup', () => {
   it('honours pinDefault', () => {
     const ui = build({ pinDefault: true });
     ui.renderPopup(null, '<div>body</div>', { text: 'some paragraph' });
-    expect(document.querySelector('.sra-popup').dataset.pinned).toBe('true');
+    expect(queryAlcoia('.sra-popup').dataset.pinned).toBe('true');
   });
 });
 
@@ -183,7 +203,7 @@ describe('ensureSelfReportTrigger', () => {
     const onClick = vi.fn();
     build().ensureSelfReportTrigger(onClick);
 
-    const btn = document.getElementById('sra-self-report-trigger');
+    const btn = queryAlcoia('#sra-self-report-trigger');
     expect(btn).toBeTruthy();
     expect(btn.tagName).toBe('BUTTON');
 
@@ -197,10 +217,10 @@ describe('ensureSelfReportTrigger', () => {
     build().ensureSelfReportTrigger(onClick1);
     build().ensureSelfReportTrigger(onClick2);
 
-    expect(document.querySelectorAll('#sra-self-report-trigger')).toHaveLength(1);
+    expect(queryAllAlcoia('#sra-self-report-trigger')).toHaveLength(1);
     // The SECOND call's callback never got wired — the first trigger
     // element (and its original callback) is what actually persists.
-    document.getElementById('sra-self-report-trigger').click();
+    queryAlcoia('#sra-self-report-trigger').click();
     expect(onClick1).toHaveBeenCalledTimes(1);
     expect(onClick2).not.toHaveBeenCalled();
   });
@@ -208,7 +228,7 @@ describe('ensureSelfReportTrigger', () => {
   it('is always present regardless of getSettings() — unlike every other element in this file, it is not conditional on detected state', () => {
     const ui = createUIController({ getSettings: () => ({ highlightEnabled: false, pinDefault: false, autohideEnabled: false }) });
     ui.ensureSelfReportTrigger(() => {});
-    expect(document.getElementById('sra-self-report-trigger')).toBeTruthy();
+    expect(queryAlcoia('#sra-self-report-trigger')).toBeTruthy();
   });
 });
 
@@ -220,7 +240,7 @@ describe('showSelectionTooltip', () => {
 
   it('renders a single tooltip with the "Explain this →" action', () => {
     build().showSelectionTooltip(RECT, () => {});
-    const el = document.getElementById('sra-select-tooltip');
+    const el = queryAlcoia('#sra-select-tooltip');
     expect(el).toBeTruthy();
     expect(el.querySelector('.sra-select-tooltip-btn').textContent).toBe('Explain this →');
   });
@@ -230,12 +250,12 @@ describe('showSelectionTooltip', () => {
     try {
       const onExplain = vi.fn();
       build().showSelectionTooltip(RECT, onExplain);
-      document.querySelector('.sra-select-tooltip-btn').click();
+      queryAlcoia('.sra-select-tooltip-btn').click();
       expect(onExplain).toHaveBeenCalledTimes(1);
       // Fade-out delay before actual removal — same shape as closePopup()'s
       // own 250ms — real DOM removal is not synchronous with dismiss().
       vi.advanceTimersByTime(200);
-      expect(document.getElementById('sra-select-tooltip')).toBeNull();
+      expect(queryAlcoia('#sra-select-tooltip')).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -246,11 +266,11 @@ describe('showSelectionTooltip', () => {
     try {
       const onExplain = vi.fn();
       build().showSelectionTooltip(RECT, onExplain);
-      expect(document.getElementById('sra-select-tooltip')).toBeTruthy();
+      expect(queryAlcoia('#sra-select-tooltip')).toBeTruthy();
 
       document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
       vi.advanceTimersByTime(200);
-      expect(document.getElementById('sra-select-tooltip')).toBeNull();
+      expect(queryAlcoia('#sra-select-tooltip')).toBeNull();
       expect(onExplain).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -260,24 +280,24 @@ describe('showSelectionTooltip', () => {
   it('a second call replaces any tooltip already on screen — at most one at a time', () => {
     build().showSelectionTooltip(RECT, () => {});
     build().showSelectionTooltip(RECT, () => {});
-    expect(document.querySelectorAll('#sra-select-tooltip')).toHaveLength(1);
+    expect(queryAllAlcoia('#sra-select-tooltip')).toHaveLength(1);
   });
 
   it('does nothing when given no anchor rect, rather than rendering an unpositioned tooltip', () => {
     build().showSelectionTooltip(null, () => {});
-    expect(document.getElementById('sra-select-tooltip')).toBeNull();
+    expect(queryAlcoia('#sra-select-tooltip')).toBeNull();
   });
 
   it('auto-dismisses after its own timeout if the reader does neither', () => {
     vi.useFakeTimers();
     try {
       build().showSelectionTooltip(RECT, () => {});
-      expect(document.getElementById('sra-select-tooltip')).toBeTruthy();
+      expect(queryAlcoia('#sra-select-tooltip')).toBeTruthy();
       vi.advanceTimersByTime(8000);
       // The removal itself is on a short follow-up setTimeout after the
       // class-removal transition — advance past that too.
       vi.advanceTimersByTime(200);
-      expect(document.getElementById('sra-select-tooltip')).toBeNull();
+      expect(queryAlcoia('#sra-select-tooltip')).toBeNull();
     } finally {
       vi.useRealTimers();
     }
