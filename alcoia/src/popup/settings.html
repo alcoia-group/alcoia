@@ -88,14 +88,6 @@
     .mode-btn .m-desc { display: block; font-size: 10.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
     .mode-btn.active .m-desc { color: rgba(255,255,255,0.85); }
 
-    .advanced-toggle {
-      background: none; border: none; padding: 8px 2px; margin: 4px 0;
-      font-family: var(--alc-ui); font-size: 11.5px; font-weight: 600;
-      color: var(--muted); cursor: pointer;
-    }
-    .advanced-toggle:hover { color: var(--text); }
-    #accountAdvanced { display: none; padding: 0 0 12px; }
-
     .section-note { font-size: 11px; color: var(--muted); line-height: 1.55; margin: 6px 0 12px; }
 
     /* ── Shortcuts ── ported from popup.html's old "Shortcuts" section
@@ -349,18 +341,6 @@
     <div id="accountSignedIn" hidden>
       <p class="section-note">Signed in as <strong id="accountEmail"></strong></p>
       <div class="btn-row"><button class="btn btn-ghost" id="signOutBtn">Sign out</button></div>
-    </div>
-
-    <button type="button" class="advanced-toggle" id="advancedToggle">Advanced ▾</button>
-    <div id="accountAdvanced">
-      <div class="field-row">
-        <label class="field-label" for="backendUrlInput">Backend URL</label>
-        <input class="field-input" id="backendUrlInput" type="text" placeholder="https://api.example.com/api/summarize">
-      </div>
-      <p class="section-note">
-        Also editable on the Diagnostics page. For pointing a dev build at a local backend —
-        leave this alone otherwise.
-      </p>
     </div>
   </div>
 
