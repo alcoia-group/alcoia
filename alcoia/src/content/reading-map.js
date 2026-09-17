@@ -7,11 +7,27 @@
    Event types are the engine's state names. They arrive from
    triggerAIForParagraph's `reason`, so an entry keyed on an older label
    (confused, overloaded) would simply never colour anything.
+
+   The tab and sidebar render inside a shadow-host.js shadow root, not the
+   page's own light DOM — a host page's own CSS (a `* { font-size: 32px }`
+   reset, oversized default `button`/`div` styles) used to bleed straight
+   into both. `document.getElementById(MAP_ID)` etc. no longer find
+   anything once the DOM they used to find lives inside a shadow tree, so
+   every lookup below goes through the `shadowRoot` this module keeps for
+   itself instead of the real `document`. The one exception is
+   buildHeadings()'s scan for h1-h4 — that reads the PAGE's own real
+   headings, still in light DOM as always, and stays a plain document query.
 */
+
+import { createShadowHost } from './shadow-host.js';
 
 const MAP_ID    = 'sra-reading-map';
 const TAB_ID    = 'sra-reading-map-tab';
 const WIDTH_PX  = 190;
+// The higher of the tab's and sidebar's own individual z-index values
+// (below, unchanged) — see shadow-host.js's createShadowHost() header for
+// why the shared host, not each element, is what needs to carry this now.
+const Z_READING_MAP = 2147483636;
 
 const EVENT_COLOR = {
   summarized: '#5F4589',
@@ -22,15 +38,22 @@ const EVENT_COLOR = {
   manual:     '#6B6862',
 };
 
-export function createReadingMap() {
+export function createReadingMap(deps = {}) {
+  const sharedStyles = deps.sharedStyles || '';
+
   let visible  = false;
   let headings = [];
   let events   = [];   // { pct, type, label }
-  let rafId    = null;
+  let shadowHostEl = null;
+  let shadowRoot   = null;
 
   // ── DOM construction ────────────────────────────────────────────────────
   function ensureDOM() {
-    if (document.getElementById(MAP_ID)) return;
+    if (shadowRoot) return;
+
+    const { host, shadow } = createShadowHost(sharedStyles, Z_READING_MAP);
+    shadowHostEl = host;
+    shadowRoot = shadow;
 
     const style = document.createElement('style');
     style.id = 'sra-reading-map-style';
@@ -115,7 +138,7 @@ export function createReadingMap() {
       }
       .sra-map-event-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     `;
-    document.head.appendChild(style);
+    shadowRoot.appendChild(style);
 
     // Tab toggle button
     const tab = document.createElement('button');
@@ -123,7 +146,7 @@ export function createReadingMap() {
     tab.textContent = 'MAP';
     tab.title = 'Toggle reading map (Alt+M)';
     tab.addEventListener('click', () => toggle());
-    document.body.appendChild(tab);
+    shadowRoot.appendChild(tab);
 
     // Sidebar
     const sidebar = document.createElement('div');
@@ -137,7 +160,7 @@ export function createReadingMap() {
       </div>
       <div class="sra-map-body" id="sra-map-body"></div>`;
 
-    document.body.appendChild(sidebar);
+    shadowRoot.appendChild(sidebar);
 
     // Scroll → update progress + current heading
     window.addEventListener('scroll', onScroll, { passive: true });
@@ -149,8 +172,8 @@ export function createReadingMap() {
     const scrollH   = document.documentElement.scrollHeight - window.innerHeight;
     const pct       = scrollH > 0 ? Math.round(scrollTop / scrollH * 100) : 0;
 
-    const fill = document.getElementById('sra-map-fill');
-    const pctEl = document.getElementById('sra-map-pct');
+    const fill  = shadowRoot?.getElementById('sra-map-fill');
+    const pctEl = shadowRoot?.getElementById('sra-map-pct');
     if (fill)  fill.style.width = pct + '%';
     if (pctEl) pctEl.textContent = pct + '%';
 
@@ -159,11 +182,13 @@ export function createReadingMap() {
     for (const h of headings) {
       if (h.el.getBoundingClientRect().top <= 80) current = h;
     }
-    document.querySelectorAll('.sra-map-heading').forEach(el => {
+    shadowRoot?.querySelectorAll('.sra-map-heading').forEach(el => {
       el.classList.toggle('current', el.dataset.headingId === (current?.id || ''));
     });
   }
 
+  // The page's own real headings — always light DOM, unrelated to the
+  // shadow root this module renders into.
   function buildHeadings() {
     headings = [];
     const els = document.querySelectorAll('h1,h2,h3,h4');
@@ -174,7 +199,7 @@ export function createReadingMap() {
   }
 
   function renderBody() {
-    const body = document.getElementById('sra-map-body');
+    const body = shadowRoot?.getElementById('sra-map-body');
     if (!body) return;
     body.innerHTML = '';
 
@@ -234,8 +259,8 @@ export function createReadingMap() {
   function toggle() {
     visible = !visible;
     ensureDOM();
-    document.getElementById(MAP_ID)?.classList.toggle('open', visible);
-    document.getElementById(TAB_ID)?.classList.toggle('open', visible);
+    shadowRoot?.getElementById(MAP_ID)?.classList.toggle('open', visible);
+    shadowRoot?.getElementById(TAB_ID)?.classList.toggle('open', visible);
     if (visible) {
       buildHeadings();
       renderBody();
@@ -253,15 +278,16 @@ export function createReadingMap() {
   }
 
   /* The master-switch hard-off teardown counterpart to ensureDOM() above.
-   * Removes every DOM node this module ever injects (tab, sidebar, its own
-   * <style>) and its own scroll listener, and resets internal state so a
-   * later ensureDOM() call — from a fresh toggle()/recordEvent() once the
-   * switch is back on — rebuilds cleanly rather than finding stale state. */
+   * Removes the shadow host (tab, sidebar and its own <style> all go with
+   * it in one call) and its own scroll listener, and resets internal state
+   * so a later ensureDOM() call — from a fresh toggle()/recordEvent() once
+   * the switch is back on — rebuilds cleanly rather than finding stale
+   * state. */
   function destroy() {
     try { window.removeEventListener('scroll', onScroll); } catch (e) {}
-    try { document.getElementById(MAP_ID)?.remove(); } catch (e) {}
-    try { document.getElementById(TAB_ID)?.remove(); } catch (e) {}
-    try { document.getElementById('sra-reading-map-style')?.remove(); } catch (e) {}
+    try { shadowHostEl?.remove(); } catch (e) {}
+    shadowHostEl = null;
+    shadowRoot   = null;
     visible  = false;
     headings = [];
     events   = [];

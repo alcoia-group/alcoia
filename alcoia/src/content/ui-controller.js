@@ -11,21 +11,61 @@
  * Settings are read through a getter rather than captured, because the storage
  * listener in content.js reassigns them at runtime and a captured copy would
  * silently go stale.
+ *
+ * Every element this module renders lives inside its own shadow-host.js
+ * shadow root, not the page's own light DOM — see that file's header for
+ * why. `sharedStyles` (the fetched, URL-corrected overlay.css + fonts.css
+ * text) is a required dependency now: content.js awaits
+ * shadow-host.js's loadSharedStyles() once, before constructing this
+ * controller, so every createShadowHost() call here stays synchronous.
  */
+
+import { createShadowHost, setDarkMode as setShadowDarkMode } from './shadow-host.js';
 
 const POPUP_MARGIN = 14;
 const MAX_POPUPS   = 5;      // hard cap before the oldest unpinned is evicted
+
+// Original z-index values, preserved per element rather than given one
+// blanket value — see shadow-host.js's createShadowHost() header for why
+// relative stacking order among alcoia's own elements would otherwise
+// silently change.
+const Z_POPUP = 2147483647;
+const Z_TOAST = 2147483646;
+const Z_SELECT_TOOLTIP = 2147483646;
+const Z_SELF_REPORT_TRIGGER = 2147483645;
 
 export const esc = (s = '') => String(s).replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 export const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+/* Dedup helpers for single-instance elements (toasts, the selection
+ * tooltip) that used to be found and removed via a plain, GLOBAL
+ * document.getElementById(id) — a lookup that doesn't care which code
+ * created the element, only whether one with that id exists anywhere.
+ * Tracking "the current one" in a variable local to this module's own
+ * closure would look equivalent for the one real instance of this
+ * controller the shipped extension ever constructs, but silently regresses
+ * to per-instance dedup the moment more than one exists (as a couple of
+ * tests here deliberately do, to exercise "a second call replaces the
+ * first" without needing a live singleton) — a second createUIController()
+ * would no longer find or remove the first one's element at all. Searching
+ * every shadow host, the same way a global ID lookup would have searched
+ * the whole light DOM, keeps the exact original dedup semantics regardless
+ * of how many controller instances exist. */
+function findAlcoiaHostContaining(id) {
+  for (const host of document.querySelectorAll('[data-alcoia-host]')) {
+    if (host.shadowRoot?.getElementById(id)) return host;
+  }
+  return null;
+}
+
 export function createUIController(deps = {}) {
   const getSettings = deps.getSettings || (() => ({}));
   const fetchSummary = deps.fetchSummary || (async () => '');
   const margin = deps.popupMargin ?? POPUP_MARGIN;
   const maxPopups = deps.maxPopups ?? MAX_POPUPS;
+  const sharedStyles = deps.sharedStyles || '';
 
   /* fingerprint -> { el }. The single record of what is on screen. */
   const openPopups = new Map();
@@ -159,7 +199,8 @@ export function createUIController(deps = {}) {
     if (fingerprint) openPopups.delete(fingerprint);
     clearTimeout(el._hideT);
     el.classList.remove('show');
-    setTimeout(() => { try { el.remove(); } catch (e) {} }, 250);
+    // Removing just el would leave its now-empty shadow host behind.
+    setTimeout(() => { try { (el._shadowHost || el).remove(); } catch (e) {} }, 250);
   }
 
   function flashPopup(el) {
@@ -172,7 +213,7 @@ export function createUIController(deps = {}) {
   /* Close all unpinned popups (Esc). */
   function hidePopup() {
     for (const [fp, { el }] of [...openPopups.entries()]) {
-      if (!el || !document.contains(el)) { openPopups.delete(fp); continue; }
+      if (!el || !el.isConnected) { openPopups.delete(fp); continue; }
       if (el.dataset.pinned !== 'true') closePopup(el, fp);
     }
   }
@@ -187,24 +228,26 @@ export function createUIController(deps = {}) {
   function reservePopup(fingerprint) {
     if (openPopups.has(fingerprint)) {
       const entry = openPopups.get(fingerprint);
-      if (entry.el && document.contains(entry.el)) { flashPopup(entry.el); return null; }
+      if (entry.el && entry.el.isConnected) { flashPopup(entry.el); return null; }
       openPopups.delete(fingerprint);
     }
 
     if (openPopups.size >= maxPopups) {
       for (const [fp, { el }] of openPopups.entries()) {
-        if (!el || !document.contains(el)) { openPopups.delete(fp); break; }
+        if (!el || !el.isConnected) { openPopups.delete(fp); break; }
         if (el.dataset.pinned !== 'true') { closePopup(el, fp); break; }
       }
       // Every open popup is pinned and we are at the cap — do not add another.
       if (openPopups.size >= maxPopups) return null;
     }
 
+    const { host, shadow } = createShadowHost(sharedStyles, Z_POPUP);
     const root = document.createElement('div');
     root.className = 'sra-popup';
+    root._shadowHost = host; // closePopup() removes this, not just root itself
     root.addEventListener('mouseenter', () => { root._mouseOver = true; clearTimeout(root._hideT); });
     root.addEventListener('mouseleave', () => { root._mouseOver = false; resetAutohide(root, fingerprint); });
-    document.body.appendChild(root);
+    shadow.appendChild(root);
     openPopups.set(fingerprint, { el: root });
     return root;
   }
@@ -212,7 +255,7 @@ export function createUIController(deps = {}) {
   /* Show, place and start the autohide countdown. */
   function showPopup(root, anchorRect) {
     const avoidRects = [...openPopups.values()]
-      .filter((e) => e.el !== root && document.contains(e.el) && e.el.classList.contains('show'))
+      .filter((e) => e.el !== root && e.el.isConnected && e.el.classList.contains('show'))
       .map((e) => e.el.getBoundingClientRect());
 
     placePopup(root, anchorRect, avoidRects);
@@ -310,16 +353,17 @@ export function createUIController(deps = {}) {
   }
 
   function toast(id, text, styles, ms) {
-    document.getElementById(id)?.remove();
+    findAlcoiaHostContaining(id)?.remove();
+    const { host, shadow } = createShadowHost(sharedStyles, Z_TOAST);
     const node = document.createElement('div');
     node.id = id;
     Object.assign(node.style, styles);
     node.textContent = text;
-    document.body.appendChild(node);
+    shadow.appendChild(node);
     requestAnimationFrame(() => requestAnimationFrame(() => { node.style.opacity = '1'; }));
     setTimeout(() => {
       node.style.opacity = '0';
-      setTimeout(() => { try { node.remove(); } catch (e) {} }, 250);
+      setTimeout(() => { try { host.remove(); } catch (e) {} }, 250);
     }, ms);
   }
 
@@ -373,14 +417,15 @@ export function createUIController(deps = {}) {
    * showNudge's own single-purpose class toggle). */
   const MAX_TOOLTIP_MS = 8000;
   function showSelectionTooltip(anchorRect, onExplain) {
-    document.getElementById('sra-select-tooltip')?.remove();
+    findAlcoiaHostContaining('sra-select-tooltip')?.remove();
     if (!anchorRect) return;
 
+    const { host, shadow } = createShadowHost(sharedStyles, Z_SELECT_TOOLTIP);
     const el = document.createElement('div');
     el.id = 'sra-select-tooltip';
     el.className = 'sra-select-tooltip';
     el.innerHTML = `<button type="button" class="sra-select-tooltip-btn">Explain this →</button>`;
-    document.body.appendChild(el);
+    shadow.appendChild(el);
 
     const vw = window.innerWidth, vh = window.innerHeight;
     const tw = el.offsetWidth || 140, th = el.offsetHeight || 32;
@@ -405,9 +450,14 @@ export function createUIController(deps = {}) {
       document.removeEventListener('scroll', dismiss, true);
       clearTimeout(hideT);
       el.classList.remove('show');
-      setTimeout(() => { try { el.remove(); } catch (e) {} }, 150);
+      setTimeout(() => { try { host.remove(); } catch (e) {} }, 150);
     }
-    function onOutsideClick(ev) { if (!el.contains(ev.target)) dismiss(); }
+    // A click on ev.target retargets to `host` (the shadow host), not the
+    // real element clicked, once this listener sits outside the shadow tree
+    // the click originated in — checking el.contains(ev.target) here would
+    // always be false for a click on the tooltip's own button, and this
+    // would dismiss itself the instant the reader tried to use it.
+    function onOutsideClick(ev) { if (!host.contains(ev.target)) dismiss(); }
 
     // capture:true on both — a scroll or a click inside the page (not just
     // on the tooltip) has to reach this before the page's own handlers can
@@ -433,6 +483,7 @@ export function createUIController(deps = {}) {
   function ensureSelfReportTrigger(onClick) {
     if (window.__sra_self_report_trigger) return;
     window.__sra_self_report_trigger = true;
+    const { shadow } = createShadowHost(sharedStyles, Z_SELF_REPORT_TRIGGER);
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.id = 'sra-self-report-trigger';
@@ -440,15 +491,17 @@ export function createUIController(deps = {}) {
     btn.setAttribute('aria-label', 'Report how your reading is going');
     btn.textContent = '?';
     btn.addEventListener('click', () => onClick());
-    document.body.appendChild(btn);
+    shadow.appendChild(btn);
   }
 
   /* The master-switch hard-off teardown counterpart to ensureSelfReportTrigger
-   * above — removes the DOM node and clears the idempotency guard so a later
-   * re-enable can call ensureSelfReportTrigger() again and have it actually
-   * recreate the button rather than silently no-op. */
+   * above — removes the shadow host and clears the idempotency guard so a
+   * later re-enable can call ensureSelfReportTrigger() again and have it
+   * actually recreate the button rather than silently no-op. A global
+   * search rather than a tracked variable, same reasoning as
+   * findAlcoiaHostContaining()'s own header. */
   function removeSelfReportTrigger() {
-    try { document.getElementById('sra-self-report-trigger')?.remove(); } catch (e) {}
+    try { findAlcoiaHostContaining('sra-self-report-trigger')?.remove(); } catch (e) {}
     window.__sra_self_report_trigger = false;
   }
 
@@ -466,7 +519,7 @@ export function createUIController(deps = {}) {
         const vh = window.innerHeight;
         const m  = margin;
         for (const [, { el }] of openPopups.entries()) {
-          if (!el || !document.contains(el) || !el.classList.contains('show')) continue;
+          if (!el || !el.isConnected || !el.classList.contains('show')) continue;
           const pw = el.offsetWidth  || 360;
           const ph = el.offsetHeight || 150;
           el.style.left = clamp(parseFloat(el.style.left) || 0, m, vw - pw - m) + 'px';
@@ -492,11 +545,19 @@ export function createUIController(deps = {}) {
 
 // ── Dark mode (in-page overlays) ───────────────────────────────────────────
 /* Overlay.css draws everything from the --alc-* tokens, so dark mode is
- * mostly a token swap on the host page's :root — twenty lines of !important
- * overrides per component used to be needed and are not any more. The rules
- * that remain are for surfaces styled inline by their own modules (the
- * reading map, the colour picker), which cannot see the tokens. */
+ * mostly a token swap on the host page's :root — custom properties inherit
+ * through a shadow boundary like anywhere else, so this one <style> in
+ * document.head still reaches every alcoia shadow root's content for
+ * anything token-driven. The handful of rules that were never token-driven
+ * (bespoke dark-mode values for the reading map, the colour picker, etc.)
+ * used to live here too, as direct #id/.class overrides — but every element
+ * they targeted now lives inside a shadow root a light-DOM <style> cannot
+ * reach at all, so those rules moved into overlay.css itself, mirrored
+ * behind :host([data-sra-dark]) (see that file's own comment on the
+ * block). setShadowDarkMode() is what keeps data-sra-dark in sync on every
+ * shadow host, present and future. */
 export function applyDarkMode(enabled) {
+  setShadowDarkMode(enabled);
   const ID = 'sra-dark-styles';
   if (!enabled) { document.getElementById(ID)?.remove(); return; }
   if (document.getElementById(ID)) return;
@@ -519,19 +580,6 @@ export function applyDarkMode(enabled) {
           0 0 0 1px rgba(160,200,180,0.13),
           0 12px 32px -8px rgba(0,0,0,0.6) !important;
       }
-      .sra-btn-primary { color: #10221B !important; }
-      .sra-q-option    { background: rgba(255,255,255,0.045) !important; }
-      .sra-word-bubble { background: rgba(14,17,15,0.96) !important; }
-      #sra-reading-map { background: rgba(18,22,20,0.97) !important; border-color: rgba(126,96,174,0.12) !important; }
-      .sra-map-header  { color: #6B6862 !important; border-color: rgba(126,96,174,0.1) !important; }
-      .sra-map-heading { color: #b8b8b2 !important; }
-      .sra-map-heading:hover   { background: rgba(126,96,174,0.07) !important; }
-      .sra-map-heading.current { color: #C3ABE8 !important; border-left-color: #C3ABE8 !important; }
-      .sra-map-event       { color: #888 !important; }
-      .sra-map-events-label{ color: #555 !important; }
-      .sra-map-divider     { background: rgba(126,96,174,0.1) !important; }
-      .sra-map-progress-bar{ background: rgba(126,96,174,0.12) !important; }
-      #sra-color-picker { background: #1e2422 !important; border-color: rgba(255,255,255,0.08) !important; }
     `;
   document.head.appendChild(s);
 }
