@@ -443,6 +443,15 @@ export function createUIController(deps = {}) {
     document.body.appendChild(btn);
   }
 
+  /* The master-switch hard-off teardown counterpart to ensureSelfReportTrigger
+   * above — removes the DOM node and clears the idempotency guard so a later
+   * re-enable can call ensureSelfReportTrigger() again and have it actually
+   * recreate the button rather than silently no-op. */
+  function removeSelfReportTrigger() {
+    try { document.getElementById('sra-self-report-trigger')?.remove(); } catch (e) {}
+    window.__sra_self_report_trigger = false;
+  }
+
   /* Re-clamp visible popups when the viewport changes, so a resize cannot
    * strand a card off-screen. Guarded against double installation because the
    * content script can be injected more than once into the same page. */
@@ -476,6 +485,7 @@ export function createUIController(deps = {}) {
     renderPopup,
     showNudge, showSimulateToast, showStatusToast,
     ensureSelfReportTrigger,
+    removeSelfReportTrigger,
     showSelectionTooltip,
   };
 }
