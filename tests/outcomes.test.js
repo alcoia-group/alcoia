@@ -196,3 +196,28 @@ describe('submit — selected_answer (item 13j-1)', () => {
     expect(body).not.toHaveProperty('selected_answer');
   });
 });
+
+/* Item DC-2: explanation_preceded_attempt. NOT in alcoiaServer's confirmed
+ * field list (src/http/routes/outcomes.js reads a fixed allowlist and does
+ * not include it) — sent anyway so the client is ready once that route and
+ * its DB column exist; a real server call today accepts the request and
+ * silently drops this one field, same as any other unrecognised body key. */
+describe('submit — explanation_preceded_attempt (item DC-2)', () => {
+  async function bodyFor(fields) {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
+    await m.submit(fields);
+    return seenBody;
+  }
+
+  it('true and false are both sent as real booleans', async () => {
+    expect((await bodyFor({ paragraphIndex: 1, struggled: true, explanationPrecededAttempt: true })).explanation_preceded_attempt).toBe(true);
+    expect((await bodyFor({ paragraphIndex: 1, struggled: true, explanationPrecededAttempt: false })).explanation_preceded_attempt).toBe(false);
+  });
+
+  it('never mentioned at all (undefined) stays fully absent, not a fabricated false', async () => {
+    const body = await bodyFor({ paragraphIndex: 1, struggled: true });
+    expect(body).not.toHaveProperty('explanation_preceded_attempt');
+  });
+});
