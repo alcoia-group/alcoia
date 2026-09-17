@@ -903,3 +903,36 @@
   .sra-nudge-highlight,
   .sra-nudge { animation: none !important; }
 }
+
+/* ── Dark mode, mirrored for Shadow DOM ─────────────────────────────────────
+ * ui-controller.js's applyDarkMode() swaps the --alc-* custom properties on
+ * the real document :root, which is enough on its own for anything below
+ * that already reads a token via var(--alc-*) — custom properties inherit
+ * through a shadow boundary the same as anywhere else. The rules below are
+ * the ones that never went through a token in the first place (bespoke
+ * dark-mode values, not simply "the accent colour") and used to be applied
+ * as direct #id/.class overrides from a <style> in document.head — which
+ * only ever reached the light DOM. Now that every element these select
+ * lives inside a shadow root, a light-DOM override can no longer reach any
+ * of them at all, so the same rules are mirrored here, gated on the host
+ * element's own data-sra-dark attribute via :host() rather than a
+ * document-level selector: :host-context() would do the equivalent lookup
+ * in one rule, but Firefox has never implemented it, and this is the one
+ * piece of Shadow DOM CSS in this file that has to work on both targets.
+ * shadow-host.js's setDarkMode()/createShadowHost() are what keep
+ * data-sra-dark in sync on every host element, including ones created
+ * after the reader toggles the setting mid-session. Values are copied
+ * verbatim from applyDarkMode()'s own block — this is not a redesign. */
+:host([data-sra-dark]) .sra-btn-primary { color: #10221B !important; }
+:host([data-sra-dark]) .sra-q-option    { background: rgba(255,255,255,0.045) !important; }
+:host([data-sra-dark]) .sra-word-bubble { background: rgba(14,17,15,0.96) !important; }
+:host([data-sra-dark]) #sra-reading-map { background: rgba(18,22,20,0.97) !important; border-color: rgba(126,96,174,0.12) !important; }
+:host([data-sra-dark]) .sra-map-header  { color: #6B6862 !important; border-color: rgba(126,96,174,0.1) !important; }
+:host([data-sra-dark]) .sra-map-heading { color: #b8b8b2 !important; }
+:host([data-sra-dark]) .sra-map-heading:hover   { background: rgba(126,96,174,0.07) !important; }
+:host([data-sra-dark]) .sra-map-heading.current { color: #C3ABE8 !important; border-left-color: #C3ABE8 !important; }
+:host([data-sra-dark]) .sra-map-event       { color: #888 !important; }
+:host([data-sra-dark]) .sra-map-events-label{ color: #555 !important; }
+:host([data-sra-dark]) .sra-map-divider     { background: rgba(126,96,174,0.1) !important; }
+:host([data-sra-dark]) .sra-map-progress-bar{ background: rgba(126,96,174,0.12) !important; }
+:host([data-sra-dark]) #sra-color-picker { background: #1e2422 !important; border-color: rgba(255,255,255,0.08) !important; }
