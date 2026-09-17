@@ -53,6 +53,15 @@ export async function createHost(deps) {
     // context, established once at construction — not per-signal.
     assignmentId = null,
     getSession = null,
+    // Item DC-2's passive prerequisite-gap flag. Defaults to reporting
+    // "unknown" (undefined), not false — a caller that never passed this
+    // dependency at all (every caller before this item existed) has not
+    // established that no explanation ever happened, only that it never
+    // asked. outcomes.js already treats undefined as "field fully absent",
+    // the same three-way shape `correct`/`substate` already use, so an
+    // existing outcome body is byte-for-byte unchanged until a real
+    // tracker (content.js's selection-explain.js) is actually wired in.
+    wasParagraphExplained = () => undefined,
   } = deps;
 
   const s = () => settings() || {};
@@ -410,6 +419,8 @@ export async function createHost(deps) {
         // adversarial) never set it, so this correctly sends an explicit
         // null for those rather than fabricating an option id.
         selectedAnswer: typeof record.chosenIndex === 'number' ? record.chosenIndex : null,
+        // Item DC-2 — same paragraph-key lookup as onStruggle above.
+        explanationPrecededAttempt: wasParagraphExplained(record.paragraphKey),
       });
     },
     onDismissed: () => {
@@ -715,7 +726,13 @@ export async function createHost(deps) {
       // names this specific chokepoint — the in-page retrieval prompt —
       // distinct from quiz.js's separate, never-transmitted path (13i,
       // untouched by this item).
-      submitOutcome({ paragraphIndex, struggled: true, substate, selfReported, source: 'inline' });
+      // Item DC-2: same text.slice(0, 80).trim() paragraph key every other
+      // paragraph-identity check in this codebase already uses (handleAsk's
+      // own paragraphKey, intervention-policy.js's paragraphKey()) — so a
+      // key produced by selection-explain.js's markParagraphExplained() is
+      // directly comparable here with no second convention to keep in sync.
+      const explanationPrecededAttempt = wasParagraphExplained(text.slice(0, 80).trim());
+      submitOutcome({ paragraphIndex, struggled: true, substate, selfReported, source: 'inline', explanationPrecededAttempt });
     },
     onQuizOfferEligible: (result) => showQuizOffer(result),
     onIntervention: async (decision, state, target, paragraphIndex) => {
