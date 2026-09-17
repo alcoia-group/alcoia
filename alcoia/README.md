@@ -18,10 +18,8 @@ do. A correct answer ends the interaction with confirmation only; an explanation
 a wrong one.
 
 This file is the extension's own reference: feature list, configuration, keyboard shortcuts. For
-product intent, invariants and the actual state of the repository (what's built, what's a known
-gap, what's deliberately deferred), see [`../CLAUDE.md`](../CLAUDE.md), which is kept current and
-is the source of truth whenever the two disagree. The top-level [`../README.md`](../README.md)
-covers the product pitch, privacy and licensing.
+product intent, invariants and repository layout, see [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
+The top-level [`../README.md`](../README.md) covers the product pitch, privacy and licensing.
 
 ---
 
@@ -59,8 +57,8 @@ The extension supports:
   the quiz, coverage tracking.
 - **Local PDF and PPTX files**, opened from your computer: text extraction and the manual `Alt+S`
   summary work. **Detection, retrieval questions, and the quiz do not reach these formats yet**;
-  they run on a separate paragraph model the signal pipeline can't see. See CLAUDE.md's
-  `pdf-handler.js` / `pptx-handler.js` entry for the verified detail.
+  they run on a separate paragraph model the signal pipeline can't see. See
+  `src/content/pdf-handler.js` and `src/content/pptx-handler.js`.
 
 Passage text is sent to a backend server (a separate repository, not part of this one) to generate
 questions, explanations and summaries. Nothing else: no gaze data, because there is none, and no
@@ -201,8 +199,8 @@ now-removed gaze classifier's training bias, and left with it.
 
 ## Architecture
 
-See [`../CLAUDE.md`](../CLAUDE.md)'s "Actual repository state" section for the annotated,
-kept-current file tree and line counts. Duplicating it here is exactly how this file went stale
+See [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)'s "Repository layout" section for the
+kept-current file tree. Duplicating it here is exactly how this file went stale
 last time. In short: `src/content/` holds the content-script modules (reading-signal detectors
 under `signals/`, the state engine, the interruption policy, the question card, the quiz); `src/popup/`
 holds the toolbar panel and its pages; `src/shared/` holds the backend-origin config and the
@@ -214,7 +212,7 @@ install-token client; `background.js` is a thin message relay and the local-file
 
 ### Prerequisites
 - Google Chrome (or Chromium-based browser), or Firefox via the `firefox` build target
-- Node.js 18+ (for this repo's own tooling: lint, tests, build)
+- Node.js >=20 (for this repo's own tooling: lint, tests, build)
 - A running instance of the backend (separate private repository)
 
 ### Load the extension
@@ -235,13 +233,13 @@ URLs**. Required for the local-file viewers to fetch the file itself.
 ## Running the Backend Server
 
 The extension calls a backend for question generation, explanations, summaries and receipt
-signing. That backend's source is not part of this repository, see `../CLAUDE.md`'s Scope table.
-Get its setup instructions from that repository.
+signing. That backend's source is not part of this repository, see `../docs/ARCHITECTURE.md`'s
+Scope table. Get its setup instructions from that repository.
 
-By default the extension points at a placeholder, unresolvable origin (`src/shared/config.js`) so
-an unconfigured install fails DNS cleanly rather than silently reaching somewhere unintended. Point
-it at your own instance from the popup's Settings > **Backend URL** field (stored as
-`sra_backend_url`), no code or manifest edit needed. The endpoints the extension calls:
+By default the extension points at the real production origin, `https://server.alcoia.app`
+(`src/shared/config.js`). Point it at your own instance from the popup's Settings > **Backend URL**
+field (stored as `sra_backend_url`), no code or manifest edit needed. The endpoints the extension
+calls:
 
 ```
 POST /api/token          issues the opaque per-install token every other call must carry
@@ -252,7 +250,7 @@ POST /api/receipt/sign   signs a reader-built receipt
 
 **Every AI call carries the install token** (`X-Alcoia-Install-Token` header) issued by
 `/api/token` and stored locally; a 401/403 clears it and a fresh one is requested on the next call.
-See `../CLAUDE.md`'s Access control section for the full mechanism.
+See `../docs/ARCHITECTURE.md`'s Access control section for the full mechanism.
 
 ### Magic-link sign-in (item S3, paid tier)
 
@@ -271,9 +269,10 @@ separate repo) verifies the emailed link, gets a one-time code from the exchange
 hands it to this extension via `chrome.runtime.sendMessage(EXTENSION_ID, { code })` —
 `background.js`'s `chrome.runtime.onMessageExternal` listener is the only thing that can receive
 that, and only from the origin declared in `manifests/base.json`'s `externally_connectable`
-(currently a **dev value**, `http://localhost:5173` — see `build.mjs`'s own comment on that entry
+(currently a **dev value**, `http://localhost:8080` — see `build.mjs`'s own comment on that entry
 and `src/shared/config.js`'s `WEB_APP_ORIGIN` for what has to change together before a real
-launch).
+launch. `alcoia.app` itself is live as of this writing, so this is now a matter of pointing the
+existing constant and manifest entry at it, not waiting on the domain.)
 
 ---
 
@@ -391,7 +390,7 @@ Full detail lives in the top-level [`../README.md`](../README.md#privacy) and
 - **Input sanitisation.** All text rendered in popups and the quiz is HTML-escaped before
   insertion; nothing the server returns is ever parsed as markup.
 - Server-side controls (rate limiting, CORS, secret handling) live in the separate backend
-  repository and are out of scope here, see `../CLAUDE.md`'s Scope table.
+  repository and are out of scope here, see `../docs/ARCHITECTURE.md`'s Scope table.
 
 ---
 
@@ -400,8 +399,7 @@ Full detail lives in the top-level [`../README.md`](../README.md#privacy) and
 ### Adding a new reading state
 There is no classifier to edit. Register the type in `state-engine.js`'s `fromSignal()` with a
 confidence and an evidence sentence (or as a corroboration-only type in `CORROBORATING_TYPES` /
-`CORROBORATION`); an unregistered type is silently ignored. See `../CLAUDE.md`'s Conventions
-section.
+`CORROBORATION`); an unregistered type is silently ignored.
 
 ### Adding a new reading-signal detector
 Goes in `src/content/signals/`, exporting `{ update(), signal() }`.
