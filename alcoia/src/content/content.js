@@ -151,11 +151,15 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   const segmentation     = await loadModule('src/content/signals/segmentation.js');
   const mapModule       = await loadModule('src/content/reading-map.js');
   const hlSidebarModule = await loadModule('src/content/highlights-sidebar.js');
+  // Item DC-2 — see that file's own header for why this isn't a signals/
+  // detector.
+  const selectExplainModule = await loadModule('src/content/selection-explain.js');
 
   const ttsHandler    = ttsModule.createTTSHandler();
   const dyslexiaUtils = dyslexiaModule;
   const readingMap    = mapModule.createReadingMap();
   const highlightsSidebar = hlSidebarModule.createHighlightsSidebar();
+  const selectionExplain  = selectExplainModule.createSelectionExplainTracker();
 
   // ── UI ─────────────────────────────────────────────────────────────────
   const uiModule = await loadModule('src/content/ui-controller.js');
@@ -181,6 +185,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     openPopups, highlightElement, closePopup, flashPopup, hidePopup,
     renderPopup,
     showNudge, showSimulateToast,
+    showSelectionTooltip,
   } = ui;
 
   // ── Host (item 30a) ─────────────────────────────────────────────────────
@@ -200,6 +205,9 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     // Read live: the storage listener reassigns these at runtime. A
     // deliberately small surface — only what host.js's own code reads.
     settings: () => ({ assistantEnabled, backendUrl }),
+    // Item DC-2's passive prerequisite-gap flag — see host.js's own
+    // submitOutcome call sites for where this is actually read.
+    wasParagraphExplained: selectionExplain.wasParagraphExplained,
   });
   const {
     fetchSummary, callBackend,
@@ -1104,23 +1112,21 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
 
     let selected = '';
     let selRange  = null;
+    let selEl = null; // the selection's containing block element, for paragraph-keying below
     try {
       const sel = window.getSelection();
       selected  = sel?.toString().trim() || '';
       if (sel?.rangeCount > 0) selRange = sel.getRangeAt(0).cloneRange();
-    } catch (e) {}
-    if (!selected || selected.length < MIN_SELECTION_CHARS) return;
-
-    // Highlight source element
-    try {
-      const sel = window.getSelection();
       if (sel?.anchorNode) {
-        const el = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
-        highlightElement(overlayUtils.getBlockAncestor(el) || el, 5000);
+        const n = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+        selEl = overlayUtils.getBlockAncestor(n) || n;
       }
     } catch (e) {}
+    if (!selected) return;
 
-    // Anchor rect
+    // Anchor rect — needed by both the new trigger-tooltip path below and
+    // the existing immediate-summary path, so computed once regardless of
+    // which one ends up using it.
     let anchorRect = null;
     try {
       if (selRange) {
@@ -1129,6 +1135,45 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       }
     } catch (e) {}
     if (!anchorRect) anchorRect = { left: ev.clientX, right: ev.clientX+8, top: ev.clientY, bottom: ev.clientY+8 };
+
+    // ── Item DC-2: math/figure/rare-term selections take priority over the
+    // plain-selection summary below — see selection-explain.js's own header
+    // for why these two paths cannot both fire on the same selection, and
+    // this task's report for the AskUserQuestion resolution. Deliberately
+    // NOT gated on MIN_SELECTION_CHARS — a bare "Fig. 3" or a short equation
+    // is exactly the short-selection case that threshold exists to filter
+    // OUT of the generic summary path, not something this narrower,
+    // pattern-matched trigger should also refuse. ──────────────────────────
+    const trigger = selectionExplain.classify(selected, segmentation.detectLanguage());
+    if (trigger && !selectionExplain.wasExplained(selected)) {
+      showSelectionTooltip(anchorRect, async () => {
+        selectionExplain.markExplained(selected);
+        const paragraphKey = (selEl?.innerText || selEl?.textContent || '').slice(0, 80).trim();
+        if (paragraphKey) selectionExplain.markParagraphExplained(paragraphKey);
+
+        // image_context (figure trigger) describes an image/caption, not a
+        // bare "Figure 3" cross-reference — send the real caption text when
+        // one can be found, and fall back to the bare selection honestly
+        // (never fabricate a caption) when it can't.
+        const textToSend = trigger.type === 'figure'
+          ? (selectExplainModule.findFigureCaption(selected, document) || selected)
+          : selected;
+
+        const paragraphText = selEl?.innerText || selEl?.textContent || '';
+        const context = selectExplainModule.extractSurroundingContext(paragraphText, selected, segmentation.detectLanguage());
+        const explanation = await fetchSummary(textToSend, trigger.mode, context);
+        if (explanation) {
+          renderPopup(anchorRect, `<div>${esc(explanation)}</div>`,
+            { text: textToSend, source: 'selection', mode: trigger.mode, trigger: trigger.type, triggerLabel: trigger.type });
+        }
+      });
+      return;
+    }
+
+    if (selected.length < MIN_SELECTION_CHARS) return;
+
+    // Highlight source element
+    if (selEl) highlightElement(selEl, 5000);
 
     const mode    = isLikelyCode(selected) ? 'explain_code' : 'tldr';
     const summary = await fetchSummary(selected, mode);

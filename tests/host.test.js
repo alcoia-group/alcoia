@@ -1091,6 +1091,93 @@ describe('scroll-kinematics reporting to the server (item DC-1a)', () => {
   });
 });
 
+/* Item DC-2 — the passive prerequisite-gap flag on the two chokepoints that
+ * already call submitOutcome (onStruggle, onAnswered). NOTE, confirmed
+ * while writing this: in the shipped codebase today, wasParagraphExplained
+ * is only ever wired to a real tracker by content.js (selection-explain.js
+ * only runs there), and submitOutcome is only ever non-inert when
+ * assignmentId+getSession are set — which, per host.js's own header,
+ * happens only for reading-bridge.js's PDF-viewer path, which has no
+ * selection surface at all (that file's own header: "There is no highlight/
+ * selection/receipt/SPA-nav surface here"). So this wiring is correct and
+ * exercised directly below, but not yet reachable end to end by anything a
+ * real reader does — flagged in this item's own report, not silently
+ * assumed to already be live. */
+describe('the explanation_preceded_attempt flag (item DC-2)', () => {
+  function assignmentDeps(overrides = {}) {
+    return baseDeps({
+      assignmentId: 'assign-42',
+      getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+      TOKEN_URL: 'https://api.test.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.test.invalid/api/assignments',
+    });
+  });
+
+  it('a struggle on a previously-explained paragraph reaches the outcomes payload as explanation_preceded_attempt:true', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { host } = await createHost(assignmentDeps({ wasParagraphExplained: (key) => key === 'a previously explained paragraph' }));
+    host.onStruggle('a previously explained paragraph', 3);
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenBody.explanation_preceded_attempt).toBe(true);
+  });
+
+  it('a struggle on a DIFFERENT paragraph reports false, not true and not absent', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { host } = await createHost(assignmentDeps({ wasParagraphExplained: (key) => key === 'a previously explained paragraph' }));
+    host.onStruggle('a completely different, never-explained paragraph', 3);
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenBody.explanation_preceded_attempt).toBe(false);
+  });
+
+  it('stays fully absent (not a fabricated false) for a caller that never wires wasParagraphExplained at all — every pre-DC-2 test in this file, unchanged', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { host } = await createHost(assignmentDeps()); // no wasParagraphExplained override
+    host.onStruggle('some paragraph text', 3);
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenBody).not.toHaveProperty('explanation_preceded_attempt');
+  });
+
+  it('a real answered question also carries the flag, keyed by the SAME paragraphKey the question card itself used', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    vi.stubGlobal('fetch', fetchImpl);
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
+    };
+
+    const paraText = 'A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it, for the explanation-flag test specifically.';
+    const { host } = await createHost(assignmentDeps({ wasParagraphExplained: (key) => key === paraText.slice(0, 80).trim() }));
+    document.body.innerHTML = `<p id="t">${paraText}</p>`;
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 7);
+
+    document.querySelector('.sra-q-option[data-index="0"]').click();
+    document.querySelector('.sra-q-conf-skip').click();
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenBody.explanation_preceded_attempt).toBe(true);
+  });
+});
+
 /* Item 13a — the self-report mechanism's three affordances, from host.js's
  * own side of the wiring. Each is verified independently, per this task's
  * own Tests requirement. */

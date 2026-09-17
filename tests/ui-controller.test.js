@@ -211,3 +211,75 @@ describe('ensureSelfReportTrigger', () => {
     expect(document.getElementById('sra-self-report-trigger')).toBeTruthy();
   });
 });
+
+/* Item DC-2 — the tooltip that offers a math/figure/rare-term explanation.
+ * See selection-explain.js for the trigger classification this sits behind;
+ * this file only owns rendering it. */
+describe('showSelectionTooltip', () => {
+  const RECT = { left: 100, top: 100, bottom: 120, right: 200 };
+
+  it('renders a single tooltip with the "Explain this →" action', () => {
+    build().showSelectionTooltip(RECT, () => {});
+    const el = document.getElementById('sra-select-tooltip');
+    expect(el).toBeTruthy();
+    expect(el.querySelector('.sra-select-tooltip-btn').textContent).toBe('Explain this →');
+  });
+
+  it('clicking the action calls the callback and removes the tooltip', () => {
+    vi.useFakeTimers();
+    try {
+      const onExplain = vi.fn();
+      build().showSelectionTooltip(RECT, onExplain);
+      document.querySelector('.sra-select-tooltip-btn').click();
+      expect(onExplain).toHaveBeenCalledTimes(1);
+      // Fade-out delay before actual removal — same shape as closePopup()'s
+      // own 250ms — real DOM removal is not synchronous with dismiss().
+      vi.advanceTimersByTime(200);
+      expect(document.getElementById('sra-select-tooltip')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a click anywhere else on the page dismisses it without calling the callback', () => {
+    vi.useFakeTimers();
+    try {
+      const onExplain = vi.fn();
+      build().showSelectionTooltip(RECT, onExplain);
+      expect(document.getElementById('sra-select-tooltip')).toBeTruthy();
+
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      vi.advanceTimersByTime(200);
+      expect(document.getElementById('sra-select-tooltip')).toBeNull();
+      expect(onExplain).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a second call replaces any tooltip already on screen — at most one at a time', () => {
+    build().showSelectionTooltip(RECT, () => {});
+    build().showSelectionTooltip(RECT, () => {});
+    expect(document.querySelectorAll('#sra-select-tooltip')).toHaveLength(1);
+  });
+
+  it('does nothing when given no anchor rect, rather than rendering an unpositioned tooltip', () => {
+    build().showSelectionTooltip(null, () => {});
+    expect(document.getElementById('sra-select-tooltip')).toBeNull();
+  });
+
+  it('auto-dismisses after its own timeout if the reader does neither', () => {
+    vi.useFakeTimers();
+    try {
+      build().showSelectionTooltip(RECT, () => {});
+      expect(document.getElementById('sra-select-tooltip')).toBeTruthy();
+      vi.advanceTimersByTime(8000);
+      // The removal itself is on a short follow-up setTimeout after the
+      // class-removal transition — advance past that too.
+      vi.advanceTimersByTime(200);
+      expect(document.getElementById('sra-select-tooltip')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

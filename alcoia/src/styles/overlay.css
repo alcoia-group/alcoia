@@ -487,6 +487,41 @@
    mode's font override (dyslexia-utils.js) targets span among other
    elements but not mark, and this needs to inherit that styling rather
    than sit outside it. */
+/* ── Selection-explain tooltip (item DC-2) ──────────────────────────────
+   Deliberately smaller and quieter than .sra-popup: this is an offer, not
+   an intervention — it never carries evidence, a badge, or a close button,
+   just the one action. Same warm-paper surface and hairline-plus-soft-
+   shadow language as the popup card it opens, at a tighter radius (8px,
+   this pass's own ceiling — see the 15a-2 card-treatment rationale above
+   .sra-popup) since it is the smallest, least card-like surface here. */
+.sra-select-tooltip {
+  position: fixed;
+  z-index: 2147483646; /* one below .sra-popup, so an opened explanation card is never hidden behind it */
+  background: var(--alc-surface);
+  border: 1px solid var(--alc-border-2);
+  border-radius: 8px;
+  box-shadow: var(--alc-shadow);
+  padding: 4px;
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+.sra-select-tooltip.show { opacity: 1; transform: none; }
+.sra-select-tooltip-btn {
+  font-family: var(--alc-ui);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 11px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--alc-accent-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sra-select-tooltip-btn:hover { background: var(--alc-accent-sf); }
+.sra-select-tooltip-btn:focus-visible { outline: 2px solid var(--alc-accent); outline-offset: 1px; }
+
 .sra-term {
   background: var(--alc-sage-sf);
   color: var(--alc-sage-2);

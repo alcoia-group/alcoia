@@ -355,6 +355,73 @@ export function createUIController(deps = {}) {
     }, ms);
   }
 
+  /* Item DC-2 (selection-explain.js's own header) — a small, one-button
+   * tooltip near a selection, NOT the full sra-popup card: the trigger is
+   * narrow (math/figure/rare-term selections only — see that file), so the
+   * UI answering it should read as equally quiet, not as another card
+   * fighting for the reader's attention. Clicking through still lands on
+   * the ordinary renderPopup() card below — this tooltip is only the
+   * "would you like to?" step in front of it, nothing else here bypasses
+   * the shared card system.
+   *
+   * Self-dismisses on the next mousedown anywhere else, on scroll, and
+   * after MAX_TOOLTIP_MS if the reader does neither — a selection tooltip
+   * that outlives the selection it was about reads as a stray leftover
+   * widget, not as attentiveness. Returns nothing; content.js does not need
+   * to hold a reference; there is at most one of these at a time (a new
+   * call always removes any prior instance first, same dedup shape as
+   * showNudge's own single-purpose class toggle). */
+  const MAX_TOOLTIP_MS = 8000;
+  function showSelectionTooltip(anchorRect, onExplain) {
+    document.getElementById('sra-select-tooltip')?.remove();
+    if (!anchorRect) return;
+
+    const el = document.createElement('div');
+    el.id = 'sra-select-tooltip';
+    el.className = 'sra-select-tooltip';
+    el.innerHTML = `<button type="button" class="sra-select-tooltip-btn">Explain this →</button>`;
+    document.body.appendChild(el);
+
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const tw = el.offsetWidth || 140, th = el.offsetHeight || 32;
+    const left = clamp(anchorRect.left, 6, vw - tw - 6);
+    // Below the selection when there's room, above it otherwise — the same
+    // "try the natural side, fall back to the other" idea placePopup() uses
+    // for the full card, simplified: a tooltip this small always fits one
+    // side or the other, so there is no further narrowing case to handle.
+    const top = anchorRect.bottom + 8 + th <= vh - 6
+      ? anchorRect.bottom + 8
+      : Math.max(6, anchorRect.top - 8 - th);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
+
+    let dismissed = false;
+    function dismiss() {
+      if (dismissed) return;
+      dismissed = true;
+      document.removeEventListener('mousedown', onOutsideClick, true);
+      document.removeEventListener('scroll', dismiss, true);
+      clearTimeout(hideT);
+      el.classList.remove('show');
+      setTimeout(() => { try { el.remove(); } catch (e) {} }, 150);
+    }
+    function onOutsideClick(ev) { if (!el.contains(ev.target)) dismiss(); }
+
+    // capture:true on both — a scroll or a click inside the page (not just
+    // on the tooltip) has to reach this before the page's own handlers can
+    // stop propagation first.
+    document.addEventListener('mousedown', onOutsideClick, true);
+    document.addEventListener('scroll', dismiss, true);
+    const hideT = setTimeout(dismiss, MAX_TOOLTIP_MS);
+
+    el.querySelector('.sra-select-tooltip-btn').addEventListener('click', () => {
+      dismiss();
+      onExplain();
+    });
+  }
+
   /* Item 13a, affordance 2: a small, persistent, always-clickable trigger —
    * unlike every other element this module renders, it is not conditional
    * on any detected state or open card (that's affordance 3, inside
@@ -409,6 +476,7 @@ export function createUIController(deps = {}) {
     renderPopup,
     showNudge, showSimulateToast, showStatusToast,
     ensureSelfReportTrigger,
+    showSelectionTooltip,
   };
 }
 
