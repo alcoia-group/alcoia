@@ -361,5 +361,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // keep the message channel open for the async response
   }
 
+  // Generic authenticated-fetch proxy (see src/shared/proxy-fetch.js's own
+  // header for the full reasoning) — the four places a direct fetch() from
+  // content-script or extension-page context to server.alcoia.app carries
+  // the CALLER's own origin, which the server's fixed CORS response
+  // (always Access-Control-Allow-Origin: https://alcoia.app) can never
+  // match: install-token.js's own token request, and outcomes.js/
+  // kinematics.js/explanation-events.js's assignment-reporting submits.
+  // Unlike 'summarize'/'apiPost' above, this does not assume one fixed
+  // auth header shape — those four callers don't share one (no auth on the
+  // token request, Authorization: Bearer on the other three) — so
+  // `msg.options` (method, headers, body) is passed to fetch() exactly as
+  // the caller built it, via proxy-fetch.js's own fetchImpl adapter.
+  if (msg.action === 'proxyFetch') {
+    fetch(msg.url, msg.options || {})
+      .then(async (resp) => {
+        const data = await resp.json().catch(() => null);
+        sendResponse({ ok: resp.ok, status: resp.status, data });
+      })
+      .catch((err) => {
+        sendResponse({ ok: false, error: String(err && err.message || err) });
+      });
+    return true; // keep the message channel open for the async response
+  }
+
   return false;
 });
