@@ -15,6 +15,10 @@
  *   POST /api/assignments/:id/outcomes
  *     { paragraph_index, struggled?, question_id?, correct?, confidence?,
  *       reached?, substate?, self_reported?, source?, selected_answer? } -> 201 { recorded: true }
+ * `explanation_preceded_attempt` (item DC-2) is NOT in that confirmed list —
+ * this module sends it when the caller supplies one, but the real server
+ * silently drops it today (confirmed against the same file). See that
+ * field's own comment below.
  * `correct` requires `question_id` to also be present (server-enforced,
  * 422 correct_requires_question_id otherwise) — this module does not
  * duplicate that check; its two real callers in host.js only ever set
@@ -63,7 +67,7 @@ export function createOutcomesManager(opts = {}) {
    * (invalid_paragraph_index, no_session, no_outcomes_url, network_error). */
   async function submit({
     paragraphIndex, struggled, questionId, correct, confidence, reached,
-    substate, selfReported, source, selectedAnswer,
+    substate, selfReported, source, selectedAnswer, explanationPrecededAttempt,
   } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
@@ -111,6 +115,19 @@ export function createOutcomesManager(opts = {}) {
       body.selected_answer = selectedAnswer;
     } else if (selectedAnswer === null) {
       body.selected_answer = null;
+    }
+
+    // Item DC-2 — passive prerequisite-gap logging. NOT YET STORED
+    // server-side: confirmed by reading alcoiaServer's
+    // src/http/routes/outcomes.js directly, which reads a fixed field
+    // allowlist and does not include this one — a value sent here today is
+    // silently accepted and dropped, never persisted. Sent anyway (rather
+    // than held back client-side) so the client is ready the moment that
+    // route and its DB column exist, matching this item's own framing:
+    // "doesn't change behavior yet." See this item's own report for the
+    // required server-side follow-up.
+    if (typeof explanationPrecededAttempt === 'boolean') {
+      body.explanation_preceded_attempt = explanationPrecededAttempt;
     }
 
     try {
