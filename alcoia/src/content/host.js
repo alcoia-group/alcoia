@@ -79,10 +79,17 @@ export async function createHost(deps) {
   // that choice, made explicitly rather than guessed through.
   let submitOutcome = () => {};
   if (assignmentId && getSession) {
+    // Routes through background.js instead of fetching directly — a
+    // content-script fetch to server.alcoia.app carries the host page's
+    // origin, which the server's CORS response rejects (see
+    // src/shared/proxy-fetch.js's own header). outcomes.js's own code is
+    // unchanged; only what it's given as fetchImpl differs.
+    const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
     const outcomesModule = await loadModule('src/shared/outcomes.js');
     const outcomesManager = outcomesModule.createOutcomesManager({
       getSession,
       outcomesUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/outcomes`,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
     submitOutcome = (fields) => {
       // A session-recall review question (host.js's runSessionRecall, not
@@ -108,10 +115,21 @@ export async function createHost(deps) {
   // that specific moment needs keepalive:true, unlike submitOutcome's calls.
   let submitKinematics = () => {};
   if (assignmentId && getSession) {
+    // Same routing reason as submitOutcome above. Note: kinematics.js's own
+    // { keepalive: true } on its fetchImpl call is what mattered when this
+    // ran as a real content-script fetch at beforeunload; now that the
+    // actual network request happens inside background.js's own fetch()
+    // (a separate context, not tied to this tab's lifecycle), keepalive is
+    // inert there but harmless — the property this call still depends on,
+    // chrome.runtime.sendMessage() being dispatched before the page
+    // unloads, holds the same way it does for every other message this
+    // content script already sends unconditionally at unload.
+    const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
     const kinematicsModule = await loadModule('src/shared/kinematics.js');
     const kinematicsManager = kinematicsModule.createKinematicsManager({
       getSession,
       kinematicsUrl: self.ALCOIA_CONFIG.KINEMATICS_URL,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
     submitKinematics = (kinematics) => {
       kinematicsManager.submit({ assignmentId, kinematics }).catch(() => {});
@@ -128,10 +146,13 @@ export async function createHost(deps) {
   // unload, so no keepalive needed, unlike submitKinematics.
   let reportExplanationEvent = () => {};
   if (assignmentId && getSession) {
+    // Same routing reason as submitOutcome above.
+    const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
     const explanationEventsModule = await loadModule('src/shared/explanation-events.js');
     const explanationEventsManager = explanationEventsModule.createExplanationEventsManager({
       getSession,
       explanationEventsUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/explanation-events`,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
     reportExplanationEvent = (selectionType, paragraphIndex) => {
       explanationEventsManager.submit({ selectionType, paragraphIndex }).catch(() => {});
