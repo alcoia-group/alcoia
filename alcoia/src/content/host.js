@@ -118,6 +118,26 @@ export async function createHost(deps) {
     };
   }
 
+  // ── Explanation-event reporting (item DC-2 follow-up) ───────────────────
+  // Identical gate to submitOutcome/submitKinematics above, for the
+  // identical reason (confirmed by reading alcoiaServer's
+  // src/http/routes/explanation-events.js directly): the real endpoint
+  // requires a real assignmentId and an active class seat, so this stays a
+  // no-op for every ordinary content.js page. Fires mid-session, right
+  // after an explanation is shown (content.js's own call site) — never at
+  // unload, so no keepalive needed, unlike submitKinematics.
+  let reportExplanationEvent = () => {};
+  if (assignmentId && getSession) {
+    const explanationEventsModule = await loadModule('src/shared/explanation-events.js');
+    const explanationEventsManager = explanationEventsModule.createExplanationEventsManager({
+      getSession,
+      explanationEventsUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/explanation-events`,
+    });
+    reportExplanationEvent = (selectionType, paragraphIndex) => {
+      explanationEventsManager.submit({ selectionType, paragraphIndex }).catch(() => {});
+    };
+  }
+
   const {
     reservePopup, showPopup, closePopup, highlightElement,
     showNudge, showSimulateToast, showStatusToast,
@@ -767,6 +787,9 @@ export async function createHost(deps) {
     // just above. Always safe to call unconditionally: a no-op unless this
     // host was constructed with assignmentId+getSession (see above).
     submitKinematics,
+    // Item DC-2 follow-up — same top-level exposure, same "always safe to
+    // call unconditionally" reason as submitKinematics just above.
+    reportExplanationEvent,
     fetchSummary,
     fetchQuestions,
     fetchGrading,

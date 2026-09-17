@@ -23,6 +23,21 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   // editing source.
   const BACKEND_DEFAULT     = self.ALCOIA_CONFIG.SUMMARIZE_URL;
   const MIN_SELECTION_CHARS = 15;
+  // Item DC-2 follow-up — maps selection-explain.js's own classifySelection()
+  // `type` values onto alcoiaServer's VALID_SELECTION_TYPES (confirmed by
+  // reading src/http/routes/explanation-events.js directly): 'equation',
+  // 'figure', 'term', 'caption'. 'math'->'equation' is the only real
+  // rename; 'figure' and 'term' already match. There is no entry for
+  // 'caption': classifySelection() checks BOTH a bare figure/table/equation
+  // REFERENCE ("Figure 3") and a CAPTION-LIKE construction ("Figure 3: the
+  // trial results") with the same isFigureOrCaption() check and collapses
+  // both into one 'figure' type — it has no way to tell them apart in its
+  // return value, and this item does not change that file to add one (out
+  // of scope, per this item's own "do not change any other behavior in
+  // selection-explain.js"). So 'caption' is a real, server-recognised value
+  // this client cannot currently produce — flagged in this item's report,
+  // not silently worked around by guessing which selections "should" count.
+  const SELECTION_EVENT_TYPE_MAP = { math: 'equation', figure: 'figure', term: 'term' };
   // Interruption cooldowns and budget live in intervention-policy.js — one
   // place, applied to every signal-driven decision.
   // Popup geometry, the open-popup registry and the eviction cap now live in
@@ -216,6 +231,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     comprehensionMonitor, setPdfHandler, setPptxHandler, getCogState,
     getPrevParagraphText, setOrchestrator,
     showSelfReportCard, // item 13a — affordance 1 (Alt+C, below)
+    reportExplanationEvent, // item DC-2 follow-up — a no-op outside assignment context, see host.js's own gate
   } = hostApi;
   const hostCallbacks = hostApi.host;
 
@@ -1165,6 +1181,16 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
         if (explanation) {
           renderPopup(anchorRect, `<div>${esc(explanation)}</div>`,
             { text: textToSend, source: 'selection', mode: trigger.mode, trigger: trigger.type, triggerLabel: trigger.type });
+          // Item DC-2 follow-up — fire-and-forget, after the explanation is
+          // already on screen; never awaited, never blocks or shows an
+          // error here. A no-op outside assignment context (host.js's own
+          // gate) and whenever fetchSummary above returned nothing, so a
+          // failed fetch never reaches this line at all. No paragraphIndex
+          // is available at this call site (selection-explain.js keys
+          // paragraphs by text, not by orchestrator.js's numeric ordinal) —
+          // omitted entirely, per this item's own "if unavailable, omit"
+          // instruction, rather than sending a fabricated one.
+          reportExplanationEvent(SELECTION_EVENT_TYPE_MAP[trigger.type]);
         }
       });
       return;
