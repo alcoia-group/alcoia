@@ -2934,6 +2934,103 @@ try {
 }
 await writeHighlightStore({}); // harmless if unrelated; keeps the pattern consistent with the rest of this file
 
+// Master-switch hard off. sra_enabled used to only gate individual handler
+// bodies with an early return — every listener stayed attached and DOM
+// (the self-report "?" trigger, reading-map's tab/sidebar) injected before
+// the switch's real value was even known was never removed when the switch
+// went off. This is the browser-level check that it is now a genuine hard
+// off: no UI, no listeners, and the one thing that must keep working with
+// the switch off is reactivating without a reload.
+async function setSraEnabled(value) {
+  const helper = await ctx.newPage();
+  await helper.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper.evaluate((v) => new Promise((r) => chrome.storage.local.set({ sra_enabled: v }, r)), value);
+  await helper.close();
+}
+let masterSwitchResult;
+try {
+  // (a) Off at load: reload with sra_enabled already false, confirm no
+  // alcoia DOM exists at all — not the self-report trigger, not the
+  // reading-map tab (both used to render unconditionally).
+  await setSraEnabled(false);
+  const offPage = await ctx.newPage();
+  const offPageErrors = [];
+  offPage.on('pageerror', (e) => offPageErrors.push(String(e)));
+  await offPage.goto('http://localhost:8731/', { waitUntil: 'load' });
+  await offPage.waitForTimeout(1500);
+  const offAtLoad = await offPage.evaluate(() => ({
+    selfReportTrigger: !!document.getElementById('sra-self-report-trigger'),
+    readingMapTab: !!document.getElementById('sra-reading-map-tab'),
+    readingMapSidebar: !!document.getElementById('sra-reading-map'),
+    anyAlcoiaDom: !!(document.getElementById('sra-self-report-trigger')
+      || document.getElementById('sra-reading-map-tab')
+      || document.getElementById('sra-reading-map')
+      || document.querySelector('.sra-popup')),
+  }));
+
+  // Alt+M (the reading-map toggle shortcut) must do nothing while off — the
+  // old code's early-return only skipped the SHORTCUT's own body, but
+  // ensureDOM() itself was never gated, so hitting a different, unguarded
+  // path to readingMap.toggle() would still have created the sidebar. There
+  // is no unguarded path left, but this pins that Alt+M specifically is
+  // still inert with the switch off, not just quiet by accident.
+  await offPage.keyboard.down('Alt'); await offPage.keyboard.press('KeyM'); await offPage.keyboard.up('Alt');
+  await offPage.waitForTimeout(300);
+  const readingMapAfterAltMWhileOff = await offPage.evaluate(() => !!document.getElementById('sra-reading-map-tab'));
+
+  // (b) The storage listener must still be active while off — the one
+  // thing allowed to keep running. Flip the switch on with no page reload
+  // and confirm the extension reactivates: UI appears, as if the page had
+  // just loaded with the switch already on.
+  await setSraEnabled(true);
+  await offPage.waitForTimeout(1000);
+  const afterReactivation = await offPage.evaluate(() => ({
+    selfReportTrigger: !!document.getElementById('sra-self-report-trigger'),
+  }));
+  await offPage.keyboard.down('Alt'); await offPage.keyboard.press('KeyM'); await offPage.keyboard.up('Alt');
+  await offPage.waitForTimeout(300);
+  const readingMapAfterReactivationAndAltM = await offPage.evaluate(() => !!document.getElementById('sra-reading-map-tab'));
+
+  // (c) Toggled off mid-session, with UI actually on screen first (the
+  // reading map sidebar/tab from the Alt+M above, plus the self-report
+  // trigger) — confirm every bit of it is removed from the DOM.
+  await setSraEnabled(false);
+  await offPage.waitForTimeout(1000);
+  const midSessionOff = await offPage.evaluate(() => ({
+    selfReportTrigger: !!document.getElementById('sra-self-report-trigger'),
+    readingMapTab: !!document.getElementById('sra-reading-map-tab'),
+    readingMapSidebar: !!document.getElementById('sra-reading-map'),
+    anyAlcoiaDom: !!(document.getElementById('sra-self-report-trigger')
+      || document.getElementById('sra-reading-map-tab')
+      || document.getElementById('sra-reading-map')
+      || document.querySelector('.sra-popup')),
+  }));
+
+  // (d) Toggled back on mid-session — detection/UI reinitialise without a
+  // reload, a second time, confirming this is not a one-shot reactivation.
+  await setSraEnabled(true);
+  await offPage.waitForTimeout(1000);
+  const midSessionOn = await offPage.evaluate(() => !!document.getElementById('sra-self-report-trigger'));
+
+  await offPage.close();
+
+  masterSwitchResult = {
+    attempted: true,
+    offAtLoad,
+    readingMapAfterAltMWhileOff, // expect false
+    storageListenerReactivates: afterReactivation.selfReportTrigger, // expect true
+    readingMapReinitialisesAfterReactivation: readingMapAfterReactivationAndAltM, // expect true
+    midSessionOffRemovesAllDom: !midSessionOff.anyAlcoiaDom, // expect true
+    midSessionOffDetail: midSessionOff,
+    midSessionOnReinitialises: midSessionOn, // expect true
+    noPageErrors: offPageErrors.length === 0,
+  };
+} catch (e) {
+  masterSwitchResult = { attempted: true, error: String((e && e.message) || e) };
+} finally {
+  await setSraEnabled(true); // leave storage in its default state for anything after this
+}
+
 console.log('\n================ RESULTS ================');
 console.log('article                 :', ZH ? 'article-zh.html (Chinese)' : 'article.html (English)');
 console.log('content script injected :', injected.contentScript);
@@ -2986,6 +3083,8 @@ console.log('pin/auto-dismiss (34)   :', JSON.stringify(pinAutohideResult, null,
 console.log('AI-call rate limit (38) :', JSON.stringify(rateLimitResult, null, 2));
 console.log('upgrade page button fix :', JSON.stringify(upgradeButtonResult, null, 2),
   '(expect readerActuallyHiddenInRealChromium/readerLabelReset/readerNotDisabled/studentActuallyHidden/manageBtnActuallyVisible all true, in BOTH returnFromCheckout and alreadyEntitledOnNormalLoad)');
+console.log('master switch hard off  :', JSON.stringify(masterSwitchResult, null, 2),
+  '(expect offAtLoad.anyAlcoiaDom false, readingMapAfterAltMWhileOff false, storageListenerReactivates/readingMapReinitialisesAfterReactivation/midSessionOffRemovesAllDom/midSessionOnReinitialises/noPageErrors all true)');
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));

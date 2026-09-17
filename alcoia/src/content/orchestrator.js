@@ -254,13 +254,18 @@ export async function createOrchestrator(deps) {
   // ── Event wiring ─────────────────────────────────────────────────────────
   const activeParagraphIndex = () => paragraphTracker.getActive()?.index ?? null;
 
-  function installListeners() {
+  // Master-switch hard off (see content.js's boot()/teardown()): an optional
+  // AbortSignal that detaches every listener below in one shot when the
+  // switch goes off, rather than requiring each anonymous callback to be
+  // converted into a named, individually-removable reference. setInterval
+  // is not covered by AbortSignal — its own teardown stays in stop() below.
+  function installListeners(signal) {
     // Cursor as a reading pointer. Most mouse movement is not reading, so the
     // tracker decides for itself whether the behaviour qualifies.
     window.addEventListener('mousemove', (e) => {
       if (!s().comprehensionCheckEnabled) return;
       try { cursorTracker.update(e.clientX, e.clientY); } catch (err) {}
-    }, { passive: true });
+    }, { passive: true, signal });
 
     window.addEventListener('scroll', () => {
       if (!s().comprehensionCheckEnabled) return;
@@ -274,7 +279,7 @@ export async function createOrchestrator(deps) {
         const signal = comprehensionMonitor.onScroll();
         if (signal) pumpSignals(signal);
       } catch (e) {}
-    }, { passive: true });
+    }, { passive: true, signal });
 
     // Selection and copy are corroboration, never triggers — the selection
     // summary feature already responds to the reader's own action, and firing
@@ -289,7 +294,7 @@ export async function createOrchestrator(deps) {
           if (text.trim()) interactionSignals.update({ kind: 'selection', text });
         } catch (e) {}
       }, 400);
-    });
+    }, { signal });
 
     document.addEventListener('copy', () => {
       if (!s().comprehensionCheckEnabled) return;
@@ -297,13 +302,13 @@ export async function createOrchestrator(deps) {
         const text = String(window.getSelection?.() || '');
         if (text.trim()) interactionSignals.update({ kind: 'copy', text });
       } catch (e) {}
-    });
+    }, { signal });
 
     // Blur/return: coming back to the same paragraph after a long absence is a
     // confirmed loss of the thread. Carrying on forwards is not.
     window.addEventListener('blur', () => {
       try { interactionSignals.update({ kind: 'blur', paragraphIndex: activeParagraphIndex() }); } catch (e) {}
-    });
+    }, { signal });
     window.addEventListener('focus', () => {
       if (!s().comprehensionCheckEnabled) return;
       try {
@@ -311,7 +316,7 @@ export async function createOrchestrator(deps) {
         interactionSignals.update({ kind: 'focus', paragraphIndex: activeParagraphIndex() });
         pumpSignals();
       } catch (e) {}
-    });
+    }, { signal });
 
     // Slow tick so a reader who has stopped scrolling is still observed —
     // dwelling on one paragraph produces no events at all.

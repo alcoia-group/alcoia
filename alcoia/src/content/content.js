@@ -14,7 +14,32 @@ function __sra_main() {
 const _log  = (...a) => console.log('[alcoia]', ...a);
 const _warn = (...a) => console.warn('[alcoia]', ...a);
 
-(async function () {
+/* Master-switch hard off. sra_enabled (chrome.storage.local, default true)
+ * used to be read once at boot and then only gate individual listener
+ * BODIES with an early return — the listeners themselves stayed attached
+ * for the life of the page, and DOM injected before the switch's value was
+ * even known (ensureSelfReportTrigger's "?" button, reading-map's tab and
+ * sidebar) was never removed when the switch went off. boot() below now
+ * does everything this content script does — every listener, every piece
+ * of injected UI, every construction (ui/host/orchestrator) — and only
+ * runs while the switch is on; teardownBoot (built at the bottom of boot(),
+ * once everything it needs to reverse exists) reverses all of it. Toggling
+ * the switch mid-session calls one or the other from the always-active
+ * storage listener at the bottom of this file — the one thing that keeps
+ * running while off, so the page doesn't need a reload to react. */
+let isBooted = false;
+let teardownBoot = null;
+// The pushState/replaceState monkeypatch below is installed at most once,
+// ever (window.__sra_history_patched) and outlives any single boot() cycle,
+// so it must not close over one cycle's onSpaNavigate directly — see the
+// patch's own comment further down for why this indirection exists.
+let currentOnSpaNavigate = null;
+
+async function boot() {
+  if (isBooted) return;
+  isBooted = true;
+  const bootController = new AbortController();
+  const signal = bootController.signal;
 
   // ── Constants ──────────────────────────────────────────────────────────
   // Defined in src/shared/config.js, loaded as a preceding content script —
@@ -472,7 +497,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
         showSelfReportCard();
         return;
       }
-    });
+    }, { signal });
   }
 
 
@@ -515,24 +540,24 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       });
       sw.onmouseenter = () => { sw.style.transform = 'scale(1.2)'; };
       sw.onmouseleave = () => { sw.style.transform = ''; };
-      sw.addEventListener('mousedown', e => e.preventDefault()); // keep selection alive
+      sw.addEventListener('mousedown', e => e.preventDefault(), { signal }); // keep selection alive
       sw.addEventListener('click', e => {
         e.stopPropagation();
         applyTextHighlight(range, bg, key);
         removeColorPicker();
-      });
+      }, { signal });
       picker.appendChild(sw);
     });
 
     const dismiss = document.createElement('button');
     dismiss.textContent = '×';
     dismiss.style.cssText = 'background:none;border:none;cursor:pointer;color:#bbb;font-size:18px;padding:0 2px;line-height:1;';
-    dismiss.addEventListener('click', e => { e.stopPropagation(); removeColorPicker(); });
+    dismiss.addEventListener('click', e => { e.stopPropagation(); removeColorPicker(); }, { signal });
     picker.appendChild(dismiss);
 
     document.body.appendChild(picker);
     // Auto-dismiss on next outside click
-    setTimeout(() => document.addEventListener('click', removeColorPicker, { once: true }), 10);
+    setTimeout(() => document.addEventListener('click', removeColorPicker, { once: true, signal }), 10);
   }
 
   function removeColorPicker() {
@@ -624,7 +649,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       range.insertNode(mark);
     }
 
-    mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
+    mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark), { signal });
     wireHighlightRemovalAffordance(mark, hlId);
 
     const urlKey = window.location.hostname + window.location.pathname;
@@ -752,21 +777,21 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       boxShadow: '0 6px 20px rgba(0,0,0,0.16)',
       fontFamily: "var(--alc-serif, Georgia, serif)",
     });
-    chip.addEventListener('mouseenter', () => clearTimeout(_hlChipHideAt));
-    chip.addEventListener('mouseleave', scheduleHideHighlightChip);
+    chip.addEventListener('mouseenter', () => clearTimeout(_hlChipHideAt), { signal });
+    chip.addEventListener('mouseleave', scheduleHideHighlightChip, { signal });
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.textContent = 'Remove highlight';
     removeBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#a33;font-size:11px;padding:2px 4px;white-space:nowrap;';
-    removeBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteTextHighlight(hlId, mark); });
+    removeBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteTextHighlight(hlId, mark); }, { signal });
     chip.appendChild(removeBtn);
 
     const viewLink = document.createElement('a');
     viewLink.href = '#';
     viewLink.textContent = 'All highlights →';
     viewLink.style.cssText = 'color:#888;font-size:10px;text-decoration:underline;cursor:pointer;white-space:nowrap;';
-    viewLink.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); highlightsSidebar.open(); });
+    viewLink.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); highlightsSidebar.open(); }, { signal });
     chip.appendChild(viewLink);
 
     document.body.appendChild(chip);
@@ -781,10 +806,10 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     mark.tabIndex = 0;
     mark.setAttribute('aria-label', 'Highlighted text. Press Delete to remove it, or Enter to open your saved highlights.');
 
-    mark.addEventListener('mouseenter', () => showHighlightRemovalChip(mark, hlId));
-    mark.addEventListener('mouseleave', scheduleHideHighlightChip);
-    mark.addEventListener('focus', () => showHighlightRemovalChip(mark, hlId));
-    mark.addEventListener('blur', scheduleHideHighlightChip);
+    mark.addEventListener('mouseenter', () => showHighlightRemovalChip(mark, hlId), { signal });
+    mark.addEventListener('mouseleave', scheduleHideHighlightChip, { signal });
+    mark.addEventListener('focus', () => showHighlightRemovalChip(mark, hlId), { signal });
+    mark.addEventListener('blur', scheduleHideHighlightChip, { signal });
 
     mark.addEventListener('keydown', (e) => {
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -794,7 +819,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
         e.preventDefault();
         highlightsSidebar.open();
       }
-    });
+    }, { signal });
 
     // Touch has no hover — a long-press reveals the same chip so the remove
     // button and the highlights-page link are reachable there too.
@@ -803,16 +828,16 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     mark.addEventListener('touchstart', () => {
       cancelTouch();
       touchTimer = setTimeout(() => showHighlightRemovalChip(mark, hlId), 500);
-    }, { passive: true });
-    mark.addEventListener('touchend', cancelTouch);
-    mark.addEventListener('touchmove', cancelTouch);
-    mark.addEventListener('touchcancel', cancelTouch);
+    }, { passive: true, signal });
+    mark.addEventListener('touchend', cancelTouch, { signal });
+    mark.addEventListener('touchmove', cancelTouch, { signal });
+    mark.addEventListener('touchcancel', cancelTouch, { signal });
   }
 
   // The chip is position:fixed against the viewport, so it goes stale the
   // instant the page scrolls under it — hiding beats drawing a control that
   // now points at the wrong text.
-  window.addEventListener('scroll', () => { if (_hlChipEl) hideHighlightRemovalChip(); }, { passive: true, capture: true });
+  window.addEventListener('scroll', () => { if (_hlChipEl) hideHighlightRemovalChip(); }, { passive: true, capture: true, signal });
 
   function restoreTextHighlights() {
     const urlKey = window.location.hostname + window.location.pathname;
@@ -910,7 +935,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     mark.dataset.sraHlId = hlId;
     mark.style.cssText = `background:${color};border-radius:3px;padding:0 1px;mix-blend-mode:multiply;cursor:default;`;
     mark.title = 'Double-click, or focus and press Delete, to remove this highlight.';
-    mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark));
+    mark.addEventListener('dblclick', () => deleteTextHighlight(hlId, mark), { signal });
     wireHighlightRemovalAffordance(mark, hlId);
 
     try {
@@ -942,14 +967,14 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   let _wordTimer      = null;
   let _lastHoveredWord = null;
 
-  document.addEventListener('keydown', e => { if (e.key === 'Control' || e.key === 'Meta') _ctrlHeld = true; });
+  document.addEventListener('keydown', e => { if (e.key === 'Control' || e.key === 'Meta') _ctrlHeld = true; }, { signal });
   document.addEventListener('keyup',   e => {
     if (e.key === 'Control' || e.key === 'Meta') {
       _ctrlHeld = false;
       clearTimeout(_wordTimer);
       hideWordBubble();
     }
-  });
+  }, { signal });
 
   document.addEventListener('mousemove', e => {
     if (!_ctrlHeld || !selectionEnabled) return;
@@ -971,7 +996,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       _lastHoveredWord = hit.word;
       triggerWordLookup(hit, e.clientX, e.clientY);
     }, 380);
-  });
+  }, { signal });
 
   function getWordAtPoint(x, y) {
     try {
@@ -1214,7 +1239,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     }
     renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text: selected, source: 'selection', mode });
     readingMap.recordEvent('summarized', selected.slice(0, 40));
-  });
+  }, { signal });
 
   // Item 30a: findParagraphAt now lives in host.js — one of orchestrator.js's
   // 12 callbacks — reached here as hostCallbacks.findParagraphAt(). It still
@@ -1302,7 +1327,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   // exercised through an actual cross-context sendMessage rather than a
   // same-page keyboard shortcut. Every branch below already returns `true`
   // correctly; the outer function just has to stop hiding it inside a Promise.
-  chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
+  const onRuntimeMessage = (msg, _, sendResponse) => {
     // Every branch below keys on either `msg.type` (settings, calibration,
     // simulateState) or `msg.action` (sessionRecall, showReceipt,
     // recallStats, checkQuizCoverage) — two conventions that grew up side
@@ -1499,7 +1524,8 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       })();
       return true;
     }
-  });
+  };
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
 
   function extractPageText() {
     const skip = new Set(['SCRIPT','STYLE','NOSCRIPT','NAV','FOOTER','HEADER']);
@@ -1542,7 +1568,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       <div class="sra-page-summary-body">${html}</div>`;
 
     panel.querySelector('.sra-ps-close').onclick = () => overlay.remove();
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); }, { signal });
 
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
@@ -1606,20 +1632,34 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
     setTimeout(restoreTextHighlights, 300);
   }
 
+  // Master-switch hard off: history.pushState/replaceState get patched at
+  // most once, ever (window.__sra_history_patched), and the patched methods
+  // outlive any single boot() cycle — so they must not close over this
+  // boot's own onSpaNavigate directly, or a toggle-off/toggle-on cycle would
+  // leave them silently calling a stale closure over the PREVIOUS boot's
+  // orchestrator/openPopups. currentOnSpaNavigate (declared outside boot(),
+  // in __sra_main's outer scope) is the level of indirection that fixes
+  // that: boot() points it at the current cycle's onSpaNavigate, teardown()
+  // nulls it, and the permanent patch below always calls whichever is
+  // current, including "nothing" while the switch is off.
+  currentOnSpaNavigate = onSpaNavigate;
+
   if (!window.__sra_history_patched) {
     window.__sra_history_patched = true;
     const _patchHistory = (method) => {
       const orig = history[method];
       history[method] = function (...args) {
         const result = orig.apply(this, args);
-        onSpaNavigate();
+        currentOnSpaNavigate?.();
         return result;
       };
     };
     _patchHistory('pushState');
     _patchHistory('replaceState');
-    window.addEventListener('popstate', onSpaNavigate);
   }
+  // Unlike the history patch above, popstate is a genuine removable listener
+  // and is re-installed fresh every boot() cycle via the shared signal.
+  window.addEventListener('popstate', () => currentOnSpaNavigate?.(), { signal });
 
   // Resize re-clamping lives in ui-controller.js — it is popup geometry.
   ui.installResizeWatcher();
@@ -1676,13 +1716,13 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       setTimeout(() => toast.classList && (toast.style.opacity = '0', toast.style.transition = 'opacity 0.4s'), 7000);
       setTimeout(() => { try { toast.remove(); } catch (_) {} }, 7500);
 
-      toast.querySelector('#sra-cont-dismiss')?.addEventListener('click', () => toast.remove());
+      toast.querySelector('#sra-cont-dismiss')?.addEventListener('click', () => toast.remove(), { signal });
       toast.querySelector('#sra-cont-restore')?.addEventListener('click', () => {
         const target = Math.round((last.scrollPct || 0) *
           (document.documentElement.scrollHeight - window.innerHeight));
         window.scrollTo({ top: target, behavior: 'smooth' });
         toast.remove();
-      });
+      }, { signal });
     });
   }
 
@@ -1690,41 +1730,7 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
   await detectAndInitHandlers();
   await settingsReady;
 
-  /* Turning the switch off has to leave the page as if the extension were
-   * not installed: no cards, no ruler, no sidebar, no speech, and no
-   * signals accruing in the background. Turning it back on resumes
-   * whatever the reader's settings already said. */
-  function setAssistantEnabled(on) {
-    const was = assistantEnabled;
-    assistantEnabled = !!on;
-    if (was === assistantEnabled) return;
-
-    if (!assistantEnabled) {
-      try { hidePopup(true); } catch (e) { /* nothing open */ }
-      try { ui.clearHighlight(); } catch (e) { /* nothing highlighted */ }
-      try { focusRuler.disable(); } catch (e) { /* never enabled */ }
-      try { ttsHandler.stop(); } catch (e) { /* not speaking */ }
-      try { document.getElementById('sra-reading-map')?.classList.remove('open'); } catch (e) {}
-      try { document.querySelector('.sra-word-bubble')?.remove(); } catch (e) {}
-      _log('Assistant switched off — page left alone');
-    } else {
-      if (focusRulerEnabled) { try { focusRuler.enable(); } catch (e) {} }
-      try { orchestrator.primeParagraph(); } catch (e) {}
-      _log('Assistant switched on');
-    }
-  }
-
-  /* The popup only messages the active tab, so a settings broadcast would
-   * leave every other open tab still running. Storage is the one channel
-   * every tab hears. */
-  try {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'local') return;
-      if (changes.sra_enabled) setAssistantEnabled(changes.sra_enabled.newValue !== false);
-    });
-  } catch (e) { /* no storage in this context */ }
-
-  orchestrator.installListeners();
+  orchestrator.installListeners(signal);
   orchestrator.primeParagraph();
   // Baseline for onSpaNavigate()'s route-change check — set once, here,
   // rather than left at its `null` default, so the first real navigation is
@@ -1751,9 +1757,57 @@ const _warn = (...a) => console.warn('[alcoia]', ...a);
       }
     } catch (e) {}
     saveLastVisit();
-  });
+  }, { signal });
+
+  /* Master-switch hard off. Everything above this line — every listener,
+   * every construction (ui, host, orchestrator), every injected DOM node —
+   * exists only because boot() ran, which only happens while sra_enabled is
+   * true (see the bottom of this file). Turning the switch off has to leave
+   * the page as if the extension were not installed at all: this reverses
+   * every one of those side effects rather than merely gating handler
+   * bodies with an early return the way the old setAssistantEnabled() did,
+   * which left every listener attached and never removed the reading-map
+   * sidebar/tab DOM or the self-report "?" button once either had rendered.
+   * Existing highlight <mark> elements are deliberately left in place —
+   * they are the reader's own saved annotations, not extension chrome, and
+   * unwrapping them is out of scope here (their interaction listeners —
+   * dblclick to delete, the hover/focus removal chip — go with everything
+   * else above since they share this same AbortSignal). */
+  teardownBoot = function teardown() {
+    bootController.abort();
+    try { orchestrator.stop(); } catch (e) {}
+    try { hidePopup(true); } catch (e) { /* nothing open */ }
+    try { ui.clearHighlight(); } catch (e) { /* nothing highlighted */ }
+    try { focusRuler.disable(); } catch (e) { /* never enabled */ }
+    try { ttsHandler.stop(); } catch (e) { /* not speaking */ }
+    try { readingMap.destroy(); } catch (e) {}
+    try { ui.removeSelfReportTrigger(); } catch (e) {}
+    try { chrome.runtime.onMessage.removeListener(onRuntimeMessage); } catch (e) {}
+    window.__sra_esc_installed = false;
+    currentOnSpaNavigate = null;
+    isBooted = false;
+    teardownBoot = null;
+    _log('Assistant switched off — page left alone');
+  };
 
   _log('Content script loaded ✓');
+}
 
-})();
+/* The popup only messages the active tab, so a settings broadcast would
+ * leave every other open tab still running. Storage is the one channel
+ * every tab hears — and, per the master-switch hard-off design above, the
+ * ONLY listener that stays active at all while the switch is off, so a
+ * reader can flip it back on without reloading the page. */
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.sra_enabled) return;
+    const on = changes.sra_enabled.newValue !== false;
+    if (on) { if (!isBooted) boot(); }
+    else if (teardownBoot) { teardownBoot(); }
+  });
+} catch (e) { /* no storage in this context */ }
+
+chrome.storage.local.get({ sra_enabled: true }, (res) => {
+  if (res.sra_enabled !== false) boot();
+});
 } // end __sra_main
