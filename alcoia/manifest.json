@@ -62,7 +62,7 @@
   ],
   "externally_connectable": {
     "matches": [
-      "http://localhost:8080/*",
+      "https://alcoia.app/*",
       "https://console.alcoia.invalid/*"
     ]
   },
