@@ -10,19 +10,41 @@
  *
  * Colours come from the --alc-* tokens overlay.css declares on the host
  * page's :root, the same ones ui-controller.js's applyDarkMode() swaps —
- * dark mode here is a side effect of that, not separate logic.
+ * dark mode here is a side effect of that, not separate logic. Renders
+ * inside its own shadow-host.js shadow root, not the page's own light DOM
+ * — a host page's own CSS used to bleed straight into this panel the same
+ * way it did into every other alcoia element; see that file's header for
+ * why open, not closed. document.getElementById(PANEL_ID) etc. no longer
+ * find anything once the DOM they used to find lives inside a shadow tree,
+ * so every lookup below goes through the `shadowRoot` this module keeps
+ * for itself instead of the real `document`.
  */
 import { mountHighlights } from '../shared/highlights-render.js';
+import { createShadowHost } from './shadow-host.js';
 
 const PANEL_ID = 'sra-hl-sidebar';
 const STYLE_ID = PANEL_ID + '-styles';
 const WIDTH_PX = 340;
+const Z_HL_SIDEBAR = 2147483637;
 
-export function createHighlightsSidebar() {
+export function createHighlightsSidebar(deps = {}) {
+  const sharedStyles = deps.sharedStyles || '';
+  // Master-switch hard off (content.js's boot()/teardown()): an optional
+  // AbortSignal, threaded through the one plain addEventListener below so
+  // it detaches on teardown instead of stacking a duplicate on the next
+  // boot cycle's ensureDOM() call. Everything else this module builds is a
+  // shadow host, cleaned up wholesale by teardown()'s
+  // shadowHostModule.removeAllShadowHosts() regardless of this signal.
+  const signal = deps.signal;
+
   let mounted = null;
+  let shadowRoot = null;
 
   function ensureDOM() {
-    if (document.getElementById(PANEL_ID)) return;
+    if (shadowRoot) return;
+
+    const { shadow } = createShadowHost(sharedStyles, Z_HL_SIDEBAR);
+    shadowRoot = shadow;
 
     const style = document.createElement('style');
     style.id = STYLE_ID;
@@ -124,7 +146,7 @@ export function createHighlightsSidebar() {
         font-size: 10.5px; color: var(--alc-accent, #7E60AE);
       }
     `;
-    document.head.appendChild(style);
+    shadowRoot.appendChild(style);
 
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
@@ -150,7 +172,7 @@ export function createHighlightsSidebar() {
       </div>
       <div class="sra-hls-body" data-hl-list></div>
     `;
-    document.body.appendChild(panel);
+    shadowRoot.appendChild(panel);
 
     panel.querySelector('[data-hl-close]').addEventListener('click', close);
     panel.querySelector('[data-hl-expand]').addEventListener('click', () => {
@@ -158,8 +180,8 @@ export function createHighlightsSidebar() {
     });
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && document.getElementById(PANEL_ID)?.classList.contains('open')) close();
-    });
+      if (e.key === 'Escape' && shadowRoot?.getElementById(PANEL_ID)?.classList.contains('open')) close();
+    }, { signal });
 
     mounted = mountHighlights(panel, {
       // Content scripts cannot call chrome.tabs.create directly; background.js's
@@ -172,13 +194,13 @@ export function createHighlightsSidebar() {
   function open() {
     ensureDOM();
     mounted?.refresh();
-    document.getElementById(PANEL_ID)?.classList.add('open');
+    shadowRoot?.getElementById(PANEL_ID)?.classList.add('open');
   }
   function close() {
-    document.getElementById(PANEL_ID)?.classList.remove('open');
+    shadowRoot?.getElementById(PANEL_ID)?.classList.remove('open');
   }
   function toggle() {
-    const panel = document.getElementById(PANEL_ID);
+    const panel = shadowRoot?.getElementById(PANEL_ID);
     if (panel?.classList.contains('open')) close(); else open();
   }
 

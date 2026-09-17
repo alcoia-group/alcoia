@@ -23,6 +23,8 @@
  * of the artifact for exactly this reason.
  */
 
+import { createShadowHost } from './shadow-host.js';
+
 export const RECEIPT_VERSION = 1;
 
 /* Non-reversible page identifier. The URL itself is not included: a receipt
@@ -169,12 +171,16 @@ export function auditReceipt(receipt) {
  * There is no "share" that skips this panel, and no code path that sends a
  * receipt anywhere the reader did not click to send it.
  */
+const Z_RECEIPT = 2147483647;
+
 export function createReceiptPanel(deps = {}) {
-  const { esc, signReceipt } = deps;
+  const { esc, signReceipt, sharedStyles = '' } = deps;
   let panel = null;
+  let panelHost = null;
 
   function close() {
-    if (panel) { panel.remove(); panel = null; }
+    if (panelHost) { try { panelHost.remove(); } catch (e) {} panelHost = null; }
+    panel = null;
   }
 
   function row(label, value) {
@@ -232,7 +238,9 @@ export function createReceiptPanel(deps = {}) {
         <div class="sra-r-status"></div>
       </div>`;
 
-    document.body.appendChild(panel);
+    const { host, shadow } = createShadowHost(sharedStyles, Z_RECEIPT);
+    panelHost = host;
+    shadow.appendChild(panel);
 
     const status = panel.querySelector('.sra-r-status');
     let current = receipt;

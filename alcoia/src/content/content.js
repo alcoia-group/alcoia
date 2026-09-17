@@ -194,11 +194,18 @@ async function boot() {
   // Item DC-2 — see that file's own header for why this isn't a signals/
   // detector.
   const selectExplainModule = await loadModule('src/content/selection-explain.js');
+  // Every element this file and ui-controller.js/reading-map.js inject now
+  // renders inside its own Shadow DOM host — see that file's header for
+  // why. Awaited once, here, so createShadowHost() calls made later (by any
+  // of them) stay synchronous instead of every popup/toast/bubble needing
+  // to become async just to fetch CSS it already fetched for the last one.
+  const shadowHostModule = await loadModule('src/content/shadow-host.js');
+  const sharedStyles = await shadowHostModule.loadSharedStyles();
 
   const ttsHandler    = ttsModule.createTTSHandler();
   const dyslexiaUtils = dyslexiaModule;
-  const readingMap    = mapModule.createReadingMap();
-  const highlightsSidebar = hlSidebarModule.createHighlightsSidebar();
+  const readingMap    = mapModule.createReadingMap({ sharedStyles });
+  const highlightsSidebar = hlSidebarModule.createHighlightsSidebar({ sharedStyles, signal });
   const selectionExplain  = selectExplainModule.createSelectionExplainTracker();
 
   // ── UI ─────────────────────────────────────────────────────────────────
@@ -220,6 +227,7 @@ async function boot() {
       highlightEnabled, pinDefault, autohideEnabled, autohideTimeoutSec,
     }),
     fetchSummary: (...a) => hostApi.fetchSummary(...a),
+    sharedStyles,
   });
   const {
     openPopups, highlightElement, closePopup, flashPopup, hidePopup,
@@ -276,6 +284,7 @@ async function boot() {
       const j = resp.ok ? resp.data : null;
       return j && j.receipt ? j.receipt : null;
     },
+    sharedStyles,
   });
 
   function buildCurrentReceipt() {
@@ -508,12 +517,15 @@ async function boot() {
   // onIntervention 'ask' branch and has no direct call site left here.
 
   // ── Text highlighting (Ctrl+drag to select) ────────────────────────────
+  let colorPickerHost = null;
   function showColorPicker(range, clientX, clientY) {
     removeColorPicker();
+    const { host, shadow } = shadowHostModule.createShadowHost(sharedStyles, 2147483645);
+    colorPickerHost = host;
     const picker = document.createElement('div');
     picker.id = 'sra-color-picker';
     Object.assign(picker.style, {
-      position: 'fixed', zIndex: '2147483645',
+      position: 'fixed',
       left: Math.min(clientX, window.innerWidth - 200) + 'px',
       top:  (clientY + 10) + 'px',
       background: 'white',
@@ -555,14 +567,18 @@ async function boot() {
     dismiss.addEventListener('click', e => { e.stopPropagation(); removeColorPicker(); }, { signal });
     picker.appendChild(dismiss);
 
-    document.body.appendChild(picker);
-    // Auto-dismiss on next outside click
+    shadow.appendChild(picker);
+    // Auto-dismiss on next outside click. A click on a swatch/dismiss button
+    // inside the picker never reaches here — both call e.stopPropagation(),
+    // which still works across the shadow boundary the same as anywhere
+    // else; only *retargeting* of ev.target (not propagation) differs
+    // inside a shadow tree, and nothing here reads ev.target.
     setTimeout(() => document.addEventListener('click', removeColorPicker, { once: true, signal }), 10);
   }
 
   function removeColorPicker() {
-    const p = document.getElementById('sra-color-picker');
-    if (p) p.remove();
+    try { colorPickerHost?.remove(); } catch (e) {}
+    colorPickerHost = null;
   }
 
   // Item 25: which block (by index among the same p/li/blockquote selector
@@ -734,6 +750,7 @@ async function boot() {
   // control that never occupies layout space, plus a keyboard path and a
   // way to find the Highlights page from the highlight itself.
   let _hlChipEl     = null;
+  let _hlChipHost   = null;
   let _hlChipMark   = null;
   let _hlChipHideAt = null;
 
@@ -750,7 +767,8 @@ async function boot() {
 
   function hideHighlightRemovalChip() {
     clearTimeout(_hlChipHideAt);
-    if (_hlChipEl) { _hlChipEl.remove(); _hlChipEl = null; }
+    if (_hlChipHost) { try { _hlChipHost.remove(); } catch (e) {} _hlChipHost = null; }
+    _hlChipEl = null;
     _hlChipMark = null;
   }
 
@@ -765,10 +783,12 @@ async function boot() {
     hideHighlightRemovalChip();
     _hlChipMark = mark;
 
+    const { host, shadow } = shadowHostModule.createShadowHost(sharedStyles, 2147483644);
+    _hlChipHost = host;
     const chip = document.createElement('div');
     chip.id = 'sra-hl-chip';
     Object.assign(chip.style, {
-      position: 'fixed', zIndex: '2147483644',
+      position: 'fixed',
       background: 'white',
       border: '1px solid rgba(0,0,0,0.10)',
       borderRadius: '8px',
@@ -794,7 +814,7 @@ async function boot() {
     viewLink.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); highlightsSidebar.open(); }, { signal });
     chip.appendChild(viewLink);
 
-    document.body.appendChild(chip);
+    shadow.appendChild(chip);
     _hlChipEl = chip;
     positionHighlightChip(mark);
   }
@@ -964,6 +984,7 @@ async function boot() {
   // ── Word lookup (Ctrl+hover) ───────────────────────────────────────────
   let _ctrlHeld       = false;
   let _wordBubble     = null;
+  let _wordBubbleHost = null;
   let _wordTimer      = null;
   let _lastHoveredWord = null;
 
@@ -1021,20 +1042,22 @@ async function boot() {
 
   async function triggerWordLookup({ word, sentence }, cx, cy) {
     hideWordBubble();
+    const { host, shadow } = shadowHostModule.createShadowHost(sharedStyles, 2147483646);
+    _wordBubbleHost = host;
     const bubble = document.createElement('div');
     bubble.className = 'sra-word-bubble';
     bubble.innerHTML = `<strong>${esc(word)}</strong><span class="sra-word-loading">looking up…</span>`;
     // Initial position near cursor
     bubble.style.left = Math.min(cx + 14, window.innerWidth  - 280) + 'px';
     bubble.style.top  = Math.min(cy + 14, window.innerHeight - 120) + 'px';
-    document.body.appendChild(bubble);
+    shadow.appendChild(bubble);
     _wordBubble = bubble;
     requestAnimationFrame(() => bubble.classList.add('show'));
 
     const payload = `word: ${word}\nContext sentence: ${sentence}`;
     const def = await fetchSummary(payload, 'define_word');
 
-    if (!_wordBubble || !document.contains(_wordBubble)) return;
+    if (!_wordBubble || !_wordBubble.isConnected) return;
     if (def) {
       bubble.innerHTML = `<strong>${esc(word)}</strong><div>${esc(def)}</div>`;
       // Re-clamp after content change
@@ -1047,7 +1070,8 @@ async function boot() {
   }
 
   function hideWordBubble() {
-    if (_wordBubble) { _wordBubble.remove(); _wordBubble = null; }
+    if (_wordBubbleHost) { try { _wordBubbleHost.remove(); } catch (e) {} _wordBubbleHost = null; }
+    _wordBubble = null;
     _lastHoveredWord = null;
   }
 
@@ -1090,16 +1114,17 @@ async function boot() {
     const anchorRect = imgEl.getBoundingClientRect();
 
     // Show a small loading bubble immediately so the user knows something is happening
+    const { host: imgBubbleHost, shadow: imgBubbleShadow } = shadowHostModule.createShadowHost(sharedStyles, 2147483646);
     const bubble = document.createElement('div');
     bubble.className = 'sra-word-bubble';
     bubble.style.cssText = `left:${Math.min(cx + 14, window.innerWidth - 280)}px;top:${Math.min(cy + 14, window.innerHeight - 120)}px;`;
     bubble.innerHTML = '<strong>Image</strong><span class="sra-word-loading">analysing…</span>';
-    document.body.appendChild(bubble);
+    imgBubbleShadow.appendChild(bubble);
     requestAnimationFrame(() => bubble.classList.add('show'));
 
     try {
       const summary = await fetchSummary(payload, 'image_context');
-      bubble.remove();
+      imgBubbleHost.remove();
       if (summary) {
         const label = reason === 'hover' ? 'image · Ctrl+hover' : `image · ${reason}`;
         renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text: payload, source: 'image', trigger: reason, triggerLabel: label });
@@ -1267,7 +1292,7 @@ async function boot() {
     const _fp = text.slice(0, 80).trim();
     if (_fp && openPopups.has(_fp)) {
       const _e = openPopups.get(_fp);
-      if (_e.el && document.contains(_e.el)) { flashPopup(_e.el); return; }
+      if (_e.el && _e.el.isConnected) { flashPopup(_e.el); return; }
       openPopups.delete(_fp);
     }
     // Fix: block concurrent fetches for the same paragraph (race condition guard)
@@ -1546,8 +1571,13 @@ async function boot() {
     return parts.join('\n\n').slice(0, 6000);
   }
 
+  let pageSummaryHost = null;
   function showPageSummaryPanel(markdownText) {
-    document.querySelector('.sra-page-summary-overlay')?.remove();
+    try { pageSummaryHost?.remove(); } catch (e) {}
+
+    const { host, shadow } = shadowHostModule.createShadowHost(sharedStyles, 2147483644);
+    pageSummaryHost = host;
+    const closeSummary = () => { try { host.remove(); } catch (e) {} if (pageSummaryHost === host) pageSummaryHost = null; };
 
     const overlay = document.createElement('div');
     overlay.className = 'sra-page-summary-overlay';
@@ -1567,11 +1597,11 @@ async function boot() {
       <h2>Page Overview</h2>
       <div class="sra-page-summary-body">${html}</div>`;
 
-    panel.querySelector('.sra-ps-close').onclick = () => overlay.remove();
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); }, { signal });
+    panel.querySelector('.sra-ps-close').onclick = closeSummary;
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeSummary(); }, { signal });
 
     overlay.appendChild(panel);
-    document.body.appendChild(overlay);
+    shadow.appendChild(overlay);
   }
 
   // ── SPA navigation: close unpinned popups, badge pinned ones as stale ────
@@ -1595,7 +1625,7 @@ async function boot() {
     lastSpaDocKey = newKey;
 
     for (const [fp, { el }] of [...openPopups.entries()]) {
-      if (!el || !document.contains(el)) { openPopups.delete(fp); continue; }
+      if (!el || !el.isConnected) { openPopups.delete(fp); continue; }
       if (el.dataset.pinned !== 'true') {
         closePopup(el, fp);
       } else {
@@ -1694,6 +1724,8 @@ async function boot() {
       const pct  = Math.round((last.scrollPct || 0) * 100);
       const state = last.lastCogState || '';
 
+      const { host: contToastHost, shadow: contToastShadow } = shadowHostModule.createShadowHost(sharedStyles, 2147483640);
+      const removeContinuityToast = () => { try { contToastHost.remove(); } catch (e) {} };
       const toast = document.createElement('div');
       toast.id = 'sra-continuity-toast';
       toast.style.cssText = [
@@ -1712,16 +1744,16 @@ async function boot() {
         ${pct > 5 ? `<button id="sra-cont-restore" style="background:rgba(126,96,174,0.7);border:none;color:#fff;padding:4px 10px;border-radius:7px;cursor:pointer;font-family:inherit;font-size:11px;">Scroll to ${pct}%</button>` : ''}
         <button id="sra-cont-dismiss" style="background:none;border:none;color:#aaa;cursor:pointer;font-size:16px;padding:0 2px;">×</button>`;
 
-      document.body.appendChild(toast);
+      contToastShadow.appendChild(toast);
       setTimeout(() => toast.classList && (toast.style.opacity = '0', toast.style.transition = 'opacity 0.4s'), 7000);
-      setTimeout(() => { try { toast.remove(); } catch (_) {} }, 7500);
+      setTimeout(removeContinuityToast, 7500);
 
-      toast.querySelector('#sra-cont-dismiss')?.addEventListener('click', () => toast.remove(), { signal });
+      toast.querySelector('#sra-cont-dismiss')?.addEventListener('click', removeContinuityToast, { signal });
       toast.querySelector('#sra-cont-restore')?.addEventListener('click', () => {
         const target = Math.round((last.scrollPct || 0) *
           (document.documentElement.scrollHeight - window.innerHeight));
         window.scrollTo({ top: target, behavior: 'smooth' });
-        toast.remove();
+        removeContinuityToast();
       }, { signal });
     });
   }
@@ -1783,6 +1815,14 @@ async function boot() {
     try { readingMap.destroy(); } catch (e) {}
     try { ui.removeSelfReportTrigger(); } catch (e) {}
     try { chrome.runtime.onMessage.removeListener(onRuntimeMessage); } catch (e) {}
+    // Belt and braces: hidePopup(true) above only closes UNPINNED popups,
+    // and every removal above is otherwise per-module. This is the one
+    // call that guarantees every shadow host this content script has ever
+    // created — pinned popups included — is gone immediately, matching
+    // "no alcoia UI of any kind is visible" rather than "unless it was
+    // pinned". Safe to call even for hosts a more specific path above
+    // already removed — Element.remove() on a detached node is a no-op.
+    try { shadowHostModule.removeAllShadowHosts(); } catch (e) {}
     window.__sra_esc_installed = false;
     currentOnSpaNavigate = null;
     isBooted = false;

@@ -417,6 +417,22 @@ const server = http.createServer((req, res) => {
       `<div style="min-height:900px;padding-top:40px;box-sizing:border-box;"><p>${t}</p></div>`).join('')}</body></html>`);
     return;
   }
+  // Shadow DOM isolation check: a page with the kind of aggressive global
+  // CSS reset that used to bleed straight into alcoia's injected UI —
+  // oversized default font-size, content-box sizing, buttons/divs stripped
+  // of their UA defaults. Real reading text too, not just a blank page, so
+  // detection has something to fire on.
+  if (req.url.startsWith('/aggressive-css-fixture.html')) {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><head><style>
+      * { box-sizing: content-box !important; font-size: 32px !important; margin: 0; padding: 0; }
+      button, div { all: unset; display: block; }
+    </style></head><body>
+      <p>${CANNED_QUESTION.span}</p>
+      <p>A second, unrelated paragraph so the page has more than one block of text to read through here.</p>
+    </body></html>`);
+    return;
+  }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(html);
 }).listen(8731);
@@ -439,6 +455,35 @@ const ctx = await chromium.launchPersistentContext(profile, {
 let sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker', { timeout: 15000 });
 const extId = new URL(sw.url()).host;
 console.log('extension id:', extId);
+
+/* Every element alcoia injects into an article page now lives inside its
+ * own shadow-host.js shadow root (mode: 'open' — see that file's header:
+ * CSS isolation from the page is identical to 'closed', but 'open' keeps
+ * element.shadowRoot reachable from outside, which is exactly what this
+ * whole file's page.evaluate() checks rely on). A plain
+ * document.querySelector/getElementById can no longer find any of it, so
+ * every check below that targets an alcoia-rendered element (an sra- class,
+ * an sra- id, or a data-self-report attribute) goes through these instead
+ * — added via context.addInitScript so every page this test opens has them, not just
+ * the main article page. Host-page content (the article's own #app,
+ * .spa-par, etc.) is untouched and still queried directly; only alcoia's
+ * own UI moved. */
+await ctx.addInitScript(() => {
+  window.__sraQuery = (selector) => {
+    for (const host of document.querySelectorAll('[data-alcoia-host]')) {
+      const found = host.shadowRoot?.querySelector(selector);
+      if (found) return found;
+    }
+    return null;
+  };
+  window.__sraQueryAll = (selector) => {
+    const results = [];
+    for (const host of document.querySelectorAll('[data-alcoia-host]')) {
+      results.push(...(host.shadowRoot?.querySelectorAll(selector) || []));
+    }
+    return results;
+  };
+});
 
 // Settings: comprehension ON, debug ON so the engine narrates.
 const cfg = await ctx.newPage();
@@ -513,7 +558,7 @@ await page.waitForTimeout(3000);
 const gum = await page.evaluate(() => window.__gumCalls || []);
 findings.getUserMedia = gum;
 
-const popups = await page.evaluate(() => document.querySelectorAll('.sra-popup').length);
+const popups = await page.evaluate(() => window.__sraQueryAll('.sra-popup').length);
 
 /* Computed styles, not just element presence. The question card and the
  * receipt once shipped their CSS in a file nothing loaded, and every test
@@ -521,8 +566,8 @@ const popups = await page.evaluate(() => document.querySelectorAll('.sra-popup')
  * `.sra-q-option` works perfectly on a bare <button>. Assert that a rule
  * reaches the element and that the bundled family is the one resolving. */
 const styling = await page.evaluate(() => {
-  const card = document.querySelector('.sra-popup');
-  const opt  = document.querySelector('.sra-q-option');
+  const card = window.__sraQuery('.sra-popup');
+  const opt  = window.__sraQuery('.sra-q-option');
   const cs   = card && getComputedStyle(card);
   const os   = opt && getComputedStyle(opt);
   return {
@@ -538,34 +583,34 @@ const styling = await page.evaluate(() => {
 // step is resolved, exercised here with a real rating rather than skipping
 // it, so the full commit path runs in an actual browser at least once.
 const questionCard = await page.evaluate(() => {
-  const opts = document.querySelectorAll('.sra-q-option');
+  const opts = window.__sraQueryAll('.sra-q-option');
   if (!opts.length) return { shown: false };
-  const qText = document.querySelector('.sra-q-text')?.textContent || '';
+  const qText = window.__sraQuery('.sra-q-text')?.textContent || '';
   opts[0].click();
-  const confidenceShown = !!document.querySelector('.sra-q-confidence');
-  const gradedBeforeConfidence = !!document.querySelector('.sra-q-result');
+  const confidenceShown = !!window.__sraQuery('.sra-q-confidence');
+  const gradedBeforeConfidence = !!window.__sraQuery('.sra-q-result');
   return { shown: true, question: qText, optionCount: opts.length, confidenceShown, gradedBeforeConfidence };
 });
 if (questionCard.shown) {
   await page.waitForTimeout(300);
-  await page.evaluate(() => document.querySelector('.sra-q-conf-btn[data-conf="high"]')?.click());
+  await page.evaluate(() => window.__sraQuery('.sra-q-conf-btn[data-conf="high"]')?.click());
   await page.waitForTimeout(1200);
 }
 const graded = questionCard.shown
   ? await page.evaluate(() => ({
-      marked: !!document.querySelector('.sra-q-correct'),
-      result: document.querySelector('.sra-q-result')?.textContent?.trim().slice(0, 60) || null,
-      resultIsCorrectStyled: !!document.querySelector('.sra-q-result-correct'),
-      disabled: [...document.querySelectorAll('.sra-q-option')].every((b) => b.disabled),
-      confidenceStepGone: !document.querySelector('.sra-q-confidence'),
+      marked: !!window.__sraQuery('.sra-q-correct'),
+      result: window.__sraQuery('.sra-q-result')?.textContent?.trim().slice(0, 60) || null,
+      resultIsCorrectStyled: !!window.__sraQuery('.sra-q-result-correct'),
+      disabled: [...window.__sraQueryAll('.sra-q-option')].every((b) => b.disabled),
+      confidenceStepGone: !window.__sraQuery('.sra-q-confidence'),
       // Item 19: only meaningful under WRONG=1 — the harness always clicks
       // options[0], which is only wrong when that env var shifts the
       // answer, so a normal run legitimately has hasHighlight: false here
       // (no explanation shown at all on a correct answer).
-      hasHighlight: !!document.querySelector('.sra-q-result .sra-term'),
-      noHighlightInQuestionOrOptions: !document.querySelector('.sra-q-text .sra-term')
-        && ![...document.querySelectorAll('.sra-q-option')].some((o) => o.querySelector('.sra-term')),
-      noHighlightInQuotedSpan: !document.querySelector('.sra-q-span .sra-term'),
+      hasHighlight: !!window.__sraQuery('.sra-q-result .sra-term'),
+      noHighlightInQuestionOrOptions: !window.__sraQuery('.sra-q-text .sra-term')
+        && ![...window.__sraQueryAll('.sra-q-option')].some((o) => o.querySelector('.sra-term')),
+      noHighlightInQuotedSpan: !window.__sraQuery('.sra-q-span .sra-term'),
     }))
   : null;
 
@@ -577,7 +622,7 @@ const graded = questionCard.shown
  * so it is true after every answer and would gate this on the wrong thing. */
 const correctAnswerSilence = graded && graded.resultIsCorrectStyled ? {
   noExplanationLeaked: !graded.result || !graded.result.includes(CANNED_QUESTION.explanation.slice(0, 15)),
-  noSpanRendered: !(await page.evaluate(() => !!document.querySelector('.sra-q-span'))),
+  noSpanRendered: !(await page.evaluate(() => !!window.__sraQuery('.sra-q-span'))),
 } : null;
 
 // Session recall: reader-initiated review of what was actually read.
@@ -586,7 +631,7 @@ await page.keyboard.down('Alt'); await page.keyboard.press('KeyR'); await page.k
 await page.waitForTimeout(2500);
 const recall = {
   questionsFetched: apiHits.questions - beforeRecall,
-  cardOnScreen: await page.evaluate(() => !!document.querySelector('.sra-q-options')),
+  cardOnScreen: await page.evaluate(() => !!window.__sraQuery('.sra-q-options')),
 };
 
 /* Every keyboard shortcut, pressed. The P6 refactor silently deleted the whole
@@ -601,55 +646,55 @@ async function alt(key) {
 }
 
 await alt('Digit1');   // simulate struggling
-shortcuts.results.altDigit1_toast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
+shortcuts.results.altDigit1_toast = await page.evaluate(() => !!window.__sraQuery('#sra-sim-toast'));
 await alt('KeyT');     // toggle TTS
-shortcuts.results.altT_toast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
+shortcuts.results.altT_toast = await page.evaluate(() => !!window.__sraQuery('#sra-sim-toast'));
 await alt('KeyF');     // toggle focus ruler
 shortcuts.results.altF_ruler = await page.evaluate(() =>
-  !!document.querySelector('[class*="ruler"],[id*="ruler"]') || !!document.getElementById('sra-sim-toast'));
+  !!document.querySelector('[class*="ruler"],[id*="ruler"]') || !!window.__sraQuery('#sra-sim-toast'));
 await alt('KeyM');     // toggle reading map
-shortcuts.results.altM_map = await page.evaluate(() => !!document.getElementById('sra-reading-map'));
+shortcuts.results.altM_map = await page.evaluate(() => !!window.__sraQuery('#sra-reading-map'));
 
 // Item 13a — the self-report mechanism's three affordances. The
 // persistent trigger (affordance 2) should already be on screen before
 // any shortcut is pressed at all: "always available", unlike everything
 // else on this page.
-shortcuts.results.selfReportTriggerAlwaysPresent = await page.evaluate(() => !!document.getElementById('sra-self-report-trigger'));
+shortcuts.results.selfReportTriggerAlwaysPresent = await page.evaluate(() => !!window.__sraQuery('#sra-self-report-trigger'));
 
 await alt('KeyC');     // self-report (affordance 1)
 await page.waitForTimeout(400);
-shortcuts.results.altC_selfReportOptionCount = await page.evaluate(() => document.querySelectorAll('[data-self-report]').length);
+shortcuts.results.altC_selfReportOptionCount = await page.evaluate(() => window.__sraQueryAll('[data-self-report]').length);
 // A real click in a real browser, not just markup existing — confirms the
 // handler actually runs and does not throw.
-await page.evaluate(() => document.querySelector('[data-self-report="confusion"]')?.click());
+await page.evaluate(() => window.__sraQuery('[data-self-report="confusion"]')?.click());
 await page.waitForTimeout(200);
 shortcuts.results.altC_clickAcknowledged = await page.evaluate(() =>
-  document.querySelector('[data-self-report="confusion"]')?.textContent === 'Thanks, noted.');
+  window.__sraQuery('[data-self-report="confusion"]')?.textContent === 'Thanks, noted.');
 await page.keyboard.press('Escape');
 await page.waitForTimeout(400);
 
 // Affordance 2 — the SAME standalone card, reached by clicking the
 // persistent trigger instead of the keyboard shortcut.
-await page.evaluate(() => document.getElementById('sra-self-report-trigger')?.click());
+await page.evaluate(() => window.__sraQuery('#sra-self-report-trigger')?.click());
 await page.waitForTimeout(400);
-shortcuts.results.triggerClick_selfReportOptionCount = await page.evaluate(() => document.querySelectorAll('[data-self-report]').length);
+shortcuts.results.triggerClick_selfReportOptionCount = await page.evaluate(() => window.__sraQueryAll('[data-self-report]').length);
 await page.keyboard.press('Escape');
 await page.waitForTimeout(400);
 
 await alt('KeyS');     // summarise paragraph at viewport centre
 await page.waitForTimeout(500);
-shortcuts.results.altS_popup = await page.evaluate(() => document.querySelectorAll('.sra-popup').length > 0);
+shortcuts.results.altS_popup = await page.evaluate(() => window.__sraQueryAll('.sra-popup').length > 0);
 await page.keyboard.press('Escape');
 await page.waitForTimeout(400);
 shortcuts.results.escape_closedUnpinned = await page.evaluate(() =>
-  [...document.querySelectorAll('.sra-popup')].every((el) => el.dataset.pinned === 'true'));
+  [...window.__sraQueryAll('.sra-popup')].every((el) => el.dataset.pinned === 'true'));
 shortcuts.newPageErrors = findings.pageErrors.length - shortcuts.errorsBefore;
 
 // Receipt: reader-triggered (Alt+I), previewed in full before anything leaves.
 await page.keyboard.down('Alt'); await page.keyboard.press('KeyI'); await page.keyboard.up('Alt');
 await page.waitForTimeout(900);
 const receipt = await page.evaluate(() => {
-  const panel = document.querySelector('.sra-receipt');
+  const panel = window.__sraQuery('.sra-receipt');
   if (!panel) return { shown: false };
   const raw = panel.querySelector('.sra-r-raw pre')?.textContent || '';
   let parsed = null;
@@ -763,20 +808,20 @@ await helperWrite.close();
 await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
 await page.waitForTimeout(800);
 const offerShown = await page.evaluate(() => {
-  const card = [...document.querySelectorAll('.sra-popup')]
+  const card = [...window.__sraQueryAll('.sra-popup')]
     .find((el) => el.querySelector('.sra-quiz-start-btn'));
   return card ? { shown: true, text: card.querySelector('.sra-q-text')?.textContent || null } : { shown: false };
 });
 if (offerShown.shown) {
-  await page.evaluate(() => document.querySelector('.sra-q-skip')?.click());
+  await page.evaluate(() => window.__sraQuery('.sra-q-skip')?.click());
   await page.waitForTimeout(400); // closePopup() fades out over 250ms before removing the element
 }
 const offerGoneAfterDismiss = await page.evaluate(() =>
-  !document.querySelector('.sra-quiz-start-btn'));
+  !window.__sraQuery('.sra-quiz-start-btn'));
 await page.mouse.wheel(0, -30); // scroll again — must not reappear (once per document)
 await page.waitForTimeout(500);
 const offerStaysDismissed = await page.evaluate(() =>
-  !document.querySelector('.sra-quiz-start-btn'));
+  !window.__sraQuery('.sra-quiz-start-btn'));
 
 // Item 17: the quiz page. session-recall.js needs at least one paragraph to
 // individually clear its own MIN_DWELL_MS (4s) before select() returns
@@ -816,6 +861,12 @@ if (!FAIL_QUESTIONS && !FAIL_TOKEN) {
     const answers = [];
     for (let i = 0; i < 10; i++) { // bounded loop — a real quiz is 5-8 questions
       const state = await quizPage.evaluate(() => ({
+        // quiz.html is an extension page in src/popup/ — explicitly out of
+        // scope for Shadow DOM (it runs in its own document, not injected
+        // into a host page — see shadow-host.js's header) — so its
+        // .sra-q-option etc. are plain, unwrapped elements and stay a
+        // direct document query, unlike every other .sra- lookup in this
+        // file.
         hasQuestion: !!document.querySelector('.sra-q-option'),
         hasResults: !!document.getElementById('deleteThisBtn'),
       }));
@@ -893,21 +944,21 @@ if (!FAIL_QUESTIONS && !FAIL_TOKEN) {
   for (const y of [400, 900, 1400, 1900, 2400]) {
     await snoozePage.mouse.wheel(0, y - (await snoozePage.evaluate(() => window.scrollY)));
     await snoozePage.waitForTimeout(1200);
-    cardSeen = await snoozePage.evaluate(() => !!document.querySelector('.sra-q-snooze-toggle'));
+    cardSeen = await snoozePage.evaluate(() => !!window.__sraQuery('.sra-q-snooze-toggle'));
     if (cardSeen) break;
   }
 
   if (cardSeen) {
-    await snoozePage.evaluate(() => document.querySelector('.sra-q-snooze-toggle').click());
+    await snoozePage.evaluate(() => window.__sraQuery('.sra-q-snooze-toggle').click());
     await snoozePage.waitForTimeout(200);
     const durationsOffered = await snoozePage.evaluate(() =>
-      document.querySelectorAll('.sra-q-snooze-options button').length);
-    await snoozePage.evaluate(() => document.querySelector('.sra-q-snooze-options button[data-snooze="15m"]').click());
+      window.__sraQueryAll('.sra-q-snooze-options button').length);
+    await snoozePage.evaluate(() => window.__sraQuery('.sra-q-snooze-options button[data-snooze="15m"]').click());
     await snoozePage.waitForTimeout(500); // closePopup()'s fade-out
 
-    const cardGoneAfterSnooze = await snoozePage.evaluate(() => !document.querySelector('.sra-q-option'));
+    const cardGoneAfterSnooze = await snoozePage.evaluate(() => !window.__sraQuery('.sra-q-option'));
     const toastShown = await snoozePage.evaluate(() =>
-      !!document.getElementById('sra-status-toast') && document.getElementById('sra-status-toast').textContent);
+      !!window.__sraQuery('#sra-status-toast') && window.__sraQuery('#sra-status-toast').textContent);
 
     const coverageBefore = await readSnoozeCoverage();
     // Keep reading while snoozed — several more struggle-shaped scrolls,
@@ -917,7 +968,7 @@ if (!FAIL_QUESTIONS && !FAIL_TOKEN) {
       await snoozePage.mouse.wheel(0, y - (await snoozePage.evaluate(() => window.scrollY)));
       await snoozePage.waitForTimeout(900);
     }
-    const noNewInterruptionWhileSnoozed = await snoozePage.evaluate(() => !document.querySelector('.sra-q-option'));
+    const noNewInterruptionWhileSnoozed = await snoozePage.evaluate(() => !window.__sraQuery('.sra-q-option'));
     const coverageAfter = await readSnoozeCoverage();
 
     // sendToArticleTab() (defined earlier) targets whichever tab matches
@@ -1023,7 +1074,7 @@ await diagPage2.waitForTimeout(400);
 await page.bringToFront();
 await diagPage2.evaluate(() => document.getElementById('simStrugglingBtn')?.click());
 await diagPage2.waitForTimeout(500);
-devToolsResult.simulateButtonProducedToast = await page.evaluate(() => !!document.getElementById('sra-sim-toast'));
+devToolsResult.simulateButtonProducedToast = await page.evaluate(() => !!window.__sraQuery('#sra-sim-toast'));
 await diagPage2.close();
 
 // ── Colour highlight persistence (item 25) ───────────────────────────────
@@ -1096,9 +1147,9 @@ try {
   await hlPage.goto('http://localhost:8731/hl-fixture.html');
   await hlPage.waitForTimeout(600);
   await selectAndCtrlDrag(hlPage, HL_PHRASE);
-  const pickerVisible = await hlPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  const pickerVisible = await hlPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'));
   if (pickerVisible) {
-    await hlPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await hlPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await hlPage.waitForTimeout(400);
   }
   const afterCreate = await hlPage.evaluate(() => ({
@@ -1226,9 +1277,9 @@ try {
   await capPage.goto('http://localhost:8731/hl-fixture.html');
   await capPage.waitForTimeout(600);
   await selectAndCtrlDrag(capPage, HL_PHRASE);
-  const capPickerVisible = await capPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  const capPickerVisible = await capPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'));
   if (capPickerVisible) {
-    await capPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await capPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await capPage.waitForTimeout(400);
   }
   await capPage.close();
@@ -1294,15 +1345,15 @@ try {
     await tPage.waitForTimeout(600);
     await selectAndCtrlDrag(tPage, HL_PHRASE);
     if (colorOn) {
-      const pv = await tPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+      const pv = await tPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'));
       if (pv) {
-        await tPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+        await tPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
         await tPage.waitForTimeout(500);
       }
     }
     const outcome = await tPage.evaluate(() => ({
       markCount: document.querySelectorAll('mark[data-sra-hl-id]').length,
-      popupShown: !!document.querySelector('.sra-popup.show'),
+      popupShown: !!window.__sraQuery('.sra-popup.show'),
     }));
     await tPage.close();
     combosResult.push({
@@ -1323,9 +1374,9 @@ try {
   await livePage.goto('http://localhost:8731/hl-fixture.html');
   await livePage.waitForTimeout(600);
   await selectAndCtrlDrag(livePage, HL_PHRASE);
-  const firstPickerVisible = await livePage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  const firstPickerVisible = await livePage.evaluate(() => !!window.__sraQuery('#sra-color-picker'));
   if (firstPickerVisible) {
-    await livePage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await livePage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await livePage.waitForTimeout(500);
   }
   const beforeLiveChange = apiHits.summarize;
@@ -1336,9 +1387,9 @@ try {
   const afterBroadcastBeforeSecondHighlight = apiHits.summarize;
   const SECOND_PHRASE = 'unrelated paragraph so the page';
   await selectAndCtrlDrag(livePage, SECOND_PHRASE);
-  const secondPickerVisible = await livePage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  const secondPickerVisible = await livePage.evaluate(() => !!window.__sraQuery('#sra-color-picker'));
   if (secondPickerVisible) {
-    await livePage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await livePage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await livePage.waitForTimeout(500);
   }
   const liveUpdateResult = {
@@ -1380,9 +1431,9 @@ try {
   await affPage.goto('http://localhost:8731/hl-fixture.html');
   await affPage.waitForTimeout(600);
   await selectAndCtrlDrag(affPage, HL_PHRASE);
-  const affPickerVisible = await affPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  const affPickerVisible = await affPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'));
   if (affPickerVisible) {
-    await affPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await affPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await affPage.waitForTimeout(400);
   }
 
@@ -1391,20 +1442,20 @@ try {
   await affPage.evaluate(() => document.querySelector('mark[data-sra-hl-id]')
     .dispatchEvent(new MouseEvent('mouseenter', { bubbles: true })));
   await affPage.waitForTimeout(150);
-  const chipVisibleOnHover = await affPage.evaluate(() => !!document.getElementById('sra-hl-chip'));
+  const chipVisibleOnHover = await affPage.evaluate(() => !!window.__sraQuery('#sra-hl-chip'));
   const afterHoverTop = await affPage.evaluate(() =>
     document.querySelector('mark[data-sra-hl-id]').closest('p, li, blockquote')?.getBoundingClientRect().top);
 
   await affPage.evaluate(() => document.querySelector('mark[data-sra-hl-id]')
     .dispatchEvent(new MouseEvent('mouseleave', { bubbles: true })));
   await affPage.waitForTimeout(400); // hide is debounced (~220ms)
-  const chipGoneAfterLeave = await affPage.evaluate(() => !document.getElementById('sra-hl-chip'));
+  const chipGoneAfterLeave = await affPage.evaluate(() => !window.__sraQuery('#sra-hl-chip'));
 
   // Removal via the chip's own button deletes from storage exactly like dblclick does.
   await affPage.evaluate(() => document.querySelector('mark[data-sra-hl-id]')
     .dispatchEvent(new MouseEvent('mouseenter', { bubbles: true })));
   await affPage.waitForTimeout(150);
-  await affPage.evaluate(() => document.getElementById('sra-hl-chip')?.querySelector('button')?.click());
+  await affPage.evaluate(() => window.__sraQuery('#sra-hl-chip')?.querySelector('button')?.click());
   await affPage.waitForTimeout(400);
   const afterChipRemoveDom = await affPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
   const storeAfterChipRemove = await readHighlightStore();
@@ -1416,9 +1467,9 @@ try {
   await kbPage.goto('http://localhost:8731/hl-fixture.html');
   await kbPage.waitForTimeout(600);
   await selectAndCtrlDrag(kbPage, HL_PHRASE);
-  const kbPickerVisible = await kbPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  const kbPickerVisible = await kbPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'));
   if (kbPickerVisible) {
-    await kbPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await kbPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await kbPage.waitForTimeout(400);
   }
   await kbPage.evaluate(() => document.querySelector('mark[data-sra-hl-id]').focus());
@@ -1436,9 +1487,9 @@ try {
   await noPersistPage.goto('http://localhost:8731/hl-fixture.html');
   await noPersistPage.waitForTimeout(600);
   await selectAndCtrlDrag(noPersistPage, HL_PHRASE);
-  const noPersistPickerVisible = await noPersistPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  const noPersistPickerVisible = await noPersistPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'));
   if (noPersistPickerVisible) {
-    await noPersistPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await noPersistPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await noPersistPage.waitForTimeout(400);
   }
   const noPersistMarkRendered = await noPersistPage.evaluate(() =>
@@ -1541,7 +1592,7 @@ try {
   await sbPage.waitForTimeout(300);
 
   const lightState = await sbPage.evaluate(() => {
-    const panel = document.getElementById('sra-hl-sidebar');
+    const panel = window.__sraQuery('#sra-hl-sidebar');
     const card  = panel?.querySelector('.hl-card');
     return {
       panelExists: !!panel,
@@ -1555,13 +1606,13 @@ try {
   await sendToArticleTab({ type: 'settings', darkMode: true }, HL_FIXTURE_URL);
   await sbPage.waitForTimeout(300);
   const darkPanelBg = await sbPage.evaluate(() => {
-    const panel = document.getElementById('sra-hl-sidebar');
+    const panel = window.__sraQuery('#sra-hl-sidebar');
     return panel ? getComputedStyle(panel).backgroundColor : null;
   });
 
   // Expand: the real standalone page opens in a new tab, sidebar stays put.
   const beforeExpand = ctx.pages().length;
-  await sbPage.evaluate(() => document.querySelector('#sra-hl-sidebar [data-hl-expand]').click());
+  await sbPage.evaluate(() => window.__sraQuery('#sra-hl-sidebar [data-hl-expand]').click());
   await sbPage.waitForTimeout(600);
   const expandedPage = ctx.pages().find((p) => p.url().includes('src/popup/highlights.html'));
   const expandTabOpened = ctx.pages().length > beforeExpand && !!expandedPage;
@@ -1581,7 +1632,7 @@ try {
   // Click-to-exact-spot: the card itself is the click target, not just a
   // sub-element inside it.
   const beforeCardClick = ctx.pages().length;
-  await sbPage.evaluate(() => document.querySelector('#sra-hl-sidebar .hl-card').click());
+  await sbPage.evaluate(() => window.__sraQuery('#sra-hl-sidebar .hl-card').click());
   await sbPage.waitForTimeout(700);
   const destPage = ctx.pages()[ctx.pages().length - 1];
   const destOpened = ctx.pages().length > beforeCardClick;
@@ -1649,8 +1700,8 @@ try {
   await onPage.goto('http://localhost:8731/hl-fixture.html');
   await onPage.waitForTimeout(600);
   await selectAndCtrlDrag(onPage, HL_PHRASE);
-  if (await onPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
-    await onPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+  if (await onPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'))) {
+    await onPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await onPage.waitForTimeout(600); // fetchSummary() + the storage patch after it
   }
   await onPage.close();
@@ -1678,8 +1729,8 @@ try {
   await offPage.goto('http://localhost:8731/hl-fixture.html');
   await offPage.waitForTimeout(600);
   await selectAndCtrlDrag(offPage, HL_PHRASE);
-  if (await offPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
-    await offPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+  if (await offPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'))) {
+    await offPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await offPage.waitForTimeout(400);
   }
   await offPage.close();
@@ -1703,8 +1754,8 @@ try {
   await failPage.goto('http://localhost:8731/hl-fixture.html');
   await failPage.waitForTimeout(600);
   await selectAndCtrlDrag(failPage, HL_PHRASE);
-  if (await failPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
-    await failPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+  if (await failPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'))) {
+    await failPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await failPage.waitForTimeout(600);
   }
   await failPage.close();
@@ -1748,12 +1799,12 @@ try {
   await capPage.goto('http://localhost:8731/hl-fixture.html');
   await capPage.waitForTimeout(600);
   await selectAndCtrlDrag(capPage, HL_PHRASE);
-  if (await capPage.evaluate(() => !!document.getElementById('sra-color-picker'))) {
-    await capPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+  if (await capPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'))) {
+    await capPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await capPage.waitForTimeout(600);
   }
   const capPopupText = await capPage.evaluate(() =>
-    document.querySelector('.sra-popup.show .sra-popup-body')?.textContent || null);
+    window.__sraQuery('.sra-popup.show .sra-popup-body')?.textContent || null);
   await capPage.close();
   const storeAfterCap = await readHighlightStore();
   const capEntry = (storeAfterCap[HL_URL_KEY] || [])[0];
@@ -1853,9 +1904,9 @@ try {
   // reaches a genuine pushState-driven route change and back, not just the
   // popstate path item 25 was limited to testing.
   await selectAndCtrlDrag(spaPage, 'long enough paragraph to be tracked by the paragraph tracker');
-  const pickerVisible = await spaPage.evaluate(() => !!document.getElementById('sra-color-picker'));
+  const pickerVisible = await spaPage.evaluate(() => !!window.__sraQuery('#sra-color-picker'));
   if (pickerVisible) {
-    await spaPage.evaluate(() => document.querySelector('#sra-color-picker button[title="Yellow"]').click());
+    await spaPage.evaluate(() => window.__sraQuery('#sra-color-picker button[title="Yellow"]').click());
     await spaPage.waitForTimeout(500);
   }
   const markCountBeforeNav = await spaPage.evaluate(() => document.querySelectorAll('mark[data-sra-hl-id]').length);
@@ -2959,13 +3010,18 @@ try {
   await offPage.goto('http://localhost:8731/', { waitUntil: 'load' });
   await offPage.waitForTimeout(1500);
   const offAtLoad = await offPage.evaluate(() => ({
-    selfReportTrigger: !!document.getElementById('sra-self-report-trigger'),
-    readingMapTab: !!document.getElementById('sra-reading-map-tab'),
-    readingMapSidebar: !!document.getElementById('sra-reading-map'),
-    anyAlcoiaDom: !!(document.getElementById('sra-self-report-trigger')
-      || document.getElementById('sra-reading-map-tab')
-      || document.getElementById('sra-reading-map')
-      || document.querySelector('.sra-popup')),
+    selfReportTrigger: !!window.__sraQuery('#sra-self-report-trigger'),
+    readingMapTab: !!window.__sraQuery('#sra-reading-map-tab'),
+    readingMapSidebar: !!window.__sraQuery('#sra-reading-map'),
+    anyAlcoiaDom: !!(window.__sraQuery('#sra-self-report-trigger')
+      || window.__sraQuery('#sra-reading-map-tab')
+      || window.__sraQuery('#sra-reading-map')
+      || window.__sraQuery('.sra-popup')),
+    // Every alcoia element now lives inside a [data-alcoia-host] shadow
+    // host — a direct count of those is the most literal "no shadow host
+    // elements" check there is, independent of which selectors happen to
+    // be queried above.
+    shadowHostCount: document.querySelectorAll('[data-alcoia-host]').length,
   }));
 
   // Alt+M (the reading-map toggle shortcut) must do nothing while off — the
@@ -2976,7 +3032,7 @@ try {
   // still inert with the switch off, not just quiet by accident.
   await offPage.keyboard.down('Alt'); await offPage.keyboard.press('KeyM'); await offPage.keyboard.up('Alt');
   await offPage.waitForTimeout(300);
-  const readingMapAfterAltMWhileOff = await offPage.evaluate(() => !!document.getElementById('sra-reading-map-tab'));
+  const readingMapAfterAltMWhileOff = await offPage.evaluate(() => !!window.__sraQuery('#sra-reading-map-tab'));
 
   // (b) The storage listener must still be active while off — the one
   // thing allowed to keep running. Flip the switch on with no page reload
@@ -2985,11 +3041,11 @@ try {
   await setSraEnabled(true);
   await offPage.waitForTimeout(1000);
   const afterReactivation = await offPage.evaluate(() => ({
-    selfReportTrigger: !!document.getElementById('sra-self-report-trigger'),
+    selfReportTrigger: !!window.__sraQuery('#sra-self-report-trigger'),
   }));
   await offPage.keyboard.down('Alt'); await offPage.keyboard.press('KeyM'); await offPage.keyboard.up('Alt');
   await offPage.waitForTimeout(300);
-  const readingMapAfterReactivationAndAltM = await offPage.evaluate(() => !!document.getElementById('sra-reading-map-tab'));
+  const readingMapAfterReactivationAndAltM = await offPage.evaluate(() => !!window.__sraQuery('#sra-reading-map-tab'));
 
   // (c) Toggled off mid-session, with UI actually on screen first (the
   // reading map sidebar/tab from the Alt+M above, plus the self-report
@@ -2997,30 +3053,33 @@ try {
   await setSraEnabled(false);
   await offPage.waitForTimeout(1000);
   const midSessionOff = await offPage.evaluate(() => ({
-    selfReportTrigger: !!document.getElementById('sra-self-report-trigger'),
-    readingMapTab: !!document.getElementById('sra-reading-map-tab'),
-    readingMapSidebar: !!document.getElementById('sra-reading-map'),
-    anyAlcoiaDom: !!(document.getElementById('sra-self-report-trigger')
-      || document.getElementById('sra-reading-map-tab')
-      || document.getElementById('sra-reading-map')
-      || document.querySelector('.sra-popup')),
+    selfReportTrigger: !!window.__sraQuery('#sra-self-report-trigger'),
+    readingMapTab: !!window.__sraQuery('#sra-reading-map-tab'),
+    readingMapSidebar: !!window.__sraQuery('#sra-reading-map'),
+    anyAlcoiaDom: !!(window.__sraQuery('#sra-self-report-trigger')
+      || window.__sraQuery('#sra-reading-map-tab')
+      || window.__sraQuery('#sra-reading-map')
+      || window.__sraQuery('.sra-popup')),
+    shadowHostCount: document.querySelectorAll('[data-alcoia-host]').length,
   }));
 
   // (d) Toggled back on mid-session — detection/UI reinitialise without a
   // reload, a second time, confirming this is not a one-shot reactivation.
   await setSraEnabled(true);
   await offPage.waitForTimeout(1000);
-  const midSessionOn = await offPage.evaluate(() => !!document.getElementById('sra-self-report-trigger'));
+  const midSessionOn = await offPage.evaluate(() => !!window.__sraQuery('#sra-self-report-trigger'));
 
   await offPage.close();
 
   masterSwitchResult = {
     attempted: true,
     offAtLoad,
+    offAtLoadHasNoShadowHosts: offAtLoad.shadowHostCount === 0, // expect true
     readingMapAfterAltMWhileOff, // expect false
     storageListenerReactivates: afterReactivation.selfReportTrigger, // expect true
     readingMapReinitialisesAfterReactivation: readingMapAfterReactivationAndAltM, // expect true
     midSessionOffRemovesAllDom: !midSessionOff.anyAlcoiaDom, // expect true
+    midSessionOffHasNoShadowHosts: midSessionOff.shadowHostCount === 0, // expect true
     midSessionOffDetail: midSessionOff,
     midSessionOnReinitialises: midSessionOn, // expect true
     noPageErrors: offPageErrors.length === 0,
@@ -3029,6 +3088,87 @@ try {
   masterSwitchResult = { attempted: true, error: String((e && e.message) || e) };
 } finally {
   await setSraEnabled(true); // leave storage in its default state for anything after this
+}
+
+// Shadow DOM isolation. The root cause of alcoia's injected UI rendering at
+// the wrong size/position on some pages was host-page CSS reaching straight
+// into it — everything used to live in the page's own light DOM. Checks,
+// on a page with the kind of aggressive reset that used to cause this
+// (`* { font-size: 32px }`, content-box sizing, UA defaults stripped from
+// button/div): the help button and reading map render at their real,
+// intended size regardless, every alcoia element is inside a
+// [data-alcoia-host] shadow root, and the master-switch teardown this
+// session's earlier item wired up still removes every one of them, shadow
+// roots included, not just the elements it happens to query by selector.
+let shadowDomResult;
+try {
+  const cssPage = await ctx.newPage();
+  const cssPageErrors = [];
+  cssPage.on('pageerror', (e) => cssPageErrors.push(String(e)));
+  await cssPage.goto('http://localhost:8731/aggressive-css-fixture.html', { waitUntil: 'load' });
+  await cssPage.waitForTimeout(1500);
+
+  // The help button ("?") — overlay.css sizes it well under 40px square in
+  // its own stylesheet. On the unwrapped light-DOM version, the page's
+  // `* { font-size: 32px }` alone would already blow past that for a
+  // button sized in ems/text-relative units, well before font stacking or
+  // box-sizing are even considered.
+  const triggerBox = await cssPage.evaluate(() => {
+    const el = window.__sraQuery('#sra-self-report-trigger');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { width: r.width, height: r.height, fontSize: getComputedStyle(el).fontSize };
+  });
+
+  await cssPage.keyboard.down('Alt'); await cssPage.keyboard.press('KeyM'); await cssPage.keyboard.up('Alt');
+  await cssPage.waitForTimeout(300);
+  const mapBox = await cssPage.evaluate(() => {
+    const el = window.__sraQuery('#sra-reading-map');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { width: r.width };
+  });
+
+  const isolation = await cssPage.evaluate(() => {
+    const hosts = document.querySelectorAll('[data-alcoia-host]');
+    return {
+      shadowHostCount: hosts.length,
+      everyHostHasShadowRoot: [...hosts].every((h) => !!h.shadowRoot),
+      everyHostIsOpenMode: [...hosts].every((h) => h.shadowRoot?.mode === 'open'),
+    };
+  });
+
+  // Reuse this session's own master-switch teardown (item: master switch
+  // hard off) rather than re-deriving a second way to remove everything —
+  // confirms the two features compose: teardown here has to reach every
+  // shadow host this NEW aggressive-CSS page created, not just the ones
+  // the earlier master-switch check's own fixture happened to create.
+  const helper2 = await ctx.newPage();
+  await helper2.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper2.evaluate(() => new Promise((r) => chrome.storage.local.set({ sra_enabled: false }, r)));
+  await helper2.close();
+  await cssPage.waitForTimeout(1000);
+  const afterTeardown = await cssPage.evaluate(() => document.querySelectorAll('[data-alcoia-host]').length);
+
+  const helper3 = await ctx.newPage();
+  await helper3.goto(`chrome-extension://${extId}/src/popup/popup.html`);
+  await helper3.evaluate(() => new Promise((r) => chrome.storage.local.set({ sra_enabled: true }, r)));
+  await helper3.close();
+  await cssPage.close();
+
+  shadowDomResult = {
+    attempted: true,
+    triggerBox, // expect small (well under, say, 40px in either dimension) and fontSize far below the page's 32px reset
+    triggerRendersAtNormalSize: !!triggerBox && triggerBox.width < 60 && triggerBox.height < 60,
+    mapBox,
+    mapRendersAtNormalWidth: !!mapBox && mapBox.width > 150 && mapBox.width < 230, // reading-map.js's own WIDTH_PX is 190
+    isolation,
+    isolationAllHostsOpen: isolation.everyHostHasShadowRoot && isolation.everyHostIsOpenMode, // expect true
+    teardownRemovesAllShadowHosts: afterTeardown === 0, // expect true
+    noPageErrors: cssPageErrors.length === 0,
+  };
+} catch (e) {
+  shadowDomResult = { attempted: true, error: String((e && e.message) || e) };
 }
 
 console.log('\n================ RESULTS ================');
@@ -3085,6 +3225,8 @@ console.log('upgrade page button fix :', JSON.stringify(upgradeButtonResult, nul
   '(expect readerActuallyHiddenInRealChromium/readerLabelReset/readerNotDisabled/studentActuallyHidden/manageBtnActuallyVisible all true, in BOTH returnFromCheckout and alreadyEntitledOnNormalLoad)');
 console.log('master switch hard off  :', JSON.stringify(masterSwitchResult, null, 2),
   '(expect offAtLoad.anyAlcoiaDom false, readingMapAfterAltMWhileOff false, storageListenerReactivates/readingMapReinitialisesAfterReactivation/midSessionOffRemovesAllDom/midSessionOnReinitialises/noPageErrors all true)');
+console.log('Shadow DOM isolation    :', JSON.stringify(shadowDomResult, null, 2),
+  '(expect triggerRendersAtNormalSize/mapRendersAtNormalWidth/isolationAllHostsOpen/teardownRemovesAllShadowHosts/noPageErrors all true)');
 console.log('failed requests         :', findings.failedRequests.length, findings.failedRequests.slice(0,5));
 console.log('engine/SRA logs         :', findings.engineLogs.length);
 findings.engineLogs.slice(0, 25).forEach((l) => console.log('   ', l));
