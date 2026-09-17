@@ -28,6 +28,11 @@
       "matches": [
         "<all_urls>"
       ],
+      "exclude_matches": [
+        "https://status.alcoia.app/*",
+        "https://developers.alcoia.app/*",
+        "https://console.alcoia.app/*"
+      ],
       "js": [
         "src/shared/config.js",
         "src/content/content.js"
