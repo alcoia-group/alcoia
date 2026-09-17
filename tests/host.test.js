@@ -91,6 +91,31 @@ function baseDeps(overrides = {}) {
   };
 }
 
+/* outcomes.js/kinematics.js/explanation-events.js now route their POST
+ * through background.js's 'proxyFetch' relay (src/shared/proxy-fetch.js)
+ * instead of calling fetch() directly — a content-script fetch to
+ * server.alcoia.app carries the host page's origin, which the server's
+ * CORS response rejects; background.js's own fetch does not. This
+ * intercepts that message the same way the file-level beforeEach's default
+ * __sendMessageImpl already intercepts 'summarize'/'apiPost', wrapping
+ * whatever handler is already installed (tests that also need questions/
+ * summarize mocked in the same run set that up first) rather than
+ * replacing it. `handler(url, options)` gets the exact { method, headers,
+ * body } object outcomes.js/kinematics.js/explanation-events.js built —
+ * options.body is still the JSON string, unchanged from what these tests
+ * read off `init.body` before this routing existed. */
+function mockProxyFetch(handler) {
+  const previous = globalThis.__sendMessageImpl;
+  globalThis.__sendMessageImpl = (msg, cb) => {
+    if (msg.action === 'proxyFetch') {
+      const result = handler(msg.url, msg.options) || { ok: true, status: 200, data: { recorded: true } };
+      cb(result);
+      return;
+    }
+    previous(msg, cb);
+  };
+}
+
 beforeEach(() => {
   vi.stubGlobal('chrome', fakeChrome());
   vi.stubGlobal('ALCOIA_CONFIG', {
@@ -683,11 +708,11 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
 
   it('a struggle signal POSTs a real outcome — correct assignmentId, paragraph_index, struggled:true, source:inline, no pseudonym', async () => {
     let seenUrl = null, seenInit = null;
-    const fetchImpl = vi.fn(async (url, init) => {
-      seenUrl = url; seenInit = init;
-      return { ok: true, json: async () => ({ recorded: true }) };
+    const fetchImpl = vi.fn((url, options) => {
+      seenUrl = url; seenInit = options;
+      return { ok: true, status: 200, data: { recorded: true } };
     });
-    vi.stubGlobal('fetch', fetchImpl);
+    mockProxyFetch(fetchImpl);
 
     const { host } = await createHost(assignmentDeps());
     // No substate/selfReported args — orchestrator.js's own translation of
@@ -711,11 +736,11 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
 
   it('a struggle signal with a self-reported substate POSTs substate + self_reported:true + source:inline together', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => {
-      seenBody = JSON.parse(init.body);
-      return { ok: true, json: async () => ({ recorded: true }) };
+    const fetchImpl = vi.fn((url, options) => {
+      seenBody = JSON.parse(options.body);
+      return { ok: true, status: 200, data: { recorded: true } };
     });
-    vi.stubGlobal('fetch', fetchImpl);
+    mockProxyFetch(fetchImpl);
     const { host } = await createHost(assignmentDeps());
 
     host.onStruggle('some paragraph text', 3, 'confusion', true);
@@ -729,11 +754,11 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
 
   it('a struggle signal with an inferred (non-self-reported) substate POSTs self_reported:false, distinctly', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => {
-      seenBody = JSON.parse(init.body);
-      return { ok: true, json: async () => ({ recorded: true }) };
+    const fetchImpl = vi.fn((url, options) => {
+      seenBody = JSON.parse(options.body);
+      return { ok: true, status: 200, data: { recorded: true } };
     });
-    vi.stubGlobal('fetch', fetchImpl);
+    mockProxyFetch(fetchImpl);
     const { host } = await createHost(assignmentDeps());
 
     host.onStruggle('some paragraph text', 3, 'overload', false);
@@ -747,11 +772,11 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
 
   it('an explicit null substate (no real classification) POSTs substate: null, never omitted and never fabricated', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => {
-      seenBody = JSON.parse(init.body);
-      return { ok: true, json: async () => ({ recorded: true }) };
+    const fetchImpl = vi.fn((url, options) => {
+      seenBody = JSON.parse(options.body);
+      return { ok: true, status: 200, data: { recorded: true } };
     });
-    vi.stubGlobal('fetch', fetchImpl);
+    mockProxyFetch(fetchImpl);
     const { host } = await createHost(assignmentDeps());
 
     host.onStruggle('some paragraph text', 3, null, null);
@@ -773,17 +798,17 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
 
   it('a real question, answered through the actual rendered card, POSTs paragraph_index + question_id + correct + confidence, no pseudonym', async () => {
     let seenUrl = null, seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => {
-      seenUrl = url; seenBody = JSON.parse(init.body);
-      return { ok: true, json: async () => ({ recorded: true }) };
+    const fetchImpl = vi.fn((url, options) => {
+      seenUrl = url; seenBody = JSON.parse(options.body);
+      return { ok: true, status: 200, data: { recorded: true } };
     });
-    vi.stubGlobal('fetch', fetchImpl);
 
     const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     chrome.runtime.sendMessage = sendMessage;
     globalThis.__sendMessageImpl = (msg, cb) => {
       cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
     };
+    mockProxyFetch(fetchImpl);
 
     const { host } = await createHost(assignmentDeps());
     document.body.innerHTML = '<p id="t">A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it at all.</p>';
@@ -816,10 +841,10 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
 
   it('an incorrect answer sends correct: false explicitly, not omitted', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
-    vi.stubGlobal('fetch', fetchImpl);
+    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'incorrect-answer-test span' }] } });
+    mockProxyFetch(fetchImpl);
 
     const { host } = await createHost(assignmentDeps());
     // Distinct text from every other test in this describe block — the
@@ -850,8 +875,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
    * is what confirms that claim rather than trusting it. */
   it('an adversarial answer\'s real confidence pick reaches the outcomes POST — the previously-broken path, now fixed', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
-    vi.stubGlobal('fetch', fetchImpl);
+    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     // The mocked question comes back already at 'adversarial' level —
     // this test is about confidence reaching the outcome, not about
@@ -861,6 +885,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
       ok: true,
       data: { questions: [{ q: 'Q?', span: 'adversarial-confidence-test span', level: 'adversarial' }] },
     });
+    mockProxyFetch(fetchImpl);
 
     const { host } = await createHost(assignmentDeps());
     document.body.innerHTML = '<p id="t">A paragraph about the adversarial-confidence case specifically, long enough to pass fetchQuestions\' own length floor before it will even try.</p>';
@@ -1059,11 +1084,11 @@ describe('scroll-kinematics reporting to the server (item DC-1a)', () => {
 
   it('a completed signed-in session of sufficient length POSTs the correct payload shape', async () => {
     let seenUrl = null, seenInit = null;
-    const fetchImpl = vi.fn(async (url, init) => {
-      seenUrl = url; seenInit = init;
-      return { ok: true, json: async () => ({ recorded: true }) };
+    const fetchImpl = vi.fn((url, options) => {
+      seenUrl = url; seenInit = options;
+      return { ok: true, status: 200, data: { recorded: true } };
     });
-    vi.stubGlobal('fetch', fetchImpl);
+    mockProxyFetch(fetchImpl);
 
     const { submitKinematics } = await createHost(assignmentDeps());
     submitKinematics(VALID_KINEMATICS);
@@ -1098,8 +1123,8 @@ describe('scroll-kinematics reporting to the server (item DC-1a)', () => {
   });
 
   it('a failed POST is swallowed — no throw, nothing surfaced, and it does not block anything else on the host', async () => {
-    const fetchImpl = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
-    vi.stubGlobal('fetch', fetchImpl);
+    const fetchImpl = vi.fn(() => { throw new TypeError('Failed to fetch'); });
+    mockProxyFetch(fetchImpl);
 
     const { submitKinematics, host } = await createHost(assignmentDeps());
     expect(() => submitKinematics(VALID_KINEMATICS)).not.toThrow();
@@ -1142,8 +1167,8 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
 
   it('a struggle on a previously-explained paragraph reaches the outcomes payload as explanation_preceded_attempt:true', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
-    vi.stubGlobal('fetch', fetchImpl);
+    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    mockProxyFetch(fetchImpl);
 
     const { host } = await createHost(assignmentDeps({ wasParagraphExplained: (key) => key === 'a previously explained paragraph' }));
     host.onStruggle('a previously explained paragraph', 3);
@@ -1154,8 +1179,8 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
 
   it('a struggle on a DIFFERENT paragraph reports false, not true and not absent', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
-    vi.stubGlobal('fetch', fetchImpl);
+    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    mockProxyFetch(fetchImpl);
 
     const { host } = await createHost(assignmentDeps({ wasParagraphExplained: (key) => key === 'a previously explained paragraph' }));
     host.onStruggle('a completely different, never-explained paragraph', 3);
@@ -1166,8 +1191,8 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
 
   it('stays fully absent (not a fabricated false) for a caller that never wires wasParagraphExplained at all — every pre-DC-2 test in this file, unchanged', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
-    vi.stubGlobal('fetch', fetchImpl);
+    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    mockProxyFetch(fetchImpl);
 
     const { host } = await createHost(assignmentDeps()); // no wasParagraphExplained override
     host.onStruggle('some paragraph text', 3);
@@ -1178,12 +1203,12 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
 
   it('a real answered question also carries the flag, keyed by the SAME paragraphKey the question card itself used', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
-    vi.stubGlobal('fetch', fetchImpl);
+    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     globalThis.__sendMessageImpl = (msg, cb) => {
       cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
     };
+    mockProxyFetch(fetchImpl);
 
     const paraText = 'A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it, for the explanation-flag test specifically.';
     const { host } = await createHost(assignmentDeps({ wasParagraphExplained: (key) => key === paraText.slice(0, 80).trim() }));
@@ -1224,11 +1249,11 @@ describe('reportExplanationEvent (item DC-2 follow-up)', () => {
 
   it('a successful explanation in assignment context fires exactly one POST with the correct selectionType', async () => {
     let seenUrl = null, seenInit = null;
-    const fetchImpl = vi.fn(async (url, init) => {
-      seenUrl = url; seenInit = init;
-      return { ok: true, json: async () => ({ logged: true }) };
+    const fetchImpl = vi.fn((url, options) => {
+      seenUrl = url; seenInit = options;
+      return { ok: true, status: 200, data: { logged: true } };
     });
-    vi.stubGlobal('fetch', fetchImpl);
+    mockProxyFetch(fetchImpl);
 
     const { reportExplanationEvent } = await createHost(assignmentDeps());
     reportExplanationEvent('equation');
@@ -1241,8 +1266,8 @@ describe('reportExplanationEvent (item DC-2 follow-up)', () => {
 
   it('a real, non-negative paragraphIndex rides along when one is given', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ logged: true }) }; });
-    vi.stubGlobal('fetch', fetchImpl);
+    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { logged: true } }; });
+    mockProxyFetch(fetchImpl);
 
     const { reportExplanationEvent } = await createHost(assignmentDeps());
     reportExplanationEvent('figure', 6);
@@ -1263,8 +1288,8 @@ describe('reportExplanationEvent (item DC-2 follow-up)', () => {
   });
 
   it('a failed POST is swallowed — no throw, nothing surfaced, and it does not block anything else on the host', async () => {
-    const fetchImpl = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
-    vi.stubGlobal('fetch', fetchImpl);
+    const fetchImpl = vi.fn(() => { throw new TypeError('Failed to fetch'); });
+    mockProxyFetch(fetchImpl);
 
     const { reportExplanationEvent, host } = await createHost(assignmentDeps());
     expect(() => reportExplanationEvent('term')).not.toThrow();

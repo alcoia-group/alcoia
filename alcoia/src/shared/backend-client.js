@@ -18,6 +18,7 @@
  * own beyond that.
  */
 import { createInstallTokenManager } from './install-token.js';
+import { backgroundFetchImpl } from './proxy-fetch.js';
 
 /* `getTokenUrl` is a function, called fresh on every callBackend() —
  * matching host.js's existing pattern of reading settings live rather than
@@ -25,7 +26,13 @@ import { createInstallTokenManager } from './install-token.js';
  * a different server while a tab is already open. */
 export function createBackendClient({ getTokenUrl, diagLog } = {}) {
   const resolveTokenUrl = typeof getTokenUrl === 'function' ? getTokenUrl : () => getTokenUrl;
-  const installToken = createInstallTokenManager({ tokenUrl: resolveTokenUrl() });
+  // fetchImpl routes the token request through background.js instead of
+  // fetching directly — a content script's own fetch to this endpoint
+  // carries the host page's origin, which the server's CORS response
+  // rejects (see proxy-fetch.js's own header). install-token.js's own code
+  // is unchanged; only what it's given as fetchImpl differs from the
+  // fetch() it would otherwise default to.
+  const installToken = createInstallTokenManager({ tokenUrl: resolveTokenUrl(), fetchImpl: backgroundFetchImpl });
 
   async function callBackend(action, url, body) {
     const token = await installToken.getToken(resolveTokenUrl());
