@@ -56,6 +56,26 @@ export const TARGETS = ['chrome', 'firefox'];
  * LTI_READER_ORIGIN must be swapped to match at the same time this entry
  * is, for the same "not wired together" reason as WEB_APP_ORIGIN above. */
 
+/* manifests/base.json's `content_scripts[0].exclude_matches` — JSON cannot
+ * hold a comment, so the explanation lives here too. status.alcoia.app,
+ * developers.alcoia.app and console.alcoia.app are infrastructure (a
+ * status page, API docs, an admin/instructor console), not reading
+ * material, so the extension should never inject into them at all.
+ *
+ * NOT the same "console" as `externally_connectable`'s
+ * 'https://console.alcoia.invalid/*' just above — that one is
+ * LTI_READER_ORIGIN, the page a Canvas launch lands a STUDENT's browser
+ * on to read, deliberately named "console" upstream in alcoiaServer's own
+ * default (see that comment) despite being a reading surface, not an
+ * admin one. The two are unrelated mechanisms (this one is content-script
+ * injection; that one is which pages may message the extension) governing
+ * two different real subdomains that happen to share a name — confirmed
+ * by reading both call sites directly, not assumed from the name alone.
+ *
+ * alcoia.app itself (bare, the marketing site) is deliberately NOT
+ * excluded — it carries real readable content, unlike its three
+ * infrastructure subdomains above. */
+
 /* Excluded from the shipped package.
  *
  * `server/` used to be the entry that mattered most here — it lived inside

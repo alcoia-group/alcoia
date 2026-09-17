@@ -176,3 +176,41 @@ describe('package hygiene', () => {
     }
   });
 });
+
+/* alcoia.app's own infrastructure subdomains — a status page, API docs, an
+ * admin/instructor console — are not reading material and the content
+ * script should never inject into them. See build.mjs's own comment on
+ * this exclude_matches entry for why this is a genuinely different
+ * mechanism, and a different real subdomain, than externally_connectable's
+ * similarly-named 'console.alcoia.invalid' (LTI_READER_ORIGIN — a reading
+ * surface, despite the name). */
+describe('content-script domain exclusions', () => {
+  const EXCLUDED = ['https://status.alcoia.app/*', 'https://developers.alcoia.app/*', 'https://console.alcoia.app/*'];
+
+  it('excludes the status, developer-docs and admin-console subdomains, on both targets', () => {
+    for (const target of TARGETS) {
+      const excludeMatches = buildManifest(target).content_scripts[0].exclude_matches || [];
+      for (const pattern of EXCLUDED) {
+        expect(excludeMatches, `${target} should exclude ${pattern}`).toContain(pattern);
+      }
+    }
+  });
+
+  it('does not exclude alcoia.app itself — the marketing site is real reading content', () => {
+    const excludeMatches = buildManifest('chrome').content_scripts[0].exclude_matches || [];
+    expect(excludeMatches).not.toContain('https://alcoia.app/*');
+    expect(excludeMatches.some((p) => p.includes('://alcoia.app'))).toBe(false);
+  });
+
+  it('leaves the broad <all_urls> content-script match itself untouched — exclude_matches narrows it, not matches', () => {
+    for (const target of TARGETS) {
+      expect(buildManifest(target).content_scripts[0].matches).toEqual(['<all_urls>']);
+    }
+  });
+
+  it('is not the same list as externally_connectable — that mechanism is unrelated and untouched', () => {
+    const m = buildManifest('chrome');
+    expect(m.externally_connectable.matches).not.toContain('https://console.alcoia.app/*');
+    expect(m.externally_connectable.matches).toContain('https://console.alcoia.invalid/*');
+  });
+});
