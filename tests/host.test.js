@@ -1178,6 +1178,82 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
   });
 });
 
+/* Item DC-2 follow-up — reportExplanationEvent(), fired from content.js's
+ * own explanation-success path (see that file's own comment at the call
+ * site) once an on-demand explanation is actually shown. Same gate as
+ * submitOutcome/submitKinematics, confirmed against alcoiaServer's
+ * src/http/routes/explanation-events.js directly. */
+describe('reportExplanationEvent (item DC-2 follow-up)', () => {
+  const EXPLANATION_EVENTS_URL = 'https://api.test.invalid/api/assignments/assign-42/explanation-events';
+
+  function assignmentDeps(overrides = {}) {
+    return baseDeps({
+      assignmentId: 'assign-42',
+      getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+      TOKEN_URL: 'https://api.test.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.test.invalid/api/assignments',
+    });
+  });
+
+  it('a successful explanation in assignment context fires exactly one POST with the correct selectionType', async () => {
+    let seenUrl = null, seenInit = null;
+    const fetchImpl = vi.fn(async (url, init) => {
+      seenUrl = url; seenInit = init;
+      return { ok: true, json: async () => ({ logged: true }) };
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { reportExplanationEvent } = await createHost(assignmentDeps());
+    reportExplanationEvent('equation');
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    expect(seenUrl).toBe(EXPLANATION_EVENTS_URL);
+    expect(JSON.parse(seenInit.body)).toEqual({ selectionType: 'equation' });
+    expect(seenInit.headers.Authorization).toBe('Bearer tok-1');
+  });
+
+  it('a real, non-negative paragraphIndex rides along when one is given', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ logged: true }) }; });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { reportExplanationEvent } = await createHost(assignmentDeps());
+    reportExplanationEvent('figure', 6);
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(seenBody).toEqual({ selectionType: 'figure', paragraphIndex: 6 });
+  });
+
+  it('outside assignment context (no assignmentId/getSession — content.js\'s own ordinary-page construction), fires nothing', async () => {
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { reportExplanationEvent } = await createHost(baseDeps());
+    reportExplanationEvent('equation');
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('a failed POST is swallowed — no throw, nothing surfaced, and it does not block anything else on the host', async () => {
+    const fetchImpl = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const { reportExplanationEvent, host } = await createHost(assignmentDeps());
+    expect(() => reportExplanationEvent('term')).not.toThrow();
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(typeof host.onIntervention).toBe('function');
+  });
+});
+
 /* Item 13a — the self-report mechanism's three affordances, from host.js's
  * own side of the wiring. Each is verified independently, per this task's
  * own Tests requirement. */
