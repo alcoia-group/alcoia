@@ -71,10 +71,14 @@ export function createQuestionCard(deps = {}) {
   } = deps;
 
   /* question: { q, options[4], answerIndex, explanation, span, level?, span_role? }
-   * context: { evidence[], anchorRect, paragraphKey, passage?, wasExplorationSample,
-   *            showSelfReport? } — item 13a: showSelfReport renders the
-   *            self-report options alongside this question, additive to
-   *            the answer flow, never a replacement for it.
+   * context: { evidence[], anchorRect, paragraphKey, knowledgeUnitId, passage?,
+   *            wasExplorationSample, showSelfReport? } — item 13a: showSelfReport
+   *            renders the self-report options alongside this question, additive to
+   *            the answer flow, never a replacement for it. knowledgeUnitId (step 3)
+   *            is documented here for shape completeness only — this component does
+   *            not read it itself; it is response-signals.js's present()/answer()
+   *            (called by host.js around this card, not by this file) that actually
+   *            captures it into the evidence record.
    * Returns true only if the card actually reached the screen.
    *
    * Malformed model output degrades to silence here, not to a broken card.
