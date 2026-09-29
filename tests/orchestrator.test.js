@@ -198,3 +198,49 @@ describe('createOrchestrator(): onStruggle carries substate/selfReported (13g wi
     expect(host.onStruggle).toHaveBeenCalledWith('some paragraph text', null, null, null);
   });
 });
+
+/* Step 9A (active intervention awareness) — proves orchestrator.js actually
+ * reads host.isQuestionCardVisible() and threads it into
+ * interventionPolicy.evaluate()'s ctx, rather than the gate only being
+ * exercised at the intervention-policy.js unit level (see that file's own
+ * tests for the exhaustive candidate-strength coverage). A response-type
+ * signal is used deliberately: it asserts STRUGGLING at 0.95 confidence,
+ * clear of every Step 8 evidence-strength/backoff gate on its own, so a
+ * denial here can only be explained by the new active-card check. */
+describe('createOrchestrator(): host.isQuestionCardVisible() gates onIntervention (step 9A)', () => {
+  async function makeOrch(host) {
+    return createOrchestrator({
+      loadModule,
+      comprehensionMonitor: stubComprehensionMonitor(),
+      settings: () => ({ assistantEnabled: true, comprehensionCheckEnabled: true, focusRulerEnabled: false, debugEnabled: false }),
+      host,
+    });
+  }
+
+  it('dispatches to host.onIntervention when host.isQuestionCardVisible() returns false', async () => {
+    const host = stubHost({ isQuestionCardVisible: vi.fn(() => false), onIntervention: vi.fn(async () => true) });
+    const orch = await makeOrch(host);
+
+    orch.stateEngine.update({ reading: { type: 'response', subtype: 'incorrect', correct: false } });
+    await vi.waitFor(() => expect(host.onIntervention).toHaveBeenCalled());
+    expect(host.isQuestionCardVisible).toHaveBeenCalled();
+  });
+
+  it('does NOT dispatch to host.onIntervention when host.isQuestionCardVisible() returns true', async () => {
+    const host = stubHost({ isQuestionCardVisible: vi.fn(() => true), onIntervention: vi.fn(async () => true) });
+    const orch = await makeOrch(host);
+
+    orch.stateEngine.update({ reading: { type: 'response', subtype: 'incorrect', correct: false } });
+    await vi.waitFor(() => expect(host.isQuestionCardVisible).toHaveBeenCalled());
+    expect(host.onIntervention).not.toHaveBeenCalled();
+  });
+
+  it('treats a host with no isQuestionCardVisible callback at all as "not visible" — backward compatible with every stub that predates this item', async () => {
+    const host = stubHost({ onIntervention: vi.fn(async () => true) });
+    expect(host.isQuestionCardVisible).toBeUndefined();
+    const orch = await makeOrch(host);
+
+    orch.stateEngine.update({ reading: { type: 'response', subtype: 'incorrect', correct: false } });
+    await vi.waitFor(() => expect(host.onIntervention).toHaveBeenCalled());
+  });
+});

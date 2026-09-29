@@ -623,3 +623,385 @@ describe('evaluateRetentionCandidate (step 7)', () => {
     expect(d.interventionId).not.toMatch(/@/);
   });
 });
+
+/* Intelligence-architecture audit, step 8 — adaptive intervention policy.
+ * The central problem this step exists to fix: a detected reading signal
+ * was previously allowed to become an interruption too directly. A single
+ * genuine scroll-back is real evidence, but on its own it is exactly as
+ * ambiguous as it is unremarkable — see regressionEvidenceStrength()'s own
+ * header for the full reasoning. These tests exercise that reasoning
+ * end-to-end through evaluate(), the same way every other describe block in
+ * this file already does, rather than reaching into a private helper. */
+const regressionStruggling = (over = {}) => ({
+  label: STATES.STRUGGLING,
+  confidence: 0.7,
+  evidence: ['You went back a paragraph to re-read'],
+  signal: { type: 'regression', subtype: 'return', toIndex: 3, text: 'a re-read paragraph' },
+  ...over,
+});
+
+describe('scroll-back candidate strength (step 8)', () => {
+  it('(test A) a single scroll-back, with no repetition and no corroboration, does not automatically trigger a question', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(regressionStruggling());
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/not enough evidence on its own/);
+  });
+
+  it('(test B) the same scroll-back, once it has genuinely repeated on the same paragraph, is strong enough to intervene', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(regressionStruggling({
+      signal: { type: 'regression', subtype: 'return', sameIndexRereadCount: 2, text: 'repeated re-read' },
+    }));
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('ask');
+  });
+
+  it('a lone scroll-back corroborated by another signal in the same batch is also strong enough, without needing repetition', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(regressionStruggling({
+      evidence: ['You went back a paragraph to re-read', 'Your scrolling became uneven here'],
+    }));
+    expect(d.allow).toBe(true);
+  });
+
+  it('a single scroll-back never becomes an intervention purely because the RNG would have sampled it — exploration only applies to states with no assigned action at all', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const d = p.evaluate(regressionStruggling());
+    expect(d.allow).toBe(false);
+    expect(d.wasExplorationSample).toBe(false);
+  });
+
+  it('is not hardcoded to "never on scroll-up" — plainer, non-regression struggle evidence (an incorrect answer) is unaffected and still fires on its own', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate({
+      label: STATES.STRUGGLING, confidence: 0.95, evidence: ['You picked a different answer to the one in the passage'],
+      signal: { type: 'response', subtype: 'incorrect', correct: false },
+    });
+    expect(d.allow).toBe(true);
+  });
+
+  describe('(test C) a recent successful retrieval suppresses an otherwise-sufficient scroll-back candidate', () => {
+    it('a repeated scroll-back fires when the reader has not just answered correctly', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      const d = p.evaluate(regressionStruggling({
+        signal: { type: 'regression', subtype: 'return', sameIndexRereadCount: 2, text: 'x' },
+      }));
+      expect(d.allow).toBe(true);
+    });
+
+    it('the identical repeated scroll-back is suppressed once the reader has just answered correctly', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordAnswered(true);
+      const d = p.evaluate(regressionStruggling({
+        signal: { type: 'regression', subtype: 'return', sameIndexRereadCount: 2, text: 'x' },
+      }));
+      expect(d.allow).toBe(false);
+      expect(d.reason).toMatch(/recent correct answer/);
+    });
+
+    it('does not suppress an incorrect-answer-driven struggle signal — recent success only softens the weaker, regression-sourced candidate', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordAnswered(true);
+      const d = p.evaluate({
+        label: STATES.STRUGGLING, confidence: 0.95, evidence: ['You picked a different answer to the one in the passage'],
+        signal: { type: 'response', subtype: 'incorrect', correct: false },
+      });
+      expect(d.allow).toBe(true);
+    });
+
+    it('evidence that is BOTH repeated AND corroborated overrides a recent correct answer — still capable of intervening when the case is strong', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordAnswered(true);
+      const d = p.evaluate(regressionStruggling({
+        signal: { type: 'regression', subtype: 'return', sameIndexRereadCount: 2, text: 'x' },
+        evidence: ['You went back a paragraph to re-read', 'Your scrolling became uneven here'],
+      }));
+      expect(d.allow).toBe(true);
+    });
+
+    it('a wrong answer (not correct) does not trigger the recent-success suppression', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordAnswered(false);
+      const d = p.evaluate(regressionStruggling({
+        signal: { type: 'regression', subtype: 'return', sameIndexRereadCount: 2, text: 'x' },
+      }));
+      expect(d.allow).toBe(true);
+    });
+  });
+
+  it('an ungraded/unknown verdict (recordAnswered(null)) neither suppresses nor un-suppresses — treated the same as no prior answer', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordAnswered(null);
+    const d = p.evaluate(regressionStruggling({
+      signal: { type: 'regression', subtype: 'return', sameIndexRereadCount: 2, text: 'x' },
+    }));
+    expect(d.allow).toBe(true);
+  });
+
+  it('a lone scroll-back with subtype slow_return is not gated by this candidate-strength check at all (state-engine.js never asserts STRUGGLING for a real one, but this function is defensive anyway)', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(regressionStruggling({ signal: { type: 'regression', subtype: 'slow_return', text: 'x' } }));
+    // This is a hand-built, otherwise-nonsensical case — a real slow_return
+    // never reaches evaluate() as STRUGGLING at all (state-engine.js
+    // resolves it straight to ON_PACE). regressionEvidenceStrength()
+    // returns null for it on purpose, so evaluate() falls through to the
+    // ordinary checks unaffected by this item, and a plain, otherwise
+    // uncontested struggling proposal is allowed exactly as it always was.
+    expect(d.allow).toBe(true);
+  });
+});
+
+describe('repeated wrong answers raise the bar before another question fires (step 8, test D)', () => {
+  it('two consecutive wrong answers hold off a borderline-confidence struggle signal', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordAnswered(false);
+    p.recordAnswered(false);
+    const d = p.evaluate(struggling({ confidence: 0.7, signal: { text: 'x' } }));
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/consecutive wrong answers/);
+  });
+
+  it('a high-confidence signal still gets through after repeated wrong answers — this raises the bar, it does not stop asking outright', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordAnswered(false);
+    p.recordAnswered(false);
+    const d = p.evaluate(struggling({ confidence: 0.8, signal: { text: 'x' } }));
+    expect(d.allow).toBe(true);
+  });
+
+  it('a single wrong answer does not yet raise the bar', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordAnswered(false);
+    const d = p.evaluate(struggling({ confidence: 0.6, signal: { text: 'x' } }));
+    expect(d.allow).toBe(true);
+  });
+
+  it('a correct answer resets the count, unblocking a subsequent borderline signal', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordAnswered(false);
+    p.recordAnswered(false);
+    p.recordAnswered(true);
+    const d = p.evaluate(struggling({ confidence: 0.7, signal: { text: 'x' } }));
+    expect(d.allow).toBe(true);
+  });
+
+  it('reports the running count in stats, alongside the pre-existing dismissal count', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordAnswered(false);
+    p.recordAnswered(false);
+    expect(p.stats().consecutiveIncorrectAnswers).toBe(2);
+    expect(p.stats().lastAnswerCorrect).toBe(false);
+    p.recordAnswered(true);
+    expect(p.stats().consecutiveIncorrectAnswers).toBe(0);
+    expect(p.stats().lastAnswerCorrect).toBe(true);
+  });
+
+  it('does not touch nudge actions — a drifting reader is not being tested, so wrong-answer backoff has nothing to gate there', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordAnswered(false);
+    p.recordAnswered(false);
+    const d = p.evaluate({ label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting' } });
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('nudge');
+  });
+
+  it('reset() clears both new counters', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordAnswered(false);
+    p.recordAnswered(false);
+    p.reset();
+    expect(p.stats().consecutiveIncorrectAnswers).toBe(0);
+    expect(p.stats().lastAnswerCorrect).toBeNull();
+  });
+});
+
+describe('reader/context adaptation — the same current signal, different response histories (step 8, test I)', () => {
+  it('an identical repeated scroll-back is allowed for one reader history and denied for another, using only observable interaction evidence', () => {
+    const signal = () => regressionStruggling({
+      signal: { type: 'regression', subtype: 'return', sameIndexRereadCount: 2, text: 'same current signal' },
+    });
+
+    const readerWhoJustSucceeded = createInterventionPolicy({ now: fixedClock().now });
+    readerWhoJustSucceeded.recordAnswered(true);
+
+    const readerWithNoRecentAnswer = createInterventionPolicy({ now: fixedClock().now });
+
+    expect(readerWhoJustSucceeded.evaluate(signal()).allow).toBe(false);
+    expect(readerWithNoRecentAnswer.evaluate(signal()).allow).toBe(true);
+  });
+
+  it('an identical borderline-confidence struggle signal is allowed for one reader\'s answer history and denied for another\'s', () => {
+    const readerWithRepeatedFailures = createInterventionPolicy({ now: fixedClock().now });
+    readerWithRepeatedFailures.recordAnswered(false);
+    readerWithRepeatedFailures.recordAnswered(false);
+
+    const readerWithNoFailures = createInterventionPolicy({ now: fixedClock().now });
+
+    const state = struggling({ confidence: 0.7, signal: { text: 'same current signal' } });
+    expect(readerWithRepeatedFailures.evaluate(state).allow).toBe(false);
+    expect(readerWithNoFailures.evaluate({ ...state }).allow).toBe(true);
+  });
+});
+
+/* Intelligence-architecture audit, step 9A — active intervention awareness.
+ * ctx.questionCardVisible is ground truth transported in from
+ * ui-controller.js by the caller (orchestrator.js/host.js — see
+ * tests/orchestrator.test.js and tests/host.test.js for that wiring); this
+ * file exercises the policy's OWN reaction to it directly, the same way
+ * every other gate in this module is tested — via evaluate()'s public ctx
+ * parameter, never a private helper. */
+describe('active intervention awareness (step 9A)', () => {
+  it('(test A) a normal eligible candidate behaves exactly as before when no card is visible', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(struggling(), { questionCardVisible: false });
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('ask');
+  });
+
+  it('a normal eligible candidate behaves exactly as before when questionCardVisible is simply omitted (backward compatible)', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(struggling());
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('ask');
+  });
+
+  it('(test B) an otherwise-eligible candidate is suppressed while a question card is visible', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(struggling(), { questionCardVisible: true });
+    expect(d.allow).toBe(false);
+    expect(d.action).toBe('none');
+    expect(d.reason).toMatch(/already visible/);
+  });
+
+  it('a skimming-on-dense-text candidate is suppressed the same way an ordinary ask candidate is', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(
+      { label: STATES.SKIMMING, confidence: 0.6, evidence: [], signal: { text: 'p', readability: { grade: 'difficult' } } },
+      { questionCardVisible: true },
+    );
+    expect(d.allow).toBe(false);
+  });
+
+  it('does not touch nudge actions — a drifting reader is not shown a question card, so there is nothing for this gate to suppress there', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(
+      { label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting' } },
+      { questionCardVisible: true },
+    );
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('nudge');
+  });
+
+  it('(test C) a candidate suppressed solely by an active card does not corrupt any policy state', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const before = p.stats();
+
+    const d = p.evaluate(struggling(), { questionCardVisible: true });
+    expect(d.allow).toBe(false);
+    expect(d.interventionId).toBeNull();
+
+    const after = p.stats();
+    // Nothing moved: no budget spent, no dismissal/failure counters touched
+    // (record() was never called — this module's own contract already
+    // guarantees a caller must call record(decision) separately, and this
+    // test confirms evaluate() itself made no side-channel change either).
+    expect(after).toEqual(before);
+  });
+
+  it('(test C) is denied cleanly — p.record(d) on the denied decision still no-ops, exactly like any other denial', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(struggling(), { questionCardVisible: true });
+    p.record(d);
+    expect(p.stats().count).toBe(0);
+  });
+
+  it('(test D) once the card disappears (questionCardVisible flips to false), a subsequent eligible candidate fires normally', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const suppressed = p.evaluate(struggling({ signal: { text: 'a' } }), { questionCardVisible: true });
+    expect(suppressed.allow).toBe(false);
+
+    const after = p.evaluate(struggling({ signal: { text: 'a' } }), { questionCardVisible: false });
+    expect(after.allow).toBe(true);
+    expect(after.action).toBe('ask');
+  });
+
+  it('sits after Step 8 evidence-strength checks -- a weak, single scroll-back is still denied for being weak, not for a visible card, even when a card genuinely IS visible', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(regressionStruggling(), { questionCardVisible: true });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/not enough evidence on its own/);
+  });
+
+  it('sits after Step 8 dismissal-backoff checks -- three consecutive dismissals still report their own reason, not the active-card one', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordDismissal();
+    p.recordDismissal();
+    p.recordDismissal();
+    const d = p.evaluate(struggling({ confidence: 0.99, signal: { text: 'x' } }), { questionCardVisible: true });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/holding off/);
+  });
+
+  it('sits after Step 8 failure-backoff checks -- repeated wrong answers still report their own reason at a low-confidence candidate, not the active-card one', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordAnswered(false);
+    p.recordAnswered(false);
+    const d = p.evaluate(struggling({ confidence: 0.6, signal: { text: 'x' } }), { questionCardVisible: true });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/consecutive wrong answers/);
+  });
+
+  it('still respects the session budget and cooldown even once no card is visible', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    take(p, struggling({ signal: { text: 'a' } }), { questionCardVisible: false });
+    const tooSoon = p.evaluate(struggling({ signal: { text: 'b' } }), { questionCardVisible: false });
+    expect(tooSoon.allow).toBe(false);
+    expect(tooSoon.reason).toMatch(/since the last interruption/);
+  });
+
+  describe('evaluateRetentionCandidate (step 9A)', () => {
+    it('a due retention candidate is suppressed while a question card is visible', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1', questionCardVisible: true });
+      expect(d.allow).toBe(false);
+      expect(d.reason).toMatch(/already visible/);
+      expect(d.interventionId).toBeNull();
+    });
+
+    it('fires normally once the card is no longer visible', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      const suppressed = p.evaluateRetentionCandidate({ paragraphKey: 'k1', questionCardVisible: true });
+      expect(suppressed.allow).toBe(false);
+
+      const after = p.evaluateRetentionCandidate({ paragraphKey: 'k1', questionCardVisible: false });
+      expect(after.allow).toBe(true);
+      expect(after.action).toBe('retention');
+    });
+
+    it('is backward compatible with every existing step-7 caller that never passes questionCardVisible at all', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+      expect(d.allow).toBe(true);
+    });
+
+    it('does not corrupt policy state when suppressed', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      const before = p.stats();
+      const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1', questionCardVisible: true });
+      expect(d.allow).toBe(false);
+      expect(p.stats()).toEqual(before);
+    });
+
+    it('still holds off for its own dismissal-backoff reason, not the active-card one, when both would deny', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordDismissal();
+      p.recordDismissal();
+      p.recordDismissal();
+      const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1', questionCardVisible: true });
+      expect(d.allow).toBe(false);
+      expect(d.reason).toMatch(/declined 3 questions in a row/);
+    });
+  });
+});

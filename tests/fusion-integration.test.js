@@ -88,6 +88,45 @@ describe('detection is signals-only', () => {
   });
 });
 
+/* Intelligence-architecture audit, step 8 — the same "detection ≠
+ * intervention" fix exercised through the REAL engine -> policy pipeline
+ * (not a hand-built decision object), the same way every other describe
+ * block in this file already drives both pieces together. See
+ * tests/intervention-policy.test.js's own "scroll-back candidate strength"
+ * block for the exhaustive unit-level coverage; this is the end-to-end
+ * confirmation that the same fix holds once a real regression signal has
+ * gone through state-engine.js's own STRUGGLING/confidence computation
+ * first, not just a fixture built to look like its output. */
+describe('a single scroll-back does not automatically become an interruption (step 8)', () => {
+  it('one genuine re-read, with no repetition, produces no interruption at all', () => {
+    const clock = fixedClock();
+    const { engine, interruptions } = buildReader(clock);
+
+    engine.update({ reading: { type: 'regression', subtype: 'return', distance: 2, latencyMs: 5000 } });
+
+    expect(interruptions).toHaveLength(0);
+  });
+
+  it('the SAME paragraph re-read a second time (sameIndexRereadCount reaching 2) is strong enough to interrupt', () => {
+    const clock = fixedClock();
+    const { engine, interruptions } = buildReader(clock);
+
+    engine.update({ reading: { type: 'regression', subtype: 'return', distance: 2, latencyMs: 5000, sameIndexRereadCount: 2 } });
+
+    expect(interruptions).toHaveLength(1);
+    expect(interruptions[0].action).toBe('ask');
+  });
+
+  it('a plainer struggle signal (an incorrect answer) is unaffected and still interrupts on its own — not a blanket "never on scroll movement" rule', () => {
+    const clock = fixedClock();
+    const { engine, interruptions } = buildReader(clock);
+
+    engine.update({ reading: { type: 'response', subtype: 'incorrect', correct: false } });
+
+    expect(interruptions).toHaveLength(1);
+  });
+});
+
 describe('every interruption can say what it noticed', () => {
   it('carries non-empty, human-readable evidence', () => {
     const clock = fixedClock();
