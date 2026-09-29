@@ -19,6 +19,9 @@
  * this module sends it when the caller supplies one, but the real server
  * silently drops it today (confirmed against the same file). See that
  * field's own comment below.
+ * `knowledge_unit_id` (intelligence-architecture audit, step 3) IS
+ * genuinely accepted and persisted server-side as of this same item — see
+ * this module's own comment on it below for what it is and when it's sent.
  * `correct` requires `question_id` to also be present (server-enforced,
  * 422 correct_requires_question_id otherwise) — this module does not
  * duplicate that check; its two real callers in host.js only ever set
@@ -68,6 +71,7 @@ export function createOutcomesManager(opts = {}) {
   async function submit({
     paragraphIndex, struggled, questionId, correct, confidence, reached,
     substate, selfReported, source, selectedAnswer, explanationPrecededAttempt,
+    knowledgeUnitId,
   } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
@@ -128,6 +132,21 @@ export function createOutcomesManager(opts = {}) {
     // required server-side follow-up.
     if (typeof explanationPrecededAttempt === 'boolean') {
       body.explanation_preceded_attempt = explanationPrecededAttempt;
+    }
+
+    // Intelligence-architecture audit, step 3 — stable, content-hashed
+    // knowledge-unit identity (knowledge-unit.js), alongside the existing
+    // paragraph_index this call always sends above. Additive and optional:
+    // sent only when the caller computed one (paragraphKey.js/host.js's
+    // computeIdentity() returns null for empty/unhashable text — see that
+    // module's own header), never fabricated here, and never sent as an
+    // explicit null the way substate/selectedAnswer are, since an absent
+    // knowledge-unit id is not itself a reportable observation the way an
+    // absent substate classification is. A caller that predates this field
+    // (or an older content-script build not yet updated) simply never sets
+    // it, leaving this key fully absent — identical to every field above.
+    if (typeof knowledgeUnitId === 'string' && knowledgeUnitId) {
+      body.knowledge_unit_id = knowledgeUnitId;
     }
 
     try {

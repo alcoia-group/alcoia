@@ -118,18 +118,49 @@ export function nextLevel(lastAttempt, sessionAnswers = []) {
   return 'recognition';
 }
 
+/* Knowledge-unit identity compatibility layer (intelligence-architecture
+ * audit, step 3). `identity` is EITHER:
+ *   - a plain string — the original calling shape, unchanged: matched
+ *     against each history record's own `paragraphKey`, byte-for-byte the
+ *     same behaviour this function has always had. Every caller from
+ *     before this item still works exactly as before if it never updates.
+ *   - an object `{ paragraphKey, knowledgeUnitId }` — the new shape. When
+ *     BOTH this call's own `knowledgeUnitId` and a given history record's
+ *     `knowledgeUnitId` are present, they are compared instead of
+ *     `paragraphKey` — the real, stable content identity, not the fragile
+ *     text-slice one. Falls back to comparing `paragraphKey` whenever
+ *     either side lacks a knowledgeUnitId (an older history record from
+ *     before this item existed, or a caller with no computable text to
+ *     hash) — this is what keeps a mixed session (some records with the
+ *     new field, some without) working correctly rather than silently
+ *     losing evidence.
+ * This function's own naming problem (a "concept" is, today, still a
+ * paragraph, not a semantic knowledge unit) is acknowledged, not solved
+ * here — see this file's own top-of-header note and the item's own report.
+ * A future step may rename this; this one is about the identity, not the
+ * name. */
+function matchesConcept(record, identity) {
+  if (identity !== null && typeof identity === 'object') {
+    if (identity.knowledgeUnitId && record.knowledgeUnitId) {
+      return record.knowledgeUnitId === identity.knowledgeUnitId;
+    }
+    return identity.paragraphKey != null && record.paragraphKey === identity.paragraphKey;
+  }
+  return record.paragraphKey === identity;
+}
+
 /* Convenience wrapper for the common case: the caller has a full
- * response-signals-shaped history array (paragraphKey/level/correct/
- * confidence/subtype on every record) and wants the level for one concept.
- * Still pure — no DOM, no server, no storage read. Used identically by
- * host.js's in-page paths (handleAsk, runSessionRecall) and its quiz
- * generation path (runQuiz) — the "same engine, same rules" requirement is
- * satisfied structurally, by both calling this one function, not by two
- * hand-written copies that could drift apart. */
-export function pickLevelForConcept(paragraphKey, history = []) {
+ * response-signals-shaped history array (paragraphKey/knowledgeUnitId/
+ * level/correct/confidence/subtype on every record) and wants the level for
+ * one concept. Still pure — no DOM, no server, no storage read. Used
+ * identically by host.js's in-page paths (handleAsk, runSessionRecall) and
+ * its quiz generation path (runQuiz) — the "same engine, same rules"
+ * requirement is satisfied structurally, by both calling this one function,
+ * not by two hand-written copies that could drift apart. */
+export function pickLevelForConcept(identity, history = []) {
   const graded = (history || []).filter((h) => h && h.subtype !== 'dismissed');
 
-  const attemptsForConcept = graded.filter((h) => h.paragraphKey === paragraphKey);
+  const attemptsForConcept = graded.filter((h) => matchesConcept(h, identity));
   const lastAttempt = attemptsForConcept.length
     ? attemptsForConcept[attemptsForConcept.length - 1]
     : null;
