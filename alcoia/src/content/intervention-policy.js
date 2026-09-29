@@ -34,12 +34,20 @@ import { STATES } from './state-engine.js';
  * produces ground truth. Explanation is the fallback after a wrong answer, and
  * the renderer also falls back to it when no question can be generated for a
  * passage — see `handleAsk` in content.js. */
+// DRIFTING earns 'nudge' — but state-engine.js only ever produces DRIFTING
+// from an explicit reader self-report ("not interested / lost focus"), never
+// from a passive reading signal (see state-engine.js's own STATES comment).
+// This table entry is correct, not misleading, as long as that stays true:
+// 'nudge' is a response to something the reader told the system, not a claim
+// that drifting is being passively detected. Check `state.isSelfReported` if
+// a caller ever needs to confirm that, rather than assuming it from the
+// label alone. (ABSENT used to have an entry here too — removed, along with
+// the state itself, once the audit confirmed nothing ever produced it.)
 export const STATE_ACTIONS = Object.freeze({
   [STATES.STRUGGLING]: 'ask',
   [STATES.DRIFTING]:   'nudge',
   [STATES.SKIMMING]:   'ask',
   [STATES.ON_PACE]:    'none',
-  [STATES.ABSENT]:     'none',
   [STATES.UNKNOWN]:    'none',
 });
 
@@ -137,11 +145,14 @@ export function createInterventionPolicy(config = {}) {
 
     if (action === 'none') {
       /* Exploration bypasses only this test — the state-to-action table —
-       * never the checks below it. Drifting and absent readers are excluded
-       * outright: neither is reading the paragraph in front of them, and
-       * invariant 8 forbids testing someone who did not read, regardless of
-       * what exploration wants to learn. */
-      const explorationEligible = state.label !== STATES.DRIFTING && state.label !== STATES.ABSENT;
+       * never the checks below it. A drifting reader is excluded outright:
+       * they are not reading the paragraph in front of them, and invariant 8
+       * forbids testing someone who did not read, regardless of what
+       * exploration wants to learn. (In practice DRIFTING already earns
+       * 'nudge' from STATE_ACTIONS above and never reaches this branch at
+       * all — the check stays as a defensive guard, not a load-bearing one.)
+       * ABSENT used to be excluded here too; removed along with the state. */
+      const explorationEligible = state.label !== STATES.DRIFTING;
       if (explorationEligible && random() < explorationRate) {
         action = 'ask';
         wasExplorationSample = true;
