@@ -71,14 +71,21 @@ export function createQuestionCard(deps = {}) {
   } = deps;
 
   /* question: { q, options[4], answerIndex, explanation, span, level?, span_role? }
-   * context: { evidence[], anchorRect, paragraphKey, knowledgeUnitId, passage?,
-   *            wasExplorationSample, showSelfReport? } — item 13a: showSelfReport
-   *            renders the self-report options alongside this question, additive to
-   *            the answer flow, never a replacement for it. knowledgeUnitId (step 3)
-   *            is documented here for shape completeness only — this component does
-   *            not read it itself; it is response-signals.js's present()/answer()
-   *            (called by host.js around this card, not by this file) that actually
-   *            captures it into the evidence record.
+   * context: { evidence[], anchorRect, paragraphKey, knowledgeUnitId, interventionId,
+   *            passage?, wasExplorationSample, showSelfReport? } — item 13a:
+   *            showSelfReport renders the self-report options alongside this
+   *            question, additive to the answer flow, never a replacement for it.
+   *            knowledgeUnitId (step 3) and interventionId (step 5) are documented
+   *            here for shape completeness — this component does not compute
+   *            either itself; it is response-signals.js's present()/answer() (called
+   *            from this file, around the card, below) that actually captures them
+   *            into the evidence record. interventionId is this specific card
+   *            instance's own identity: unlike `fingerprint` below (content-based,
+   *            so the same paragraph re-asked later reuses the same fingerprint),
+   *            it must be unique to THIS presentation, which is exactly what lets
+   *            two concurrently open cards (ui-controller.js's own MAX_POPUPS is 5,
+   *            not 1) resolve independently rather than one silently clobbering the
+   *            other's pending answer — see response-signals.js's own header.
    * Returns true only if the card actually reached the screen.
    *
    * Malformed model output degrades to silence here, not to a broken card.
@@ -110,6 +117,15 @@ export function createQuestionCard(deps = {}) {
     const fingerprint = 'q-' + (question.span || question.q).slice(0, 80).trim();
     const root = ui.reservePopup(fingerprint);
     if (!root) return false;
+
+    // Step 5: this card's own identity for the whole rest of its lifetime —
+    // captured once, here, and threaded through every terminal call below
+    // (commit/dismiss), so answering or dismissing THIS card can never
+    // resolve a different, concurrently-open one's pending state. null for
+    // a caller that predates interventionId (session-recall.js's own tests,
+    // any hand-built context) — response-signals.js falls back to its
+    // original single-slot behaviour in that case, unchanged.
+    const interventionId = typeof context.interventionId === 'string' && context.interventionId ? context.interventionId : null;
 
     // Item S6/E4 follow-up: reuses this SAME popup-dedup fingerprint as
     // the outcome-reporting question_id, rather than inventing a second
@@ -180,7 +196,7 @@ export function createQuestionCard(deps = {}) {
 
     const dismiss = () => {
       if (!committed) {
-        const record = responseSignals.dismiss();
+        const record = responseSignals.dismiss(interventionId);
         if (record && onDismissed) onDismissed(record);
       }
       ui.closePopup(root, fingerprint);
@@ -251,7 +267,7 @@ export function createQuestionCard(deps = {}) {
         committed = true;
         root.querySelector('.sra-q-confidence')?.remove();
 
-        const record = responseSignals.answer(selected, question, confidence);
+        const record = responseSignals.answer(selected, question, confidence, interventionId);
         if (record && onAnswered) onAnswered(record);
 
         revealAnswer(root, question, selected, confidence, esc);
@@ -268,7 +284,7 @@ export function createQuestionCard(deps = {}) {
           if (committed) return;
           const i = Number(btn.dataset.index);
           // Changing your mind before committing is hesitation, not an answer.
-          if (selected !== null && selected !== i) responseSignals.revise();
+          if (selected !== null && selected !== i) responseSignals.revise(interventionId);
           selected = i;
           for (const b of root.querySelectorAll('.sra-q-option')) {
             b.classList.toggle('sra-q-selected', Number(b.dataset.index) === i);
@@ -307,7 +323,7 @@ export function createQuestionCard(deps = {}) {
           // though (bug fix) — the reader genuinely picked one via the
           // same showConfidenceStep() every other level uses; only
           // correct/gradingMethod stay fixed at null/'none' by design.
-          const record = responseSignals.respond(answerText, confidence);
+          const record = responseSignals.respond(answerText, confidence, interventionId);
           if (record && onAnswered) onAnswered(record);
           revealResponded(root);
           finish();
@@ -349,7 +365,7 @@ export function createQuestionCard(deps = {}) {
         // checked here too, not assumed from upstream.
         const verdict = level === 'scenario' && graded.verdict === 'incorrect' ? 'unknown' : graded.verdict;
 
-        const record = responseSignals.answerGraded(answerText, verdict, confidence);
+        const record = responseSignals.answerGraded(answerText, verdict, confidence, interventionId);
         if (record && onAnswered) onAnswered(record);
 
         revealGraded(root, question, verdict, level, esc);
