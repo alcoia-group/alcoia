@@ -28,6 +28,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createQuizStore } from '../alcoia/src/content/quiz-store.js';
 import { fileURLToPath } from 'node:url';
 
 const QUIZ_HTML_PATH = path.resolve(
@@ -310,5 +311,251 @@ describe('quiz.js outcome reporting (item 13i)', () => {
 
     await new Promise((r) => setTimeout(r, 30));
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+/* Evidence-silo fix (intelligence-architecture audit, step 2): every
+ * answered quiz question now ALSO produces a response-signals.js-shaped
+ * record in chrome.storage.local's sra_quiz_evidence, tagged source:'quiz'
+ * and documentKey — read back by host.js's pickLevel() in the tab that
+ * generated the quiz, since this page runs in a separate tab with no
+ * shared JS realm to write into directly. This is local-only and
+ * unconditional (runs for ordinary, non-assignment quizzes too, unlike
+ * submitQuizOutcome above) — deliberately kept as its own describe block
+ * so it's clear this has nothing to do with the assignment/server path
+ * item 13i already covers. */
+describe('quiz.js local evidence-history recording (intelligence-architecture audit, step 2)', () => {
+  const WITH_KEY_QUESTION = {
+    ...RECOGNITION_QUESTION,
+    id: 'q-server-2',
+    paragraphKey: 'a real paragraph key computed by host.js at quiz-generation time',
+  };
+
+  it('a correct recognition answer writes a matching sra_quiz_evidence record — source:quiz, correct:true, real paragraphKey/paragraphIndex/questionId', async () => {
+    installFakeIndexedDB();
+    loadQuizBody();
+    setLocation('?key=doc-ev-1');
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_quiz_pending: { key: 'doc-ev-1', questions: [WITH_KEY_QUESTION], createdAt: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
+      TOKEN_URL: 'https://api.alcoia.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
+    });
+
+    await importFreshQuizJs();
+    await vi.waitFor(() => expect(document.querySelector('.sra-q-option')).not.toBeNull());
+    document.querySelector('.sra-q-option').click(); // correct — answerIndex is 0
+    await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
+    document.querySelector('[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(chrome._store.sra_quiz_evidence).toBeDefined());
+    const [record] = chrome._store.sra_quiz_evidence;
+    expect(record).toMatchObject({
+      documentKey: 'doc-ev-1',
+      type: 'response',
+      subtype: 'correct',
+      correct: true,
+      confidence: 'high',
+      gradingMethod: 'deterministic',
+      level: 'recognition',
+      source: 'quiz',
+      paragraphKey: WITH_KEY_QUESTION.paragraphKey,
+      paragraphIndex: 3,
+      questionId: 'q-server-2',
+    });
+  });
+
+  it('an incorrect recognition answer writes correct:false, and a question with no paragraphKey writes paragraphKey:null rather than a guess', async () => {
+    installFakeIndexedDB();
+    loadQuizBody();
+    setLocation('?key=doc-ev-2');
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_quiz_pending: { key: 'doc-ev-2', questions: [RECOGNITION_QUESTION], createdAt: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
+      TOKEN_URL: 'https://api.alcoia.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
+    });
+
+    await importFreshQuizJs();
+    await vi.waitFor(() => expect(document.querySelector('.sra-q-option[data-index="1"]')).not.toBeNull());
+    document.querySelector('.sra-q-option[data-index="1"]').click(); // wrong
+    await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
+    document.querySelector('[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(chrome._store.sra_quiz_evidence).toBeDefined());
+    const [record] = chrome._store.sra_quiz_evidence;
+    expect(record.correct).toBe(false);
+    expect(record.paragraphKey).toBeNull(); // RECOGNITION_QUESTION carries no paragraphKey
+  });
+
+  it('an adversarial answer writes correct:null — never graded, same as the inline card', async () => {
+    installFakeIndexedDB();
+    loadQuizBody();
+    setLocation('?key=doc-ev-3');
+    const adversarialQuestion = {
+      id: 'q-server-adv-ev', q: 'Argue against this claim.', level: 'adversarial',
+      span: 'The relationship is real but weak.', paragraphIndex: 6,
+    };
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_quiz_pending: { key: 'doc-ev-3', questions: [adversarialQuestion], createdAt: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
+      TOKEN_URL: 'https://api.alcoia.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
+    });
+
+    await importFreshQuizJs();
+    await vi.waitFor(() => expect(document.querySelector('.sra-q-answer-input')).not.toBeNull());
+    const textarea = document.querySelector('.sra-q-answer-input');
+    textarea.value = 'a counter-argument';
+    textarea.dispatchEvent(new Event('input'));
+    document.querySelector('.sra-q-submit-text').click();
+    await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
+    document.querySelector('[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(chrome._store.sra_quiz_evidence).toBeDefined());
+    const [record] = chrome._store.sra_quiz_evidence;
+    expect(record.correct).toBeNull();
+    expect(record.gradingMethod).toBe('none');
+    expect(record.level).toBe('adversarial');
+    expect(record.source).toBe('quiz');
+  });
+
+  it('a free_recall/scenario answer writes the model verdict, downgraded the same safe way the on-screen result already is', async () => {
+    installFakeIndexedDB();
+    loadQuizBody();
+    setLocation('?key=doc-ev-4');
+    const scenarioQuestion = {
+      id: 'q-server-scenario', q: 'Apply this to a new case.', level: 'scenario',
+      span: 'The relationship is real but weak.', paragraphIndex: 2,
+    };
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_quiz_pending: { key: 'doc-ev-4', questions: [scenarioQuestion], createdAt: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
+      TOKEN_URL: 'https://api.alcoia.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
+    });
+    // grading-client.js's fetchGrading calls the token endpoint then the
+    // grade endpoint — both real fetch() calls this page makes itself.
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).includes('/api/token')) return { ok: true, json: async () => ({ token: 'inst-1' }) };
+      // A server-graded 'incorrect' verdict at scenario must be shown (and
+      // now recorded) as 'unknown' — grading-client.js's own safety net,
+      // confirmed still honoured by this new write, not bypassed by it.
+      return { ok: true, json: async () => ({ verdict: 'incorrect', span: 'The relationship is real but weak.' }) };
+    }));
+
+    await importFreshQuizJs();
+    await vi.waitFor(() => expect(document.querySelector('.sra-q-answer-input')).not.toBeNull());
+    const textarea = document.querySelector('.sra-q-answer-input');
+    textarea.value = 'my applied answer';
+    textarea.dispatchEvent(new Event('input'));
+    document.querySelector('.sra-q-submit-text').click();
+    await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
+    document.querySelector('[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(chrome._store.sra_quiz_evidence).toBeDefined());
+    const [record] = chrome._store.sra_quiz_evidence;
+    expect(record.subtype).toBe('unknown'); // never 'incorrect' at scenario
+    expect(record.correct).toBeNull();
+    expect(record.gradingMethod).toBe('model');
+  });
+
+  it('multiple answered questions in one quiz session accumulate as separate entries, in order', async () => {
+    installFakeIndexedDB();
+    loadQuizBody();
+    setLocation('?key=doc-ev-5');
+    const q1 = { ...RECOGNITION_QUESTION, id: 'q-1' };
+    const q2 = { ...RECOGNITION_QUESTION, id: 'q-2' };
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_quiz_pending: { key: 'doc-ev-5', questions: [q1, q2], createdAt: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
+      TOKEN_URL: 'https://api.alcoia.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
+    });
+
+    await importFreshQuizJs();
+    await vi.waitFor(() => expect(document.querySelector('.sra-q-option')).not.toBeNull());
+    document.querySelector('.sra-q-option').click();
+    await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
+    document.querySelector('[data-conf="high"]').click();
+    await vi.waitFor(() => expect(chrome._store.sra_quiz_evidence).toHaveLength(1));
+
+    document.querySelector('.btn-primary').click(); // "Next question"
+    await vi.waitFor(() => expect(document.querySelector('.sra-q-option')).not.toBeNull());
+    document.querySelector('.sra-q-option').click();
+    await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
+    document.querySelector('[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(chrome._store.sra_quiz_evidence).toHaveLength(2));
+    expect(chrome._store.sra_quiz_evidence.map((r) => r.questionId)).toEqual(['q-1', 'q-2']);
+  });
+
+  it('none of this touches the network — evidence recording is chrome.storage.local only, on ordinary (non-assignment) reading', async () => {
+    installFakeIndexedDB();
+    loadQuizBody();
+    setLocation('?key=doc-ev-6'); // no assignmentId
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_quiz_pending: { key: 'doc-ev-6', questions: [RECOGNITION_QUESTION], createdAt: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
+      TOKEN_URL: 'https://api.alcoia.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
+    });
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+
+    await importFreshQuizJs();
+    await vi.waitFor(() => expect(document.querySelector('.sra-q-option')).not.toBeNull());
+    document.querySelector('.sra-q-option').click();
+    await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
+    document.querySelector('[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(chrome._store.sra_quiz_evidence).toBeDefined());
+    expect(fetchImpl).not.toHaveBeenCalled(); // no server call fired by recording local evidence
+  });
+
+  it('quiz-store IndexedDB persistence is unaffected — recordAnswer still writes the full answer record exactly as before', async () => {
+    installFakeIndexedDB();
+    loadQuizBody();
+    setLocation('?key=doc-ev-7');
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_quiz_pending: { key: 'doc-ev-7', questions: [RECOGNITION_QUESTION], createdAt: Date.now() },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
+      TOKEN_URL: 'https://api.alcoia.invalid/api/token',
+      ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
+    });
+
+    await importFreshQuizJs();
+    await vi.waitFor(() => expect(document.querySelector('.sra-q-option')).not.toBeNull());
+    document.querySelector('.sra-q-option').click();
+    await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
+    document.querySelector('[data-conf="high"]').click();
+
+    // The real quiz-store.js record, read back through the real
+    // (fake-backed) IndexedDB — untouched by this item's own new write.
+    const store = createQuizStore();
+    await vi.waitFor(async () => {
+      const records = await store.listForDocument('doc-ev-7');
+      expect(records).toHaveLength(1);
+      expect(records[0].answers).toHaveLength(1);
+    });
+    const [record] = await store.listForDocument('doc-ev-7');
+    expect(record.answers[0]).toMatchObject({
+      questionIndex: 0, chosenIndex: 0, correct: true, confidence: 'high',
+      gradingMethod: 'deterministic', level: 'recognition',
+    });
   });
 });
