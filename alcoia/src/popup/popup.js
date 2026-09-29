@@ -19,12 +19,18 @@
 import { createSessionManager } from '../shared/session.js';
 import { createEntitlementsManager } from '../shared/entitlements.js';
 
+// No 'absent' entry: state-engine.js's STATES no longer has an ABSENT
+// value (nothing ever produced it), so `STATE_UI[raw]` for it would already
+// have fallen back to `unknown` below even before this key existed to
+// remove. drifting's copy was rewritten here — it used to read as a
+// passive-movement detection ("stalled without you leaving it"), which
+// isn't what happens: this state is reachable only when the reader
+// explicitly self-reports losing focus (see state-engine.js).
 const STATE_UI = {
   on_pace:    { name: 'On pace',      dot: 'live', why: 'Your pace matches the difficulty of this text.' },
   skimming:   { name: 'Skimming',     dot: 'live', why: 'Moving faster than this text usually takes to read.' },
   struggling: { name: 'Struggling',   dot: 'attn', why: 'Slower than your usual pace here, or going back over it.' },
-  drifting:   { name: 'Drifting',     dot: 'attn', why: 'Movement on the page has stalled without you leaving it.' },
-  absent:     { name: 'Away',         dot: '',     why: 'Nothing to read from. You are away from the page.' },
+  drifting:   { name: 'Drifting',     dot: 'attn', why: 'You told the assistant you lost focus or are not interested.' },
   unknown:    { name: 'Not sure yet', dot: '',     why: 'The signals do not agree. Nothing interrupts you on this.' },
 };
 
