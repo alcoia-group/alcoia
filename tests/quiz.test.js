@@ -160,9 +160,15 @@ describe('quiz.js outcome reporting (item 13i)', () => {
       ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
     });
 
-    let seenUrl = null, seenInit = null;
+    // Step 5: renderQuestion() now also fires a real "intervention presented"
+    // POST (to .../interventions) the moment the question renders, before any
+    // answer — genuinely independent of the outcomes POST this test is about.
+    // Captures every call rather than the single most-recent one, and picks
+    // out the .../outcomes call specifically, so this test stays correct
+    // regardless of the real timing between the two.
+    const calls = [];
     const fetchImpl = vi.fn(async (url, init) => {
-      seenUrl = url; seenInit = init;
+      calls.push({ url, init });
       return { ok: true, json: async () => ({ recorded: true }) };
     });
     vi.stubGlobal('fetch', fetchImpl);
@@ -174,16 +180,37 @@ describe('quiz.js outcome reporting (item 13i)', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
     document.querySelector('[data-conf="high"]').click();
 
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
-    expect(seenUrl).toBe('https://api.alcoia.invalid/api/assignments/assign-1/outcomes');
-    const body = JSON.parse(seenInit.body);
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
+    const outcomeCall = calls.find((c) => c.url.endsWith('/outcomes'));
+    expect(outcomeCall.url).toBe('https://api.alcoia.invalid/api/assignments/assign-1/outcomes');
+    const body = JSON.parse(outcomeCall.init.body);
+    // intervention_id (step 5) is a real, non-empty string — checked for
+    // shape here, and cross-checked against the intervention report below,
+    // rather than duplicating the dedicated interventionId test's own
+    // exact-value assertions.
+    expect(typeof body.intervention_id).toBe('string');
+    expect(body.intervention_id.length).toBeGreaterThan(0);
+    const outcomeInterventionId = body.intervention_id;
+    delete body.intervention_id;
     expect(body).toEqual({
       paragraph_index: 3, question_id: 'q-server-1', correct: true, confidence: 'high', source: 'quiz',
       // Item 13j-1: the real chosen option (index 0, the one clicked above).
       selected_answer: 0,
     });
     expect(body).not.toHaveProperty('pseudonym');
-    expect(seenInit.headers.Authorization).toBe('Bearer sess-tok-1');
+    expect(outcomeCall.init.headers.Authorization).toBe('Bearer sess-tok-1');
+
+    // The intervention itself was also genuinely reported, same assignment,
+    // same endpoint family, real fields — step 5's other half of this flow.
+    // Same id as the outcome above carried, proving genuine linkage rather
+    // than two independently-generated, unrelated values.
+    const interventionCall = calls.find((c) => c.url.endsWith('/interventions'));
+    expect(interventionCall).toBeDefined();
+    expect(interventionCall.url).toBe('https://api.alcoia.invalid/api/assignments/assign-1/interventions');
+    const interventionBody = JSON.parse(interventionCall.init.body);
+    expect(interventionBody.type).toBe('quiz');
+    expect(interventionBody.paragraph_index).toBe(3);
+    expect(interventionBody.intervention_id).toBe(outcomeInterventionId);
   });
 
   it('a wrong quiz answer under assignment context sends the real WRONG option as selected_answer', async () => {
@@ -200,8 +227,11 @@ describe('quiz.js outcome reporting (item 13i)', () => {
       ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
     });
 
-    let seenInit = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenInit = init; return { ok: true, json: async () => ({ recorded: true }) }; });
+    // Step 5: see the previous test's own comment — two real, independent
+    // POSTs now happen (.../interventions at render, .../outcomes at
+    // answer); pick the outcomes one out specifically.
+    const calls = [];
+    const fetchImpl = vi.fn(async (url, init) => { calls.push({ url, init }); return { ok: true, json: async () => ({ recorded: true }) }; });
     vi.stubGlobal('fetch', fetchImpl);
 
     await importFreshQuizJs();
@@ -211,8 +241,8 @@ describe('quiz.js outcome reporting (item 13i)', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
     document.querySelector('[data-conf="high"]').click();
 
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
-    const body = JSON.parse(seenInit.body);
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
+    const body = JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).init.body);
     expect(body.correct).toBe(false);
     expect(body.selected_answer).toBe(1);
   });
@@ -235,8 +265,9 @@ describe('quiz.js outcome reporting (item 13i)', () => {
       ASSIGNMENTS_URL: 'https://api.alcoia.invalid/api/assignments',
     });
 
-    let seenInit = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenInit = init; return { ok: true, json: async () => ({ recorded: true }) }; });
+    // Step 5: see the first test's own comment.
+    const calls = [];
+    const fetchImpl = vi.fn(async (url, init) => { calls.push({ url, init }); return { ok: true, json: async () => ({ recorded: true }) }; });
     vi.stubGlobal('fetch', fetchImpl);
 
     await importFreshQuizJs();
@@ -249,8 +280,8 @@ describe('quiz.js outcome reporting (item 13i)', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-conf="high"]')).not.toBeNull());
     document.querySelector('[data-conf="high"]').click();
 
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
-    const body = JSON.parse(seenInit.body);
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
+    const body = JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).init.body);
     expect(body.paragraph_index).toBe(6);
     expect(body).not.toHaveProperty('correct'); // adversarial is never graded
     expect(body).toHaveProperty('selected_answer', null);

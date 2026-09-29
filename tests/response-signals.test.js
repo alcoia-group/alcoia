@@ -505,3 +505,159 @@ describe('source (evidence-silo fix, step 2)', () => {
     expect(sources).toEqual(['inline', 'quiz']);
   });
 });
+
+/* Intelligence-architecture audit, step 5 — interventionId, and the real
+ * concurrency bug it fixes: host.js's questionCard is shared by handleAsk
+ * (orchestrator-triggered) and runSessionRecall (reader-initiated), and
+ * ui-controller.js's own MAX_POPUPS is 5, not 1 — a second question card CAN
+ * genuinely render while a first is still open, unanswered. Before this
+ * item, `present()` unconditionally overwrote the single `asked` slot, so
+ * answering the FIRST of two such cards after the second had rendered
+ * silently produced null (a dropped outcome) rather than the first card's
+ * real answer. THE REGRESSION PROOF below reproduces exactly that. */
+describe('interventionId and concurrent pending interventions (step 5)', () => {
+  it('present() attaches interventionId onto the returned/stored record when the caller supplies one', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    const asked = r.present(QUESTION, { interventionId: 'iv_1' });
+    expect(asked.interventionId).toBe('iv_1');
+  });
+
+  it('interventionId is null when the caller never supplies one — every pre-step-5 caller, unchanged', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    const asked = r.present(QUESTION);
+    expect(asked.interventionId).toBeNull();
+  });
+
+  it('every terminal record (answer/answerGraded/respond/dismiss) carries the interventionId it was presented with', () => {
+    const a = createResponseSignals({ now: fixedClock().now });
+    a.present(QUESTION, { interventionId: 'iv_a' });
+    expect(a.answer(0, QUESTION).interventionId).toBe('iv_a');
+
+    const b = createResponseSignals({ now: fixedClock().now });
+    b.present({ ...QUESTION, level: 'free_recall' }, { interventionId: 'iv_b' });
+    expect(b.answerGraded('x', 'correct', 'high').interventionId).toBe('iv_b');
+
+    const c = createResponseSignals({ now: fixedClock().now });
+    c.present({ ...QUESTION, level: 'adversarial' }, { interventionId: 'iv_c' });
+    expect(c.respond('an argument').interventionId).toBe('iv_c');
+
+    const d = createResponseSignals({ now: fixedClock().now });
+    d.present(QUESTION, { interventionId: 'iv_d' });
+    expect(d.dismiss().interventionId).toBe('iv_d');
+  });
+
+  it('THE REGRESSION PROOF: two concurrently pending interventions (present() called twice before either is answered) can each be resolved correctly, in either order, once each carries its own interventionId', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    // Card A presented (e.g. handleAsk's inline ask)...
+    r.present(QUESTION, { interventionId: 'iv_A', paragraphKey: 'para-A' });
+    // ...then card B presented BEFORE A was answered (e.g. runSessionRecall
+    // rendering a review question while the inline card is still open) —
+    // the exact scenario ui-controller.js's MAX_POPUPS=5 makes possible.
+    r.present({ ...QUESTION, q: 'A different question' }, { interventionId: 'iv_B', paragraphKey: 'para-B' });
+
+    // The reader answers B first (it rendered more recently, on top).
+    const recordB = r.answer(1, { ...QUESTION, answerIndex: 1 }, 'high', 'iv_B');
+    expect(recordB).not.toBeNull();
+    expect(recordB.interventionId).toBe('iv_B');
+    expect(recordB.paragraphKey).toBe('para-B');
+
+    // THE BUG THIS FIXES: before interventionId-keyed resolution existed,
+    // `asked` had already been overwritten by B's present() call and then
+    // cleared by B's own answer() — so resolving A here would have
+    // returned null, silently dropping a real answer. It now resolves A's
+    // own still-pending record correctly.
+    const recordA = r.answer(0, QUESTION, 'low', 'iv_A');
+    expect(recordA).not.toBeNull();
+    expect(recordA.interventionId).toBe('iv_A');
+    expect(recordA.paragraphKey).toBe('para-A');
+    expect(recordA.correct).toBe(true);
+
+    expect(r.history()).toHaveLength(2);
+  });
+
+  it('does not cross-link: answering A never uses B\'s question/level/span, and vice versa', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    const questionA = { ...QUESTION, span: 'span for A', answerIndex: 0 };
+    const questionB = { ...QUESTION, span: 'span for B', answerIndex: 2 };
+    r.present(questionA, { interventionId: 'iv_A' });
+    r.present(questionB, { interventionId: 'iv_B' });
+
+    const recordA = r.answer(0, questionA, null, 'iv_A');
+    const recordB = r.answer(2, questionB, null, 'iv_B');
+
+    expect(recordA.span).toBe('span for A');
+    expect(recordA.correct).toBe(true);
+    expect(recordB.span).toBe('span for B');
+    expect(recordB.correct).toBe(true);
+  });
+
+  it('intervention A presented, then B presented, then only B is answered — A is never incorrectly resolved as if it were B, and stays cleanly pending/unresolved', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { interventionId: 'iv_A' });
+    r.present({ ...QUESTION, span: 'span for B' }, { interventionId: 'iv_B' });
+
+    const recordB = r.answer(0, QUESTION, null, 'iv_B');
+    expect(recordB.interventionId).toBe('iv_B');
+    expect(recordB.span).toBe('span for B');
+
+    // Only one record was ever produced — B's. A was never resolved,
+    // never merged into B's record, and never silently attributed to it
+    // merely because A happened first.
+    expect(r.history()).toHaveLength(1);
+    expect(r.history()[0].interventionId).toBe('iv_B');
+  });
+
+  it('a dismiss on one pending intervention does not resolve or clear a different one', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { interventionId: 'iv_A' });
+    r.present(QUESTION, { interventionId: 'iv_B' });
+
+    const dismissedA = r.dismiss('iv_A');
+    expect(dismissedA.interventionId).toBe('iv_A');
+
+    const recordB = r.answer(0, QUESTION, null, 'iv_B');
+    expect(recordB).not.toBeNull();
+    expect(recordB.interventionId).toBe('iv_B');
+  });
+
+  it('an interventionId that does not resolve to anything pending (already resolved, or never presented) returns null rather than falling back to the shared `asked` slot', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { interventionId: 'iv_A' });
+    // A real, different pending intervention exists in `asked`, but a
+    // caller asking for an unrelated, unknown id must never accidentally
+    // resolve to it.
+    expect(r.answer(0, QUESTION, null, 'iv_unknown')).toBeNull();
+    // The real pending one is untouched and still resolvable normally.
+    expect(r.answer(0, QUESTION, null, 'iv_A')).not.toBeNull();
+  });
+
+  it('revise()/markScrollBack() target the correct pending record under concurrency too', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { interventionId: 'iv_A' });
+    r.present(QUESTION, { interventionId: 'iv_B' });
+
+    r.revise('iv_A');
+    r.revise('iv_A');
+    r.markScrollBack('iv_B');
+
+    const recordA = r.answer(0, QUESTION, null, 'iv_A');
+    const recordB = r.answer(0, QUESTION, null, 'iv_B');
+    expect(recordA.revisions).toBe(2);
+    expect(recordA.scrolledBack).toBe(false);
+    expect(recordB.revisions).toBe(0);
+    expect(recordB.scrolledBack).toBe(true);
+  });
+
+  it('every pre-step-5 caller (no interventionId anywhere) still behaves exactly as a single-slot design — sequential present()/answer() pairs work unchanged', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { paragraphKey: 'p1' });
+    const rec1 = r.answer(0, QUESTION);
+    expect(rec1.interventionId).toBeNull();
+
+    r.present(QUESTION, { paragraphKey: 'p2' });
+    const rec2 = r.answer(0, QUESTION);
+    expect(rec2.interventionId).toBeNull();
+
+    expect(r.history()).toHaveLength(2);
+  });
+});

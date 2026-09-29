@@ -25,6 +25,7 @@
  */
 
 import { STATES } from './state-engine.js';
+import { generateInterventionId } from './signals/intervention-id.js';
 
 /* What each state earns, when it earns anything at all.
  *
@@ -110,6 +111,10 @@ export function createInterventionPolicy(config = {}) {
   // Injectable so the sampling rate is assertable under a deterministic RNG.
   const random         = config.random || Math.random;
   const explorationRate = config.explorationRate ?? EXPLORATION_SAMPLE_RATE;
+  // Intelligence-architecture audit, step 5. Injectable for the same
+  // testability reason `now`/`random` already are above — a test can
+  // assert on the exact id a decision carries rather than only its shape.
+  const generateId     = config.generateInterventionId || generateInterventionId;
 
   let lastAt = 0;
   let count  = 0;
@@ -130,12 +135,23 @@ export function createInterventionPolicy(config = {}) {
     return Math.min(budget.absoluteCeiling, earned);
   }
 
-  /* Returns { allow, action, reason, evidence, paragraphKey, wasExplorationSample }.
-   * `reason` is always populated, including on refusal — it is the only way
-   * to debug why an interruption did or didn't happen. */
+  /* Returns { allow, action, reason, evidence, paragraphKey, wasExplorationSample,
+   * interventionId }. `reason` is always populated, including on refusal —
+   * it is the only way to debug why an interruption did or didn't happen.
+   *
+   * interventionId (intelligence-architecture audit, step 5): a fresh,
+   * unique identity for THIS specific interruption, minted only when the
+   * decision is actually 'ask' — the one action that goes on to produce a
+   * question and an attributable outcome. 'nudge' (and every denied
+   * decision) carries `interventionId: null`: a nudge has no question, no
+   * answer, nothing for a later outcome to be attributed to, so minting an
+   * id for it would be an id that could never mean anything. This is the
+   * "intervention selected -> create intervention identity" step of the
+   * causal chain (see intervention-id.js's own header) — generation and
+   * rendering (host.js's handleAsk) happen after, using this same id. */
   function evaluate(state, ctx = {}) {
     const deny = (reason) =>
-      ({ allow: false, action: 'none', reason, evidence: [], paragraphKey: null, wasExplorationSample: false });
+      ({ allow: false, action: 'none', reason, evidence: [], paragraphKey: null, wasExplorationSample: false, interventionId: null });
 
     if (!state || !state.label) return deny('no state');
     if (state.label === STATES.UNKNOWN) return deny('state is unknown');
@@ -212,6 +228,13 @@ export function createInterventionPolicy(config = {}) {
       evidence: state.evidence || [],
       paragraphKey: key,
       wasExplorationSample,
+      // See this function's own header comment. Reuses this closure's own
+      // injected now()/random() rather than the module-level defaults, so a
+      // test constructed with a fixed clock/RNG gets a deterministic id
+      // (matters for the existing toEqual-on-the-whole-decision tests in
+      // tests/intervention-policy.test.js, which predate this field and
+      // must keep passing unmodified).
+      interventionId: action === 'ask' ? generateId(now, random) : null,
     };
   }
 

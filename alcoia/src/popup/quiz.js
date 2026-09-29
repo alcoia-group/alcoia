@@ -22,7 +22,9 @@ import { createGradingClient } from '../shared/grading-client.js';
 import { createRateLimiter } from '../shared/rate-limit.js';
 import { createSessionManager } from '../shared/session.js';
 import { createOutcomesManager } from '../shared/outcomes.js';
+import { createInterventionsManager } from '../shared/interventions.js';
 import { createResponseSignals } from '../content/signals/response-signals.js';
+import { generateInterventionId } from '../content/signals/intervention-id.js';
 
 const FREE_TEXT_LEVELS = ['free_recall', 'scenario', 'adversarial'];
 // Mirrors tests/contract/grading.js's MAX_ANSWER_CHARS — enforced via the
@@ -69,6 +71,24 @@ if (assignmentId) {
     // silently not reported, never guessed at.
     if (!Number.isInteger(fields.paragraphIndex) || fields.paragraphIndex < 0) return;
     outcomesManager.submit({ ...fields, source: 'quiz' }).catch(() => {});
+  };
+}
+
+// Intelligence-architecture audit, step 5 — same assignment-context gate as
+// submitQuizOutcome above, reusing the SAME session manager (outcomesSession
+// only exists inside the `if (assignmentId)` block above, so this needs its
+// own — a session manager is cheap and stateless to construct twice, unlike
+// standing up a second outcomes manager for the same endpoint would be).
+let reportQuizIntervention = () => {};
+if (assignmentId) {
+  const interventionsSession = createSessionManager();
+  const interventionsManager = createInterventionsManager({
+    getSession: interventionsSession.getSession,
+    interventionsUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/interventions`,
+  });
+  reportQuizIntervention = (interventionId, knowledgeUnitId, paragraphIndex) => {
+    if (!interventionId) return;
+    interventionsManager.submit({ interventionId, knowledgeUnitId, paragraphIndex, type: 'quiz' }).catch(() => {});
   };
 }
 
@@ -169,6 +189,14 @@ function renderQuestion(record, index) {
 
   const level = FREE_TEXT_LEVELS.includes(question.level) ? question.level : 'recognition';
 
+  // Step 5: this quiz question's own identity for its whole lifetime, same
+  // reasoning as question-card.js's own capture of context.interventionId
+  // — quiz.js has no concurrency risk to fix (one question rendered at a
+  // time, this page's own sequential flow), but every question-bearing
+  // presentation in this codebase mints one the same way, via the same
+  // shared generator intervention-policy.js/host.js's runSessionRecall use.
+  const interventionId = generateInterventionId();
+
   // Evidence-silo fix (step 2): present() before any terminal call, same
   // sequencing question-card.js's own inline flow already requires.
   // question.paragraphKey only exists when host.js's runQuiz() could
@@ -189,7 +217,12 @@ function renderQuestion(record, index) {
     paragraphIndex: Number.isInteger(question.paragraphIndex) ? question.paragraphIndex : null,
     questionId: typeof question.id === 'string' && question.id ? question.id : null,
     source: 'quiz',
+    interventionId,
   });
+  // Reported the moment this question actually reaches the screen — before
+  // any answer, same "presented, independent of whether it's ever
+  // answered" timing as host.js's own reportIntervention calls.
+  reportQuizIntervention(interventionId, question.knowledgeUnitId, question.paragraphIndex);
 
   const bodyInner = level === 'recognition'
     ? `<div class="sra-q-options">
@@ -260,11 +293,12 @@ function renderQuestion(record, index) {
       submitQuizOutcome({
         paragraphIndex: question.paragraphIndex, questionId: question.id, correct, confidence,
         selectedAnswer: selected, knowledgeUnitId: question.knowledgeUnitId || undefined,
+        interventionId,
       });
       // Evidence-silo fix (step 2): same shape response-signals.js's own
       // deterministic path already produces for the inline card — reused,
       // not duplicated.
-      persistQuizEvidence(responseSignals.answer(selected, question, confidence));
+      persistQuizEvidence(responseSignals.answer(selected, question, confidence, interventionId));
 
       appendNextButton(card, record, index);
     };
@@ -322,11 +356,12 @@ function renderQuestion(record, index) {
         submitQuizOutcome({
           paragraphIndex: question.paragraphIndex, questionId: question.id, confidence,
           selectedAnswer: null, knowledgeUnitId: question.knowledgeUnitId || undefined,
+          interventionId,
         });
         // Evidence-silo fix (step 2): adversarial is never graded inline
         // either — respond() already records correct: null for exactly
         // that reason, unchanged here.
-        persistQuizEvidence(responseSignals.respond(answerText, confidence));
+        persistQuizEvidence(responseSignals.respond(answerText, confidence, interventionId));
         appendNextButton(card, record, index);
         return;
       }
@@ -378,12 +413,13 @@ function renderQuestion(record, index) {
         paragraphIndex: question.paragraphIndex, questionId: question.id,
         correct: verdict === 'unknown' ? undefined : verdict === 'correct',
         confidence, selectedAnswer: null, knowledgeUnitId: question.knowledgeUnitId || undefined,
+        interventionId,
       });
       // Evidence-silo fix (step 2): the same already-safety-checked verdict
       // shown to the reader and written to quiz-store above — never the raw
       // graded.verdict, for the identical scenario-can't-be-"incorrect"
       // reason that check exists in the first place.
-      persistQuizEvidence(responseSignals.answerGraded(answerText, verdict, confidence));
+      persistQuizEvidence(responseSignals.answerGraded(answerText, verdict, confidence, interventionId));
 
       appendNextButton(card, record, index);
     };
