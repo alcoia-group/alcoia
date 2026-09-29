@@ -388,7 +388,6 @@ async function boot() {
     drifting:   'nudge',
     skimming:   'none',
     on_pace:    'none',
-    absent:     'none',
     unknown:    'none',
   });
   const SIM_KEYS = Object.freeze({
