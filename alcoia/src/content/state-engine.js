@@ -11,12 +11,27 @@
  * substitutes a plausible-looking state for missing data.
  */
 
+/* ABSENT existed here until the intelligence-architecture audit (see the
+ * repo's gap-analysis report) confirmed no detector, self-report, or signal
+ * anywhere in this file — or anywhere downstream — ever produced it.
+ * intervention-policy.js and focus-ruler.js both carried a permanently-dead
+ * branch for it. Removed rather than kept as an unreachable placeholder: a
+ * state nothing can produce is worse than no state, because it reads as
+ * "handled" to anyone skimming the consumer code. If a real passive
+ * absence detector (e.g. sustained tab-blur with no return) is built later,
+ * re-add it then, backed by that detector, not before.
+ *
+ * DRIFTING stays. It is real and reachable today, but only through the
+ * explicit self-report "not interested / lost focus" path below (see
+ * SELF_REPORT.DISENGAGED) — there is no passive drifting detector. The
+ * `isSelfReported` field on the object `update()` returns is what lets a
+ * caller tell that apart from an inferred state; do not read the mere
+ * presence of DRIFTING as evidence that a passive signal detects it. */
 export const STATES = Object.freeze({
   ON_PACE:    'on_pace',
   SKIMMING:   'skimming',
   STRUGGLING: 'struggling',
   DRIFTING:   'drifting',
-  ABSENT:     'absent',
   UNKNOWN:    'unknown',
 });
 
@@ -448,6 +463,7 @@ export function createReadingStateEngine(config = {}) {
     evidence: [],
     at: now(),
     signal: null,
+    isSelfReported: false,
   };
 
   function emit(next) {
@@ -498,6 +514,13 @@ export function createReadingStateEngine(config = {}) {
           evidence: proposal.evidence || [],
           at,
           signal: proposal.signal || null,
+          // Additive, same shape as substate above. True only when the
+          // reader directly told the system what's happening (fromSignal()'s
+          // self_report branch) rather than the engine inferring it from
+          // behaviour — the honest way to tell DRIFTING (self-report only,
+          // see STATES' own comment) apart from an inferred state, without
+          // every caller re-deriving it from `signal?.type` by hand.
+          isSelfReported: proposal.signal?.type === 'self_report',
         }
       : {
           label: STATES.UNKNOWN,
@@ -506,6 +529,7 @@ export function createReadingStateEngine(config = {}) {
           evidence: [],
           at,
           signal: null,
+          isSelfReported: false,
         };
 
     return emit(next);
