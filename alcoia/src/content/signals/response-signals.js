@@ -42,6 +42,37 @@ export function createResponseSignals(opts = {}) {
   let asked = null;
   let pending = null;
   const history = [];
+  // Intelligence-architecture audit, step 5. Concurrency correctness: this
+  // module has always tracked "the pending question" as a single `asked`
+  // variable, which is correct only if at most one question can ever be
+  // awaiting an answer at a time. That invariant does NOT actually hold —
+  // confirmed by reading the real call sites, not assumed: host.js's
+  // handleAsk (an orchestrator-triggered inline ask) and runSessionRecall
+  // (a reader-initiated review) both render through the SAME questionCard
+  // instance, and ui-controller.js's own MAX_POPUPS is 5, not 1 — a second
+  // question can genuinely render while a first is still open and
+  // unanswered (orchestrator.js's own interventionInFlight guard only
+  // covers the async gap between a decision and a card actually reaching
+  // the screen, not the whole time the card stays open waiting on the
+  // reader). Before interventionId existed, answering the FIRST of two such
+  // cards after the second had already rendered would silently do nothing
+  // (`if (!asked) return null`, since the second present() had already
+  // overwritten `asked`) — a real, pre-existing bug, only surfaced now
+  // because step 5 needs unambiguous per-intervention attribution anyway.
+  //
+  // Fixed WITHOUT changing this module's existing public shape: `asked`
+  // stays exactly as it was (every caller that never mentions an
+  // interventionId — every test written before this item, and quiz.js's
+  // own sequential, one-question-at-a-time UI, which has no concurrency
+  // risk to fix) keeps working byte-for-byte as before, via `asked`.
+  // Additionally, WHEN a caller supplies context.interventionId to
+  // present(), that record is ALSO indexed here, keyed by id; a later
+  // answer()/answerGraded()/respond()/dismiss()/revise()/markScrollBack()
+  // call that supplies the SAME interventionId resolves THAT specific
+  // record instead of `asked` — so two concurrently open cards, each
+  // presented with their own interventionId, can now be answered in any
+  // order without cross-contaminating or silently dropping either one.
+  const pendingByIntervention = new Map();
 
   /* Call when the question card goes on screen. */
   function present(question, context = {}) {
@@ -91,20 +122,59 @@ export function createResponseSignals(opts = {}) {
       // reader of history() can tell the two apart if it ever matters,
       // without merging the two sources into one undifferentiated pool.
       source: context.source === 'quiz' ? 'quiz' : 'inline',
+      // Intelligence-architecture audit, step 5. Null-safe, additive, same
+      // shape as knowledgeUnitId above — a caller that predates this field
+      // (every existing test, quiz.js before this item) simply never sets
+      // it, and `asked` alone still resolves every terminal call exactly as
+      // before. See this factory's own top-of-closure comment for why a
+      // second index is also needed.
+      interventionId: typeof context.interventionId === 'string' && context.interventionId ? context.interventionId : null,
     };
+    if (asked.interventionId) pendingByIntervention.set(asked.interventionId, asked);
     return asked;
   }
 
+  /* Resolves which pending record a terminal call means: the one keyed by
+   * `interventionId` when the caller supplies one and it is still pending,
+   * otherwise the single shared `asked` slot — the original, unchanged
+   * behaviour for every caller that doesn't know about interventionId at
+   * all. Never falls back to `asked` when an interventionId WAS supplied
+   * but doesn't (or no longer) resolve to anything — that would silently
+   * resolve the wrong card's pending state under exactly the concurrency
+   * this mechanism exists to prevent. */
+  function resolvePending(interventionId) {
+    if (interventionId) return pendingByIntervention.get(interventionId) || null;
+    return asked;
+  }
+
+  /* Removes `target` from whichever tracking structure(s) hold it — the map
+   * entry (if it came from one) and/or the shared `asked` slot (if `asked`
+   * still happens to be this exact record, the common single-intervention
+   * case). Deliberately checks `asked === target` by reference rather than
+   * unconditionally nulling `asked` — the whole point of this fix is that
+   * resolving ONE pending intervention must never clobber a DIFFERENT one
+   * still sitting in `asked`. */
+  function clearPending(target) {
+    if (!target) return;
+    if (target.interventionId) pendingByIntervention.delete(target.interventionId);
+    if (asked === target) asked = null;
+  }
+
   /* The reader changed their selection before committing. Recorded, not acted
-   * on — hesitation is not the same as being wrong. */
-  function revise() {
-    if (asked) asked.revisions += 1;
+   * on — hesitation is not the same as being wrong. interventionId (step 5,
+   * optional): resolves the specific pending card this revision belongs to
+   * under concurrency; omitted, behaves exactly as before (the shared
+   * `asked` slot). */
+  function revise(interventionId) {
+    const target = resolvePending(interventionId);
+    if (target) target.revisions += 1;
   }
 
   /* They went back to the passage before answering, which is a legitimate
    * thing to do and is worth knowing when reading the receipt later. */
-  function markScrollBack() {
-    if (asked) asked.scrolledBack = true;
+  function markScrollBack(interventionId) {
+    const target = resolvePending(interventionId);
+    if (target) target.scrolledBack = true;
   }
 
   /* Call with the reader's answer. Produces the signal the engine consumes.
@@ -115,11 +185,19 @@ export function createResponseSignals(opts = {}) {
    * it at commit time cannot leak, since it is asked identically regardless
    * of what the answer turns out to be (CLAUDE.md, confidence calibration).
    * Skippable — a reader who didn't rate it gets null here, not a forced
-   * guess, and null must never be treated as either 'low' or 'high'. */
-  function answer(chosenIndex, question, confidence) {
-    if (!asked) return null;
+   * guess, and null must never be treated as either 'low' or 'high'.
+   *
+   * interventionId (step 5, optional trailing param, same shape on every
+   * terminal function below): when supplied, resolves THIS SPECIFIC
+   * pending card via the map rather than the shared `asked` slot — see
+   * this factory's own top-of-closure comment. Omitted, every existing
+   * caller (before this item, and quiz.js's own single-question-at-a-time
+   * flow) behaves byte-for-byte as before. */
+  function answer(chosenIndex, question, confidence, interventionId) {
+    const target = resolvePending(interventionId);
+    if (!target) return null;
     const correct = Number(chosenIndex) === Number(question?.answerIndex);
-    const latencyMs = now() - asked.askedAt;
+    const latencyMs = now() - target.askedAt;
     const normalizedConfidence = confidence === 'low' || confidence === 'high' ? confidence : null;
 
     const record = {
@@ -147,23 +225,24 @@ export function createResponseSignals(opts = {}) {
       // "deterministic" from "just didn't say", which is worse than saying
       // so plainly.
       gradingMethod: 'deterministic',
-      level: asked.level,
+      level: target.level,
       latencyMs,
       slow: latencyMs > slowAnswerMs,
-      revisions: asked.revisions,
-      scrolledBack: asked.scrolledBack,
-      span: asked.span,
-      paragraphKey: asked.paragraphKey,
-      knowledgeUnitId: asked.knowledgeUnitId,
-      paragraphIndex: asked.paragraphIndex,
-      questionId: asked.questionId,
-      wasExplorationSample: asked.wasExplorationSample,
-      source: asked.source,
+      revisions: target.revisions,
+      scrolledBack: target.scrolledBack,
+      span: target.span,
+      paragraphKey: target.paragraphKey,
+      knowledgeUnitId: target.knowledgeUnitId,
+      paragraphIndex: target.paragraphIndex,
+      questionId: target.questionId,
+      wasExplorationSample: target.wasExplorationSample,
+      source: target.source,
+      interventionId: target.interventionId,
     };
 
     history.push(record);
     pending = record;
-    asked = null;
+    clearPending(target);
     return record;
   }
 
@@ -176,9 +255,10 @@ export function createResponseSignals(opts = {}) {
    * the same as a dismissal, per invariants 5/9. This file does not decide
    * what confidence a model verdict carries — see this file's own header —
    * that stays entirely state-engine.js's call. */
-  function answerGraded(answerText, verdict, confidence) {
-    if (!asked) return null;
-    const latencyMs = now() - asked.askedAt;
+  function answerGraded(answerText, verdict, confidence, interventionId) {
+    const target = resolvePending(interventionId);
+    if (!target) return null;
+    const latencyMs = now() - target.askedAt;
     const normalizedConfidence = confidence === 'low' || confidence === 'high' ? confidence : null;
     const normalizedVerdict = verdict === 'correct' || verdict === 'incorrect' ? verdict : 'unknown';
 
@@ -188,24 +268,25 @@ export function createResponseSignals(opts = {}) {
       correct: normalizedVerdict === 'unknown' ? null : normalizedVerdict === 'correct',
       confidence: normalizedConfidence,
       gradingMethod: 'model',
-      level: asked.level,
+      level: target.level,
       answerText: String(answerText || '').slice(0, MAX_ANSWER_TEXT_CHARS),
       latencyMs,
       slow: latencyMs > slowAnswerMs,
-      revisions: asked.revisions,
-      scrolledBack: asked.scrolledBack,
-      span: asked.span,
-      paragraphKey: asked.paragraphKey,
-      knowledgeUnitId: asked.knowledgeUnitId,
-      paragraphIndex: asked.paragraphIndex,
-      questionId: asked.questionId,
-      wasExplorationSample: asked.wasExplorationSample,
-      source: asked.source,
+      revisions: target.revisions,
+      scrolledBack: target.scrolledBack,
+      span: target.span,
+      paragraphKey: target.paragraphKey,
+      knowledgeUnitId: target.knowledgeUnitId,
+      paragraphIndex: target.paragraphIndex,
+      questionId: target.questionId,
+      wasExplorationSample: target.wasExplorationSample,
+      source: target.source,
+      interventionId: target.interventionId,
     };
 
     history.push(record);
     pending = record;
-    asked = null;
+    clearPending(target);
     return record;
   }
 
@@ -226,9 +307,10 @@ export function createResponseSignals(opts = {}) {
    * the assignment-outcomes item) the outcomes endpoint. Normalized the
    * same way answer()/answerGraded() already do, immediately above; this
    * does not touch `correct`/`gradingMethod`/`subtype` at all. */
-  function respond(answerText, confidence) {
-    if (!asked) return null;
-    const latencyMs = now() - asked.askedAt;
+  function respond(answerText, confidence, interventionId) {
+    const target = resolvePending(interventionId);
+    if (!target) return null;
+    const latencyMs = now() - target.askedAt;
     const normalizedConfidence = confidence === 'low' || confidence === 'high' ? confidence : null;
 
     const record = {
@@ -237,24 +319,25 @@ export function createResponseSignals(opts = {}) {
       correct: null,
       confidence: normalizedConfidence,
       gradingMethod: 'none',
-      level: asked.level,
+      level: target.level,
       answerText: String(answerText || '').slice(0, MAX_ANSWER_TEXT_CHARS),
       latencyMs,
       slow: latencyMs > slowAnswerMs,
-      revisions: asked.revisions,
-      scrolledBack: asked.scrolledBack,
-      span: asked.span,
-      paragraphKey: asked.paragraphKey,
-      knowledgeUnitId: asked.knowledgeUnitId,
-      paragraphIndex: asked.paragraphIndex,
-      questionId: asked.questionId,
-      wasExplorationSample: asked.wasExplorationSample,
-      source: asked.source,
+      revisions: target.revisions,
+      scrolledBack: target.scrolledBack,
+      span: target.span,
+      paragraphKey: target.paragraphKey,
+      knowledgeUnitId: target.knowledgeUnitId,
+      paragraphIndex: target.paragraphIndex,
+      questionId: target.questionId,
+      wasExplorationSample: target.wasExplorationSample,
+      source: target.source,
+      interventionId: target.interventionId,
     };
 
     history.push(record);
     pending = record;
-    asked = null;
+    clearPending(target);
     return record;
   }
 
@@ -262,24 +345,26 @@ export function createResponseSignals(opts = {}) {
    * and must not be scored as one — it is a refusal to be tested, which is
    * their right, and the system should read it as "stop asking" rather than
    * as evidence of anything about their comprehension. */
-  function dismiss() {
-    if (!asked) return null;
+  function dismiss(interventionId) {
+    const target = resolvePending(interventionId);
+    if (!target) return null;
     const record = {
       type: 'response',
       subtype: 'dismissed',
       correct: null,
       gradingMethod: 'none',
-      level: asked.level,
-      latencyMs: now() - asked.askedAt,
-      span: asked.span,
-      paragraphKey: asked.paragraphKey,
-      knowledgeUnitId: asked.knowledgeUnitId,
-      wasExplorationSample: asked.wasExplorationSample,
-      source: asked.source,
+      level: target.level,
+      latencyMs: now() - target.askedAt,
+      span: target.span,
+      paragraphKey: target.paragraphKey,
+      knowledgeUnitId: target.knowledgeUnitId,
+      wasExplorationSample: target.wasExplorationSample,
+      source: target.source,
+      interventionId: target.interventionId,
     };
     history.push(record);
     pending = record;
-    asked = null;
+    clearPending(target);
     return record;
   }
 

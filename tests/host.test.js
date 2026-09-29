@@ -1310,6 +1310,64 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     expect(typeof seenBody.knowledge_unit_id).toBe('string');
     expect(seenBody.knowledge_unit_id).toMatch(/^k[0-9a-f]+$/);
   });
+
+  /* Intelligence-architecture audit, step 5 — the causal chain end to end:
+   * a real decision.interventionId (the id intervention-policy.js would
+   * have minted for this 'ask' decision) reaches BOTH a real
+   * .../interventions POST (fired the moment the card renders, before any
+   * answer) AND the .../outcomes POST the eventual answer produces — and
+   * both carry the SAME id, proving genuine linkage rather than two
+   * independently-generated values. */
+  it('intervention_id flows end to end: a real decision.interventionId reaches both the interventions report and the outcomes submission, with matching ids', async () => {
+    const calls = [];
+    const fetchImpl = vi.fn((url, options) => { calls.push({ url, options }); return { ok: true, status: 200, data: { recorded: true } }; });
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'iv-integration-test span' }] } });
+    mockProxyFetch(fetchImpl);
+
+    const { host } = await createHost(assignmentDeps());
+    document.body.innerHTML = '<p id="t">A paragraph used specifically for the step-5 intervention-id integration test, long enough to pass fetchQuestions\' own length floor of 120 characters.</p>';
+    // The exact shape intervention-policy.js's own evaluate() returns for an
+    // allowed 'ask' decision (see that module's own header) — hand-built
+    // here since this test is about handleAsk's own wiring, not
+    // re-exercising intervention-policy.js's decision logic (already
+    // covered by tests/intervention-policy.test.js).
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_1700000000000_abc123' };
+    const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 7);
+    expect(shown).toBe(true);
+
+    // Reported the moment the card reached the screen — before any answer.
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
+    const interventionCall = calls.find((c) => c.url.endsWith('/interventions'));
+    const interventionBody = JSON.parse(interventionCall.options.body);
+    expect(interventionBody.intervention_id).toBe('iv_1700000000000_abc123');
+    expect(interventionBody.type).toBe('ask');
+    expect(interventionBody.paragraph_index).toBe(7);
+
+    queryAlcoia('.sra-q-option[data-index="0"]').click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
+    const outcomeBody = JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).options.body);
+    // THE LINKAGE: the exact same id the intervention was reported under.
+    expect(outcomeBody.intervention_id).toBe('iv_1700000000000_abc123');
+    expect(outcomeBody.paragraph_index).toBe(7);
+    expect(outcomeBody.correct).toBe(true);
+  });
+
+  it('a "nudge" decision (no interventionId — nothing for an outcome to attribute to) reports no intervention at all', async () => {
+    const calls = [];
+    const fetchImpl = vi.fn((url, options) => { calls.push({ url, options }); return { ok: true, status: 200, data: { recorded: true } }; });
+    mockProxyFetch(fetchImpl);
+
+    const { host } = await createHost(assignmentDeps());
+    document.body.innerHTML = '<p id="t">Some text</p>';
+    const shown = await host.onIntervention({ action: 'nudge', interventionId: null }, {}, document.getElementById('t'), 2);
+    expect(shown).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
+  });
 });
 
 /* Item DC-1a — the same assignmentId+getSession gate as outcome reporting

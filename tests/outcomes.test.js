@@ -221,3 +221,36 @@ describe('submit — explanation_preceded_attempt (item DC-2)', () => {
     expect(body).not.toHaveProperty('explanation_preceded_attempt');
   });
 });
+
+/* Intelligence-architecture audit, step 5 — intervention_id, additive, same
+ * shape as knowledge_unit_id (step 3): sent only when the caller has a
+ * real one, never fabricated, never an explicit null. */
+describe('submit — intervention_id (step 5)', () => {
+  async function bodyFor(fields) {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
+    await m.submit(fields);
+    return seenBody;
+  }
+
+  it('a real interventionId is sent as intervention_id', async () => {
+    const body = await bodyFor({ paragraphIndex: 1, questionId: 'q-1', correct: true, interventionId: 'iv_123_abc' });
+    expect(body.intervention_id).toBe('iv_123_abc');
+  });
+
+  it('never mentioned at all (undefined) stays fully absent — every pre-step-5 caller, unchanged', async () => {
+    const body = await bodyFor({ paragraphIndex: 1, struggled: true });
+    expect(body).not.toHaveProperty('intervention_id');
+  });
+
+  it('an empty string is treated the same as absent, never sent as an empty value', async () => {
+    const body = await bodyFor({ paragraphIndex: 1, struggled: true, interventionId: '' });
+    expect(body).not.toHaveProperty('intervention_id');
+  });
+
+  it('a non-string value is not sent through as-is', async () => {
+    const body = await bodyFor({ paragraphIndex: 1, struggled: true, interventionId: 12345 });
+    expect(body).not.toHaveProperty('intervention_id');
+  });
+});

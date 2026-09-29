@@ -22,6 +22,9 @@
  * `knowledge_unit_id` (intelligence-architecture audit, step 3) IS
  * genuinely accepted and persisted server-side as of this same item — see
  * this module's own comment on it below for what it is and when it's sent.
+ * `intervention_id` (intelligence-architecture audit, step 5) is likewise
+ * genuinely accepted and persisted — see this module's own comment on it
+ * below.
  * `correct` requires `question_id` to also be present (server-enforced,
  * 422 correct_requires_question_id otherwise) — this module does not
  * duplicate that check; its two real callers in host.js only ever set
@@ -71,7 +74,7 @@ export function createOutcomesManager(opts = {}) {
   async function submit({
     paragraphIndex, struggled, questionId, correct, confidence, reached,
     substate, selfReported, source, selectedAnswer, explanationPrecededAttempt,
-    knowledgeUnitId,
+    knowledgeUnitId, interventionId,
   } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
@@ -147,6 +150,19 @@ export function createOutcomesManager(opts = {}) {
     // it, leaving this key fully absent — identical to every field above.
     if (typeof knowledgeUnitId === 'string' && knowledgeUnitId) {
       body.knowledge_unit_id = knowledgeUnitId;
+    }
+
+    // Intelligence-architecture audit, step 5 — the specific intervention
+    // (a question actually presented to the reader) this outcome is the
+    // response to, when there was one. Additive and optional, same shape as
+    // knowledge_unit_id just above: sent only when the record actually
+    // carries one (an ambient struggle signal, or a dismissed/abandoned
+    // interaction with nothing answered, has none to send), never
+    // fabricated, never sent as an explicit null — an absent intervention
+    // id is not itself a reportable observation any more than an absent
+    // knowledge-unit id is.
+    if (typeof interventionId === 'string' && interventionId) {
+      body.intervention_id = interventionId;
     }
 
     try {
