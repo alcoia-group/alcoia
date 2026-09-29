@@ -117,5 +117,13 @@
     // -> { recorded: true }. Not nested under ASSIGNMENTS_URL like outcomes —
     // this is a flat route with assignmentId as a body field, not a path param.
     KINEMATICS_URL: BACKEND_ORIGIN + '/api/sessions/kinematics',
+    // Intelligence-architecture audit, step 7 — src/shared/retention.js's
+    // getDue(). Confirmed by reading alcoiaServer's src/http/routes/
+    // knowledge-state.js directly: GET here (Authorization: Bearer only,
+    // no path/body params — self-scoped to the caller's own account) ->
+    // { candidates: [{ knowledgeUnitId, retentionStage, nextRetrievalAt }] }.
+    // Flat, like KINEMATICS_URL — Knowledge State has no assignment_id
+    // column, so there is nothing to nest this under.
+    KNOWLEDGE_STATE_DUE_URL: BACKEND_ORIGIN + '/api/knowledge-state/due',
   });
 })(typeof self !== 'undefined' ? self : this);
