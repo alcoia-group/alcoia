@@ -37,6 +37,17 @@ const AI_CALL_CEILING_WINDOW_MS = 600_000;  // per 10 minutes
 const QUIZ_TARGET_COUNT  = 8;
 const QUIZ_MIN_QUESTIONS = 5;
 
+// Evidence-silo fix (intelligence-architecture audit, step 2). quiz.js runs
+// as a separate extension page/tab, not this content script, so it cannot
+// reach this file's in-memory `responseSignals` instance directly — there is
+// no shared JS realm between them. chrome.storage.local is the bridge,
+// mirroring the SAME handoff pattern sra_quiz_pending already uses in the
+// other direction (this file writes it, quiz.js reads it). The cap that
+// keeps sra_quiz_evidence bounded (count-based, never time-pruned — the same
+// shape session-tracker.js's own MAX_SESSIONS already uses for local reading
+// history in this codebase) lives in quiz.js, the writer — this file only
+// ever reads, never trims, so there is nothing to bound here.
+
 export async function createHost(deps) {
   const {
     loadModule,
@@ -410,16 +421,42 @@ export async function createHost(deps) {
   // ── Epistemic engine (item 44) ─────────────────────────────────────────
   // Selects the next question TYPE from demonstrated failure rather than
   // rotating formats — see that module's own header for the ladder and its
-  // rules. Pure: it only ever reads responseSignals.history(), the same
-  // session-scoped, in-memory record every other consumer of that history
-  // (the receipt, sessionRecall.recordAnswered) already reads — nothing new
-  // is stored or transmitted to make this work. Used identically by every
-  // place a question gets generated below (handleAsk, runSessionRecall,
-  // runQuiz) — "same engine, same rules" is structural, not a convention to
-  // remember, since all three call this one function.
+  // rules. Pure: it only ever reads a history array — nothing new is stored
+  // or transmitted to make this work. Used identically by every place a
+  // question gets generated below (handleAsk, runSessionRecall, runQuiz) —
+  // "same engine, same rules" is structural, not a convention to remember,
+  // since all three call this one function.
   const engineModule = await loadModule('src/content/epistemic-engine.js');
-  function pickLevel(paragraphKey) {
-    return engineModule.pickLevelForConcept(paragraphKey, responseSignals.history());
+
+  // Evidence-silo fix (step 2): reads whatever quiz.js has recorded for THIS
+  // document (never another one — same partitioning quiz-store.js's own
+  // documentKey index already uses) since it can't write into
+  // responseSignals directly. Read-only here, non-destructive: entries stay
+  // in storage for the next read too, bounded by QUIZ_EVIDENCE_STORAGE_CAP
+  // at write time (quiz.js) rather than pruned at read time. A malformed or
+  // missing key degrades to "no quiz evidence yet", never a thrown error.
+  async function readQuizEvidence(documentKey) {
+    if (!documentKey) return [];
+    try {
+      const { sra_quiz_evidence: all } = await new Promise((resolve) =>
+        chrome.storage.local.get({ sra_quiz_evidence: [] }, resolve));
+      return (Array.isArray(all) ? all : []).filter((r) => r && r.documentKey === documentKey);
+    } catch (e) { return []; }
+  }
+
+  // pickLevel is now async only to fold in that storage read — the ladder
+  // decision itself (pickLevelForConcept) is unchanged and still pure/sync.
+  // Ordering caveat, deliberately not solved here: quiz evidence is appended
+  // AFTER responseSignals.history() rather than interleaved by time, since
+  // neither array carries an absolute timestamp today. This is correct for
+  // the overwhelmingly common case (the quiz happens, then the reader
+  // returns to this tab) and wrong only in the rare case where an inline
+  // answer on the same paragraph happens between two quiz answers — a real,
+  // disclosed limitation, not something worth a timestamp/sort mechanism
+  // for this step.
+  async function pickLevel(paragraphKey) {
+    const quizEvidence = await readQuizEvidence(orchestratorRef?.documentKey?.() || null);
+    return engineModule.pickLevelForConcept(paragraphKey, [...responseSignals.history(), ...quizEvidence]);
   }
 
   const questionCard = cardModule.createQuestionCard({
@@ -510,11 +547,20 @@ export async function createHost(deps) {
         // refuses to submit those rather than guessing one.
         for (const p of picked) {
           const paragraphKey = p.text.slice(0, 80).trim();
-          const level = pickLevel(paragraphKey);
+          const level = await pickLevel(paragraphKey);
           const opts = { count: Math.max(1, Math.round(QUIZ_TARGET_COUNT / picked.length)), kind: 'recall' };
           if (level !== 'recognition') opts.level = level;
           const qs = await fetchQuestions(p.text, opts);
-          for (const q of qs) q.paragraphIndex = Number.isInteger(p.paragraphIndex) ? p.paragraphIndex : null;
+          for (const q of qs) {
+            q.paragraphIndex = Number.isInteger(p.paragraphIndex) ? p.paragraphIndex : null;
+            // Evidence-silo fix (step 2): the same key pickLevel() above was
+            // just called with — computed once, attached here rather than
+            // recomputed later, so a quiz answer to this question can be
+            // matched back to "this concept" by quiz.js the same way an
+            // inline answer already is. paragraphIndex (above) alone isn't
+            // enough for that: pickLevelForConcept() matches on paragraphKey.
+            q.paragraphKey = paragraphKey;
+          }
           questions.push(...qs);
         }
       } else {
@@ -531,7 +577,7 @@ export async function createHost(deps) {
         const groups = new Map(); // level -> paragraph texts
         for (const p of picked) {
           const paragraphKey = p.text.slice(0, 80).trim();
-          const level = pickLevel(paragraphKey);
+          const level = await pickLevel(paragraphKey);
           if (!groups.has(level)) groups.set(level, []);
           groups.get(level).push(p.text);
         }
@@ -640,7 +686,7 @@ export async function createHost(deps) {
         // Item 44: what level to ask THIS concept at is decided from the
         // reader's own session history for it, not always recognition —
         // the same pickLevel() every question-generating path below uses.
-        const level = pickLevel(paragraphKey);
+        const level = await pickLevel(paragraphKey);
         const opts = { count: 1 };
         if (level !== 'recognition') opts.level = level;
         const qs = await fetchQuestions(entry.text, opts);
@@ -699,7 +745,7 @@ export async function createHost(deps) {
     // budget already refuses to ask about the same paragraph twice
     // automatically; a higher rung only comes up if this exact paragraph
     // was already tested via a review or the quiz earlier this session.
-    const level = pickLevel(paragraphKey);
+    const level = await pickLevel(paragraphKey);
     const opts = level !== 'recognition' ? { level } : {};
 
     const questions = await fetchQuestions(text, opts);
