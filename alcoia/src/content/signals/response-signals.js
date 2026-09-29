@@ -69,6 +69,19 @@ export function createResponseSignals(opts = {}) {
       // exploration sampling: labels not conditioned on the detector's own
       // decision are the point, so they must stay identifiable downstream.
       wasExplorationSample: context.wasExplorationSample === true,
+      // Evidence-silo fix (intelligence-architecture audit, step 2): where a
+      // record came from. Every existing caller (question-card.js, both from
+      // the floating card and session-recall's review flow) is the in-page
+      // card and never sets this, so the default is 'inline' — matching what
+      // was already true of every record this module has ever produced.
+      // quiz.js is the one caller that now passes 'quiz' explicitly, using
+      // this exact same present()/answer()/answerGraded()/respond() flow
+      // rather than hand-building a record — see quiz.js's own header.
+      // pickLevelForConcept()/isSystematicallyOverconfident() (epistemic-
+      // engine.js) do not read this field at all; it exists so a future
+      // reader of history() can tell the two apart if it ever matters,
+      // without merging the two sources into one undifferentiated pool.
+      source: context.source === 'quiz' ? 'quiz' : 'inline',
     };
     return asked;
   }
@@ -135,6 +148,7 @@ export function createResponseSignals(opts = {}) {
       paragraphIndex: asked.paragraphIndex,
       questionId: asked.questionId,
       wasExplorationSample: asked.wasExplorationSample,
+      source: asked.source,
     };
 
     history.push(record);
@@ -175,6 +189,7 @@ export function createResponseSignals(opts = {}) {
       paragraphIndex: asked.paragraphIndex,
       questionId: asked.questionId,
       wasExplorationSample: asked.wasExplorationSample,
+      source: asked.source,
     };
 
     history.push(record);
@@ -222,6 +237,7 @@ export function createResponseSignals(opts = {}) {
       paragraphIndex: asked.paragraphIndex,
       questionId: asked.questionId,
       wasExplorationSample: asked.wasExplorationSample,
+      source: asked.source,
     };
 
     history.push(record);
@@ -246,6 +262,7 @@ export function createResponseSignals(opts = {}) {
       span: asked.span,
       paragraphKey: asked.paragraphKey,
       wasExplorationSample: asked.wasExplorationSample,
+      source: asked.source,
     };
     history.push(record);
     pending = record;

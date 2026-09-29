@@ -451,3 +451,57 @@ describe('paragraphIndex/questionId context (item S6/E4 follow-up)', () => {
     expect(rec.paragraphIndex).toBeNull();
   });
 });
+
+/* Evidence-silo fix (intelligence-architecture audit, step 2): quiz.js runs
+ * in a separate tab from every existing caller of this module (host.js's
+ * question card and session-recall review flow) and now uses this exact
+ * same present()/answer()/answerGraded()/respond() API, tagged source:
+ * 'quiz'. This module itself does not merge histories or know about
+ * documents — see host.js's pickLevel()/readQuizEvidence() for that. What
+ * belongs here is only: the field exists, defaults correctly for every
+ * existing (inline) caller, and survives on every record shape this module
+ * can produce. */
+describe('source (evidence-silo fix, step 2)', () => {
+  it("defaults to 'inline' when a caller never sets it — every pre-existing caller, unchanged", () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { paragraphKey: 'p1' });
+    expect(r.answer(0, QUESTION).source).toBe('inline');
+  });
+
+  it("is 'quiz' only when a caller explicitly passes it, never inferred another way", () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { paragraphKey: 'p1', source: 'quiz' });
+    expect(r.answer(0, QUESTION).source).toBe('quiz');
+  });
+
+  it("an unrecognised source value falls back to 'inline' rather than being passed through as-is", () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { source: 'something-else' });
+    expect(r.answer(0, QUESTION).source).toBe('inline');
+  });
+
+  it('carries through every record-producing function, not just answer()', () => {
+    const graded = createResponseSignals({ now: fixedClock().now });
+    graded.present({ ...QUESTION, level: 'free_recall' }, { source: 'quiz' });
+    expect(graded.answerGraded('an answer', 'correct', 'high').source).toBe('quiz');
+
+    const responded = createResponseSignals({ now: fixedClock().now });
+    responded.present({ ...QUESTION, level: 'adversarial' }, { source: 'quiz' });
+    expect(responded.respond('an argument').source).toBe('quiz');
+
+    const dismissed = createResponseSignals({ now: fixedClock().now });
+    dismissed.present(QUESTION, { source: 'quiz' });
+    expect(dismissed.dismiss().source).toBe('quiz');
+  });
+
+  it('history() preserves each record\'s own source when inline and quiz-tagged records are mixed', () => {
+    const r = createResponseSignals({ now: fixedClock().now });
+    r.present(QUESTION, { paragraphKey: 'inline-concept' });
+    r.answer(0, QUESTION);
+    r.present(QUESTION, { paragraphKey: 'quiz-concept', source: 'quiz' });
+    r.answer(0, QUESTION);
+
+    const sources = r.history().map((h) => h.source);
+    expect(sources).toEqual(['inline', 'quiz']);
+  });
+});
