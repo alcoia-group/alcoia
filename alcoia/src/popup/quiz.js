@@ -22,6 +22,7 @@ import { createGradingClient } from '../shared/grading-client.js';
 import { createRateLimiter } from '../shared/rate-limit.js';
 import { createSessionManager } from '../shared/session.js';
 import { createOutcomesManager } from '../shared/outcomes.js';
+import { createResponseSignals } from '../content/signals/response-signals.js';
 
 const FREE_TEXT_LEVELS = ['free_recall', 'scenario', 'adversarial'];
 // Mirrors tests/contract/grading.js's MAX_ANSWER_CHARS — enforced via the
@@ -69,6 +70,30 @@ if (assignmentId) {
     if (!Number.isInteger(fields.paragraphIndex) || fields.paragraphIndex < 0) return;
     outcomesManager.submit({ ...fields, source: 'quiz' }).catch(() => {});
   };
+}
+
+// Evidence-silo fix (intelligence-architecture audit, step 2): local-only,
+// unconditional — unlike submitQuizOutcome above, this has nothing to do
+// with assignments or the server and runs for every quiz, ordinary reading
+// included. Reuses the SAME response-signals.js module host.js's in-page
+// question card already uses (present()/answer()/answerGraded()/respond()),
+// tagged source: 'quiz', rather than hand-building a differently-shaped
+// record. This page is a separate tab from the content script that
+// generated the quiz, so its own responseSignals instance here is NOT the
+// same object as host.js's — there is no shared JS realm to reuse directly.
+// What crosses that boundary is chrome.storage.local, the same primitive
+// sra_quiz_pending already uses in the opposite direction; host.js's own
+// pickLevel() reads this back for the matching document. See that file's
+// own comment on the cap and its known event-ordering limitation.
+const QUIZ_EVIDENCE_STORAGE_CAP = 100;
+const responseSignals = createResponseSignals();
+function persistQuizEvidence(record) {
+  if (!record) return;
+  chrome.storage.local.get({ sra_quiz_evidence: [] }, ({ sra_quiz_evidence: all }) => {
+    const updated = [...(Array.isArray(all) ? all : []), { documentKey, ...record }]
+      .slice(-QUIZ_EVIDENCE_STORAGE_CAP);
+    chrome.storage.local.set({ sra_quiz_evidence: updated });
+  });
 }
 
 // Set once boot() reads the sra_backend_url setting; falls back to
@@ -144,6 +169,21 @@ function renderQuestion(record, index) {
 
   const level = FREE_TEXT_LEVELS.includes(question.level) ? question.level : 'recognition';
 
+  // Evidence-silo fix (step 2): present() before any terminal call, same
+  // sequencing question-card.js's own inline flow already requires.
+  // question.paragraphKey only exists when host.js's runQuiz() could
+  // attribute this question to one specific paragraph (the assignment-
+  // context generation path); the ordinary path generates some questions
+  // from several paragraphs' combined text and genuinely cannot say which
+  // one produced a given question, so paragraphKey stays absent there —
+  // present() already treats that as null, not fabricated.
+  responseSignals.present(question, {
+    paragraphKey: question.paragraphKey || null,
+    paragraphIndex: Number.isInteger(question.paragraphIndex) ? question.paragraphIndex : null,
+    questionId: typeof question.id === 'string' && question.id ? question.id : null,
+    source: 'quiz',
+  });
+
   const bodyInner = level === 'recognition'
     ? `<div class="sra-q-options">
         ${question.options.map((opt, i) =>
@@ -214,6 +254,10 @@ function renderQuestion(record, index) {
         paragraphIndex: question.paragraphIndex, questionId: question.id, correct, confidence,
         selectedAnswer: selected,
       });
+      // Evidence-silo fix (step 2): same shape response-signals.js's own
+      // deterministic path already produces for the inline card — reused,
+      // not duplicated.
+      persistQuizEvidence(responseSignals.answer(selected, question, confidence));
 
       appendNextButton(card, record, index);
     };
@@ -272,6 +316,10 @@ function renderQuestion(record, index) {
           paragraphIndex: question.paragraphIndex, questionId: question.id, confidence,
           selectedAnswer: null,
         });
+        // Evidence-silo fix (step 2): adversarial is never graded inline
+        // either — respond() already records correct: null for exactly
+        // that reason, unchanged here.
+        persistQuizEvidence(responseSignals.respond(answerText, confidence));
         appendNextButton(card, record, index);
         return;
       }
@@ -324,6 +372,11 @@ function renderQuestion(record, index) {
         correct: verdict === 'unknown' ? undefined : verdict === 'correct',
         confidence, selectedAnswer: null,
       });
+      // Evidence-silo fix (step 2): the same already-safety-checked verdict
+      // shown to the reader and written to quiz-store above — never the raw
+      // graded.verdict, for the identical scenario-can't-be-"incorrect"
+      // reason that check exists in the first place.
+      persistQuizEvidence(responseSignals.answerGraded(answerText, verdict, confidence));
 
       appendNextButton(card, record, index);
     };
