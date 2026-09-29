@@ -279,6 +279,78 @@ export function createInterventionPolicy(config = {}) {
     };
   }
 
+  /* A server-scheduled retention retrieval candidate (intelligence-
+   * architecture audit, step 7) — not derived from a detected reading
+   * state either, so like evaluateContentTrigger above it skips
+   * STATE_ACTIONS/confidence/skimming-grade. Two real differences from
+   * evaluateContentTrigger, both deliberate:
+   *
+   *   - It DOES check dismissal backoff. A retention item is a genuine
+   *     question the reader can decline exactly like an 'ask' can, so the
+   *     same "declined N in a row, hold off" signal applies — unlike
+   *     pretest's occlusion, which the reader never explicitly dismisses
+   *     as a question.
+   *   - It DOES mint an interventionId. Unlike pretest (which produces no
+   *     question and no attributable outcome), a retention retrieval
+   *     produces exactly the same question-and-answer flow 'ask' does, so
+   *     it needs the same "intervention selected -> create intervention
+   *     identity" step evaluate()'s own header describes.
+   *
+   * Spends from the SAME shared budget/cooldown/dedup state as every other
+   * path in this module (count/lastAt/seenParagraphs) — a knowledge unit
+   * becoming due does not create a second, parallel interruption budget;
+   * see CLAUDE.md's own step 7 entry for why that matters ("due is a
+   * candidate, not an order"). `ctx.paragraphKey` is the caller's own
+   * computeIdentity(text).paragraphKey for the due paragraph it found a
+   * match on — the same dedup key every other path already uses, so a
+   * knowledge unit already interrupted-on this session (via 'ask' or an
+   * earlier retention attempt) is correctly skipped here too. */
+  function evaluateRetentionCandidate(ctx = {}) {
+    const deny = (reason) =>
+      ({ allow: false, action: 'none', reason, evidence: [], paragraphKey: null, interventionId: null });
+
+    const cap = sessionCap();
+    if (count >= cap) {
+      return deny(`session budget spent (${count}/${cap}, ceiling ${budget.absoluteCeiling})`);
+    }
+
+    const since = now() - lastAt;
+    if (lastAt !== 0 && since < budget.minGapMs) {
+      return deny(`only ${Math.round(since / 1000)}s since the last interruption`);
+    }
+
+    const { raiseConfidenceAfter, stopAskingAfter } = budget.dismissalBackoff;
+    if (consecutiveDismissals >= stopAskingAfter) {
+      return deny(`declined ${consecutiveDismissals} questions in a row — holding off until answered`);
+    }
+    // No confidence signal exists for a retention candidate (it isn't
+    // derived from a classified reading state), so the raised-bar half of
+    // the backoff — which compares against state.confidence — has nothing
+    // to compare here. Reaching raiseConfidenceAfter without yet reaching
+    // stopAskingAfter is still real hesitation worth respecting: hold off
+    // on retention specifically (evaluate()'s own 'ask' path is unaffected)
+    // once the reader is visibly declining questions, rather than only
+    // acting at the hard stop.
+    if (consecutiveDismissals >= raiseConfidenceAfter) {
+      return deny(`${consecutiveDismissals} consecutive dismissals — holding off retention until answered`);
+    }
+
+    const key = ctx.paragraphKey || null;
+    if (key && seenParagraphs.has(key)) {
+      return deny('already interrupted on this paragraph');
+    }
+
+    return {
+      allow: true,
+      action: 'retention',
+      reason: 'retention item due',
+      evidence: ['Time to check whether this has stuck.'],
+      paragraphKey: key,
+      wasExplorationSample: false,
+      interventionId: generateId(now, random),
+    };
+  }
+
   /* Call only once an interruption is actually on screen. Keeping this
    * separate from evaluate() means a decision that gets dropped downstream
    * doesn't silently consume the budget. */
@@ -323,6 +395,7 @@ export function createInterventionPolicy(config = {}) {
   return {
     evaluate,
     evaluateContentTrigger,
+    evaluateRetentionCandidate,
     record,
     recordCoverage,
     recordDismissal,
