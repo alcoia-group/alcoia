@@ -939,7 +939,13 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     // source: 'inline' is unconditional for this chokepoint (13g) — it
     // names WHICH path submitted, not a fact that can be "unavailable".
     // substate/self_reported stay absent here since neither was passed.
-    expect(body).toEqual({ paragraph_index: 3, struggled: true, source: 'inline' });
+    // knowledge_unit_id (step 3): a real content hash of the struggle
+    // text, computed alongside the same paragraphKey this chokepoint has
+    // always derived — 'k5a20958613' is computeKnowledgeUnitId('some
+    // paragraph text'), confirmed directly rather than hardcoded blind.
+    expect(body).toEqual({
+      paragraph_index: 3, struggled: true, source: 'inline', knowledge_unit_id: 'k5a20958613',
+    });
     expect(body).not.toHaveProperty('pseudonym');
     expect(body).not.toHaveProperty('substate');
     expect(body).not.toHaveProperty('self_reported');
@@ -960,7 +966,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenBody).toEqual({
       paragraph_index: 3, struggled: true, source: 'inline',
-      substate: 'confusion', self_reported: true,
+      substate: 'confusion', self_reported: true, knowledge_unit_id: 'k5a20958613',
     });
   });
 
@@ -978,7 +984,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenBody).toEqual({
       paragraph_index: 3, struggled: true, source: 'inline',
-      substate: 'overload', self_reported: false,
+      substate: 'overload', self_reported: false, knowledge_unit_id: 'k5a20958613',
     });
   });
 
@@ -994,7 +1000,9 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     host.onStruggle('some paragraph text', 3, null, null);
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
-    expect(seenBody).toEqual({ paragraph_index: 3, struggled: true, source: 'inline', substate: null });
+    expect(seenBody).toEqual({
+      paragraph_index: 3, struggled: true, source: 'inline', substate: null, knowledge_unit_id: 'k5a20958613',
+    });
     expect(seenBody).not.toHaveProperty('self_reported');
   });
 
@@ -1259,6 +1267,48 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
       const pendingSet = chrome._store.sra_quiz_pending;
       expect(pendingSet.questions[0].paragraphIndex).toBeNull();
     });
+  });
+
+  /* Intelligence-architecture audit, step 3 — the required end-to-end
+   * integration coverage: paragraph tracker -> knowledgeUnitId ->
+   * outcome submission -> the exact request body the real server route
+   * would insert as outcomes.knowledge_unit_id. Drives the real DOM/card
+   * path (findParagraphAt -> handleAsk -> computeIdentity -> pickLevel ->
+   * questionCard -> onAnswered -> submitOutcome -> outcomes.js), the same
+   * way every other test in this describe block already does, rather than
+   * calling knowledge-unit.js directly — this is what actually proves the
+   * wiring, not just that the pure hash function works in isolation
+   * (tests/knowledge-unit.test.js already covers that). */
+  it('knowledge-unit identity flows end to end: real paragraph text -> a real computed hash -> the outcomes POST body, alongside the unchanged paragraph_index', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    const paragraphText = 'A paragraph used specifically for the step-3 knowledge-unit identity integration test, long enough to pass fetchQuestions\' own length floor.';
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'ku-integration-test span' }] } });
+    mockProxyFetch(fetchImpl);
+
+    const { host } = await createHost(assignmentDeps());
+    document.body.innerHTML = `<p id="t">${paragraphText}</p>`;
+    // handleAsk() derives its identity from the SAME text findParagraphAt()
+    // returns for this element (host.js's onIntervention -> handleAsk ->
+    // computeIdentity(text)) — this is the real paragraph-tracking source,
+    // not a substitute for it.
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 4);
+
+    queryAlcoia('.sra-q-option[data-index="0"]').click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    // paragraphIndex keeps working, completely unchanged by this item.
+    expect(seenBody.paragraph_index).toBe(4);
+    // The real, deterministic content hash of the exact paragraph text
+    // above — computed independently here via the same pure module, not
+    // hardcoded, so this genuinely proves the identity that reached the
+    // paragraph tracker is the identity that reached the outcomes POST.
+    const knowledgeUnitModule = await import('../alcoia/src/content/signals/knowledge-unit.js');
+    expect(seenBody.knowledge_unit_id).toBe(knowledgeUnitModule.computeKnowledgeUnitId(paragraphText));
+    expect(typeof seenBody.knowledge_unit_id).toBe('string');
+    expect(seenBody.knowledge_unit_id).toMatch(/^k[0-9a-f]+$/);
   });
 });
 
