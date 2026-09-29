@@ -1370,6 +1370,200 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
   });
 });
 
+/* Intelligence-architecture audit, step 7 — retention scheduling. Same
+ * assignmentId+getSession gate as every other reporting manager above,
+ * plus KNOWLEDGE_STATE_DUE_URL stubbed into ALCOIA_CONFIG so
+ * checkRetentionCandidate's own gated block (host.js) actually reaches the
+ * server instead of silently no-op'ing on a missing dueUrl — confirmed
+ * that every OTHER describe block in this file, which never stubs that
+ * URL, already exercises that no-op path implicitly (the full suite run
+ * for this item passed unmodified before any of these tests were added).
+ *
+ * Uses a REAL createInterventionPolicy() instance, not a mock, the same
+ * philosophy the step-5 "intervention_id flows end to end" test above
+ * already established — this is what proves checkRetentionCandidate
+ * genuinely shares the budget/cooldown/dedup state with every other path
+ * in that module, not merely that it calls some object shaped like one. */
+describe('retention scheduling (intelligence-architecture audit, step 7)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const DUE_URL = 'https://api.test.invalid/api/knowledge-state/due';
+
+  function assignmentDeps(overrides = {}) {
+    return baseDeps({
+      assignmentId: 'assign-42',
+      getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+      TOKEN_URL: 'https://api.test.invalid/api/token',
+      ASSIGNMENTS_URL,
+      KNOWLEDGE_STATE_DUE_URL: DUE_URL,
+    });
+    // A card left open (or open-and-answered but not DOM-removed) by an
+    // earlier test in this block would otherwise still occupy a
+    // ui-controller.js popup slot (MAX_POPUPS) and still match a bare
+    // queryAlcoia('.sra-q-badge') existence check in a LATER test — the
+    // same reset this file's own self-report describe block already
+    // applies for the identical reason (see its own comments).
+    document.body.innerHTML = '';
+  });
+
+  async function realKnowledgeUnitId(text) {
+    const mod = await import('../alcoia/src/content/signals/knowledge-unit.js');
+    return mod.computeKnowledgeUnitId(text);
+  }
+
+  /* fetchQuestions/callBackend go through chrome.runtime.sendMessage with a
+   * DIFFERENT action ('apiPost') than outcomes/interventions/retention's
+   * own 'proxyFetch' — see backend-client.js vs proxy-fetch.js. Set here,
+   * BEFORE mockProxyFetch wraps it, the same ordering the existing
+   * "intervention_id flows end to end" test above already established:
+   * mockProxyFetch's own wrapper only intercepts action === 'proxyFetch',
+   * falling through to whatever was already installed for everything else. */
+  function stubQuestions() {
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({
+      ok: true,
+      data: { questions: [{ q: 'Still there?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'retention span' }] },
+    });
+  }
+
+  /* The one fetchImpl mockProxyFetch installs must itself distinguish the
+   * due-list GET from the interventions/outcomes POSTs it also receives —
+   * all three travel through the identical 'proxyFetch' action, so nothing
+   * upstream of this function can separate them by anything but URL. */
+  function proxyFetchImpl(calls, candidates) {
+    return vi.fn((url, options) => {
+      calls.push({ url, options });
+      if (url === DUE_URL) return { ok: true, status: 200, data: { candidates } };
+      return { ok: true, status: 200, data: { recorded: true } };
+    });
+  }
+
+  it('fetches the due list once at construction, Bearer-authenticated', async () => {
+    let seenCalls = 0;
+    let seenInit = null;
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => {
+      if (msg.url === DUE_URL) { seenCalls += 1; seenInit = msg.options; }
+      globalThis.__sendMessageImpl(msg, cb);
+    });
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { candidates: [] } });
+
+    await createHost(assignmentDeps());
+    expect(seenCalls).toBe(1);
+    expect(seenInit.method).toBe('GET');
+    expect(seenInit.headers.Authorization).toBe('Bearer tok-1');
+  });
+
+  it('a paragraph whose knowledge unit is due becomes a real retention intervention, reported with type: retention', async () => {
+    const text = 'A due paragraph, long enough to clear fetchQuestions\' own 120-character floor for this specific retention integration test.';
+    const knowledgeUnitId = await realKnowledgeUnitId(text);
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 2, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    const interventionPolicy = engineModule.createInterventionPolicy({});
+    setOrchestrator({ interventionPolicy });
+
+    host.onParagraphRead(text, 5000, 3);
+
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
+    const interventionBody = JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body);
+    expect(interventionBody.type).toBe('retention');
+    expect(interventionBody.knowledge_unit_id).toBe(knowledgeUnitId);
+    expect(interventionBody.paragraph_index).toBe(3);
+
+    // The causal chain still holds for this new intervention type: the
+    // resulting outcome carries the same intervention_id.
+    queryAlcoia('.sra-q-option[data-index="0"]').click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
+    const outcomeBody = JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).options.body);
+    expect(outcomeBody.intervention_id).toBe(interventionBody.intervention_id);
+    expect(outcomeBody.knowledge_unit_id).toBe(knowledgeUnitId);
+  });
+
+  it('a paragraph whose knowledge unit is NOT due produces no retention intervention', async () => {
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId: 'k_some_other_unit', retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+
+    host.onParagraphRead('An ordinary paragraph that does not match anything in the due set at all.', 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
+  });
+
+  it('respects assistantEnabled: false, the same gate onIntervention already applies to every other path', async () => {
+    const text = 'A due paragraph, long enough to clear fetchQuestions\' own 120-character floor, gated behind assistantEnabled here.';
+    const knowledgeUnitId = await realKnowledgeUnitId(text);
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps({ settings: () => ({ assistantEnabled: false }) }));
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+
+    host.onParagraphRead(text, 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
+  });
+
+  it('shares the SAME budget as an ordinary ask — a recent ask cools down a due retention candidate too', async () => {
+    const askText = 'The first paragraph, the one the reader struggled on, long enough on its own to clear the question-generation length floor of 120 characters.';
+    const dueText = 'A second, completely different due paragraph, also long enough on its own to clear that same 120-character length floor easily.';
+    const knowledgeUnitId = await realKnowledgeUnitId(dueText);
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    const interventionPolicy = engineModule.createInterventionPolicy({});
+    setOrchestrator({ interventionPolicy });
+
+    document.body.innerHTML = `<p id="t">${askText}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_first' };
+    const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    expect(shown).toBe(true);
+    interventionPolicy.record(decision);
+
+    host.onParagraphRead(dueText, 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // The 3-minute cooldown the earlier 'ask' just spent blocks the due
+    // retention candidate too -- confirming they share one budget, not two.
+    expect(calls.filter((c) => c.url.endsWith('/interventions')).length).toBe(1);
+  });
+
+  it('never fires when there is no assignment/session context -- no GET at all, matching every other reporting manager\'s own boundary', async () => {
+    let sawDueCall = false;
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => {
+      if (msg.url === DUE_URL) sawDueCall = true;
+      globalThis.__sendMessageImpl(msg, cb);
+    });
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { candidates: [] } });
+
+    await createHost(baseDeps());
+    expect(sawDueCall).toBe(false);
+  });
+});
+
 /* Item DC-1a — the same assignmentId+getSession gate as outcome reporting
  * just above, mirrored for exactly the reason its own header states: the
  * real server endpoint (confirmed against alcoiaServer's

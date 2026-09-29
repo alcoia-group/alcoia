@@ -197,6 +197,36 @@ export async function createHost(deps) {
     };
   }
 
+  // ── Retention due-list (intelligence-architecture audit, step 7) ───────
+  // Same account-only gate as every reporting manager above -- there is no
+  // "account session without an assignment" path in this extension today,
+  // so this reuses that exact boundary rather than inventing a new one.
+  // Fetched ONCE here, never re-fetched mid-session -- retention.js's own
+  // header has the full reasoning for that. Keyed by knowledgeUnitId so
+  // checkRetentionCandidate (below, near handleAsk) can do a cheap Map
+  // lookup per paragraph read, rather than a linear scan.
+  const dueKnowledgeUnits = new Map();
+  if (assignmentId && getSession) {
+    // Same routing reason as submitOutcome above.
+    const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
+    const retentionModule = await loadModule('src/shared/retention.js');
+    const retentionManager = retentionModule.createRetentionManager({
+      getSession,
+      dueUrl: self.ALCOIA_CONFIG.KNOWLEDGE_STATE_DUE_URL,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
+    });
+    try {
+      const result = await retentionManager.getDue();
+      if (result.ok) {
+        for (const c of result.candidates) {
+          if (c && typeof c.knowledgeUnitId === 'string' && c.knowledgeUnitId) {
+            dueKnowledgeUnits.set(c.knowledgeUnitId, { retentionStage: c.retentionStage, nextRetrievalAt: c.nextRetrievalAt });
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
   const {
     reservePopup, showPopup, closePopup, highlightElement,
     showNudge, showSimulateToast, showStatusToast,
@@ -856,6 +886,60 @@ export async function createHost(deps) {
     return shown;
   }
 
+  /* Intelligence-architecture audit, step 7 -- a due retention item becomes
+   * an actual interruption only if it matches a paragraph the reader is
+   * ALREADY reading (never reconstructed from the hash -- see retention.js's
+   * own header) and the intervention policy allows it (due is a candidate,
+   * not an order — CLAUDE.md's own step 7 entry). Called fire-and-forget
+   * from onParagraphRead below, mirroring handleAsk's own shape closely but
+   * triggered by dueKnowledgeUnits, never by a classified reading state.
+   *
+   * Deliberately checks assistantEnabled and snoozeControl itself, the same
+   * two gates onIntervention already applies to every state-driven
+   * interruption — this path reaches the screen through a completely
+   * different trigger (onParagraphRead, not the state-engine subscription
+   * onIntervention normally answers), so nothing upstream of this function
+   * already checked either for it. */
+  async function checkRetentionCandidate(text, paragraphIndex) {
+    if (!dueKnowledgeUnits.size || !text) return;
+    if (!s().assistantEnabled) return;
+    if (!orchestratorRef?.interventionPolicy) return;
+
+    const identity = computeIdentity(text);
+    if (!identity.knowledgeUnitId || !dueKnowledgeUnits.has(identity.knowledgeUnitId)) return;
+
+    if (await snoozeControl.isActive()) return;
+
+    const decision = orchestratorRef.interventionPolicy.evaluateRetentionCandidate({ paragraphKey: identity.paragraphKey });
+    if (!decision.allow) return;
+
+    const level = await pickLevel(identity);
+    const opts = level !== 'recognition' ? { level } : {};
+    const questions = await fetchQuestions(text, opts);
+    if (!questions.length) return;
+
+    const shown = questionCard.show(questions[0], {
+      evidence: decision.evidence,
+      paragraphKey: identity.paragraphKey,
+      knowledgeUnitId: identity.knowledgeUnitId,
+      paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
+      interventionId: decision.interventionId,
+    });
+    // "Budget spent only on yes" — the same rule orchestrator.js's own
+    // comment states for handleAsk's path, applied here directly since
+    // this path has no orchestrator call site to do it for us.
+    if (shown) {
+      orchestratorRef.interventionPolicy.record(decision);
+      reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'retention');
+      // Belt-and-suspenders alongside the policy's own paragraph-key dedup:
+      // this specific knowledge unit has now been presented this session,
+      // so it should not be attempted again even if a later paragraph
+      // happens to produce a different paragraphKey for the same
+      // knowledgeUnitId (duplicate content at a different position).
+      dueKnowledgeUnits.delete(identity.knowledgeUnitId);
+    }
+  }
+
   // ── Paragraph state — what setCurrentParagraph/setPrevParagraphText/
   // setCogState/getCurrentParagraph hold ──────────────────────────────────
   let currentParagraph = null;
@@ -892,7 +976,15 @@ export async function createHost(deps) {
     setCurrentParagraph: (p) => { currentParagraph = p; },
     setPrevParagraphText: (t) => { prevParagraphText = t; },
     setCogState: (label) => { lastCogState = label; },
-    onParagraphRead: (text, dwellMs, paragraphIndex) => sessionRecall.recordRead(text, dwellMs, paragraphIndex),
+    onParagraphRead: (text, dwellMs, paragraphIndex) => {
+      sessionRecall.recordRead(text, dwellMs, paragraphIndex);
+      // Intelligence-architecture audit, step 7 -- fire-and-forget, same
+      // pattern as submitOutcome/reportIntervention elsewhere in this
+      // file. orchestrator.js calls onParagraphRead synchronously,
+      // unawaited (see its own comment on this call site), so this must
+      // not become async from the caller's own point of view either.
+      checkRetentionCandidate(text, paragraphIndex).catch(() => {});
+    },
     onStruggle: (text, paragraphIndex, substate, selfReported) => {
       sessionRecall.recordStruggle(text);
       // Item S6/E4 follow-up — see submitOutcome's own header just above.
