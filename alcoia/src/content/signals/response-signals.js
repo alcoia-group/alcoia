@@ -62,6 +62,15 @@ export function createResponseSignals(opts = {}) {
       // unaffected.
       paragraphIndex: Number.isInteger(context.paragraphIndex) ? context.paragraphIndex : null,
       questionId: typeof context.questionId === 'string' && context.questionId ? context.questionId : null,
+      // Knowledge-unit identity (intelligence-architecture audit, step 3):
+      // additive, null-safe, same shape as paragraphIndex/questionId above.
+      // Computed by the caller (host.js/quiz.js, via knowledge-unit.js) from
+      // the same text paragraphKey was already sliced from — this file
+      // doesn't compute it itself, the same way it has never computed
+      // paragraphKey itself. paragraphKey is UNCHANGED and still set above:
+      // this is additive, not a replacement — see epistemic-engine.js's own
+      // compatibility-layer comment for how the two now interact.
+      knowledgeUnitId: typeof context.knowledgeUnitId === 'string' && context.knowledgeUnitId ? context.knowledgeUnitId : null,
       askedAt: now(),
       revisions: 0,
       scrolledBack: false,
@@ -145,6 +154,7 @@ export function createResponseSignals(opts = {}) {
       scrolledBack: asked.scrolledBack,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      knowledgeUnitId: asked.knowledgeUnitId,
       paragraphIndex: asked.paragraphIndex,
       questionId: asked.questionId,
       wasExplorationSample: asked.wasExplorationSample,
@@ -186,6 +196,7 @@ export function createResponseSignals(opts = {}) {
       scrolledBack: asked.scrolledBack,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      knowledgeUnitId: asked.knowledgeUnitId,
       paragraphIndex: asked.paragraphIndex,
       questionId: asked.questionId,
       wasExplorationSample: asked.wasExplorationSample,
@@ -234,6 +245,7 @@ export function createResponseSignals(opts = {}) {
       scrolledBack: asked.scrolledBack,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      knowledgeUnitId: asked.knowledgeUnitId,
       paragraphIndex: asked.paragraphIndex,
       questionId: asked.questionId,
       wasExplorationSample: asked.wasExplorationSample,
@@ -261,6 +273,7 @@ export function createResponseSignals(opts = {}) {
       latencyMs: now() - asked.askedAt,
       span: asked.span,
       paragraphKey: asked.paragraphKey,
+      knowledgeUnitId: asked.knowledgeUnitId,
       wasExplorationSample: asked.wasExplorationSample,
       source: asked.source,
     };
