@@ -170,6 +170,33 @@ export async function createHost(deps) {
     };
   }
 
+  // ── Intervention reporting (intelligence-architecture audit, step 5) ────
+  // Identical gate to submitOutcome/reportExplanationEvent above, for the
+  // identical reason: the real endpoint (src/http/routes/interventions.js,
+  // alcoiaServer) requires a real assignmentId and an active class seat, so
+  // this stays a no-op for every ordinary content.js page — no intervention
+  // is ever recorded server-side for ordinary, non-assignment reading,
+  // exactly the same boundary submitOutcome already draws. Fires the moment
+  // a question-bearing intervention actually reaches the screen (handleAsk/
+  // runSessionRecall below), BEFORE any answer — see interventions.js's own
+  // header for why this has to be its own call, not folded into
+  // submitOutcome.
+  let reportIntervention = () => {};
+  if (assignmentId && getSession) {
+    // Same routing reason as submitOutcome above.
+    const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
+    const interventionsModule = await loadModule('src/shared/interventions.js');
+    const interventionsManager = interventionsModule.createInterventionsManager({
+      getSession,
+      interventionsUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/interventions`,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
+    });
+    reportIntervention = (interventionId, knowledgeUnitId, paragraphIndex, type) => {
+      if (!interventionId) return;
+      interventionsManager.submit({ interventionId, knowledgeUnitId, paragraphIndex, type }).catch(() => {});
+    };
+  }
+
   const {
     reservePopup, showPopup, closePopup, highlightElement,
     showNudge, showSimulateToast, showStatusToast,
@@ -437,6 +464,11 @@ export async function createHost(deps) {
   // pickLevelForConcept's compatibility layer already treats as "fall back
   // to paragraphKey," never a crash.
   const knowledgeUnitModule = await loadModule('src/content/signals/knowledge-unit.js');
+  // Intelligence-architecture audit, step 5 — same shared id generator
+  // intervention-policy.js itself uses for a policy-triggered 'ask', reused
+  // here for the reader-initiated paths (runSessionRecall) that have no
+  // policy decision to mint one for them.
+  const interventionIdModule = await loadModule('src/content/signals/intervention-id.js');
   function computeIdentity(text) {
     return {
       paragraphKey: text.slice(0, 80).trim(),
@@ -526,6 +558,15 @@ export async function createHost(deps) {
         // same as any other caller that predates this field: simply absent
         // from the request, never a fabricated value).
         knowledgeUnitId: record.knowledgeUnitId,
+        // Intervention linkage (step 5): the same id this specific card was
+        // presented with (handleAsk's decision.interventionId, or
+        // runSessionRecall's own freshly-minted one) — response-signals.js
+        // carries it on every record it produces, resolved correctly even
+        // when a second card was concurrently open (see that file's own
+        // header). null for a dismissed-and-reopened edge case that can't
+        // occur in practice (dismiss() clears the record entirely) and for
+        // any record produced before this item existed in a given session.
+        interventionId: record.interventionId,
       });
     },
     onDismissed: () => {
@@ -718,7 +759,7 @@ export async function createHost(deps) {
         const opts = { count: 1 };
         if (level !== 'recognition') opts.level = level;
         const qs = await fetchQuestions(entry.text, opts);
-        if (qs.length) questions.push({ question: qs[0], paragraphKey: identity.paragraphKey, knowledgeUnitId: identity.knowledgeUnitId, level });
+        if (qs.length) questions.push({ question: qs[0], paragraphKey: identity.paragraphKey, knowledgeUnitId: identity.knowledgeUnitId, paragraphIndex: entry.paragraphIndex, level });
         if (questions.length >= count) break;
       }
 
@@ -732,12 +773,20 @@ export async function createHost(deps) {
         // instead of the generic review line — see epistemic-engine.js's
         // own header for why that rung specifically needs it spelled out.
         const evidence = engineModule.evidenceLineForLevel(item.level) || 'Reviewing what you read this session';
+        // Step 5: this path is reader-initiated, never gated by
+        // intervention-policy.js, so there is no `decision.interventionId`
+        // to reuse — minted here instead, using the same shared generator
+        // intervention-policy.js itself calls, so every question-bearing
+        // presentation in this codebase gets its identity the same way.
+        const interventionId = interventionIdModule.generateInterventionId();
         const shown = questionCard.show(item.question, {
           evidence: [evidence],
           paragraphKey: item.paragraphKey,
           knowledgeUnitId: item.knowledgeUnitId,
+          interventionId,
         });
         if (!shown) continue;
+        reportIntervention(interventionId, item.knowledgeUnitId, item.paragraphIndex, 'session_recall');
         await waitForCardToClose();
       }
     } finally {
@@ -786,7 +835,12 @@ export async function createHost(deps) {
 
     const evidenceOverride = engineModule.evidenceLineForLevel(level);
 
-    return questionCard.show(questions[0], {
+    // Step 5: minted by intervention-policy.js at the moment this 'ask'
+    // decision was made (the "intervention selected" step of the causal
+    // chain) — reused here as-is, not regenerated, so the id genuinely
+    // identifies the decision that led to this presentation.
+    const interventionId = decision.interventionId;
+    const shown = questionCard.show(questions[0], {
       evidence: evidenceOverride ? [evidenceOverride] : decision.evidence,
       anchorRect,
       paragraphKey: identity.paragraphKey,
@@ -794,7 +848,12 @@ export async function createHost(deps) {
       paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
       wasExplorationSample: decision.wasExplorationSample === true,
       showSelfReport: state.substate === 'unclear',
+      interventionId,
     });
+    if (shown) {
+      reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask');
+    }
+    return shown;
   }
 
   // ── Paragraph state — what setCurrentParagraph/setPrevParagraphText/

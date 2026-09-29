@@ -447,3 +447,59 @@ describe('self-reported disengagement is distinguishable from inferred states (i
     expect(inferred.isSelfReported).toBeUndefined();
   });
 });
+
+/* Intelligence-architecture audit, step 5 — interventionId is minted here,
+ * at the moment an interruption is actually allowed, per this module's own
+ * "intervention selected" role in the causal chain. */
+describe('interventionId (step 5)', () => {
+  it('is set on an allowed "ask" decision', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(struggling());
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('ask');
+    expect(typeof d.interventionId).toBe('string');
+    expect(d.interventionId.length).toBeGreaterThan(0);
+  });
+
+  it('is null on a "nudge" decision — a nudge has no question and nothing for an outcome to attribute to', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate({ label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting' } });
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('nudge');
+    expect(d.interventionId).toBeNull();
+  });
+
+  it('is null on every denied decision', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate({ label: STATES.UNKNOWN, confidence: 0.9, evidence: [] });
+    expect(d.allow).toBe(false);
+    expect(d.interventionId).toBeNull();
+  });
+
+  it('is a genuinely different id on two separate "ask" decisions, even from the same paragraph text at different confidences', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    const first = take(p, struggling());
+    clock.advance(200000); // clear the 3-minute gap and the paragraph re-ask guard needs a different paragraph
+    const second = take(p, struggling({ signal: { text: 'a different paragraph' } }));
+    expect(first.interventionId).not.toBe(second.interventionId);
+  });
+
+  it('is deterministic when the policy is constructed with a fixed clock and a fixed RNG — proves it derives from the SAME injected now()/random() this module already uses, not an unseeded global', () => {
+    const a = createInterventionPolicy({ now: fixedClock().now, random: () => 0 }).evaluate(struggling());
+    const b = createInterventionPolicy({ now: fixedClock().now, random: () => 0 }).evaluate(struggling());
+    expect(a.interventionId).toBe(b.interventionId);
+  });
+
+  it('accepts an injected generateInterventionId, the same DI shape as now/random, so a test can assert on the exact id used', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, generateInterventionId: () => 'fixed-test-id' });
+    const d = p.evaluate(struggling());
+    expect(d.interventionId).toBe('fixed-test-id');
+  });
+
+  it('never embeds anything resembling an account id, email, or pseudonym', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(struggling());
+    expect(d.interventionId).not.toMatch(/@/);
+  });
+});
