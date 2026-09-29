@@ -428,6 +428,22 @@ export async function createHost(deps) {
   // since all three call this one function.
   const engineModule = await loadModule('src/content/epistemic-engine.js');
 
+  // Knowledge-unit identity (intelligence-architecture audit, step 3).
+  // Computed from the SAME text every call site already slices paragraphKey
+  // from — additive, alongside it, never replacing it (see knowledge-
+  // unit.js's own header for the normalization rules and why this is
+  // FNV-1a rather than crypto.subtle). `null` whenever there's no real text
+  // to hash (matches computeKnowledgeUnitId's own contract), which
+  // pickLevelForConcept's compatibility layer already treats as "fall back
+  // to paragraphKey," never a crash.
+  const knowledgeUnitModule = await loadModule('src/content/signals/knowledge-unit.js');
+  function computeIdentity(text) {
+    return {
+      paragraphKey: text.slice(0, 80).trim(),
+      knowledgeUnitId: knowledgeUnitModule.computeKnowledgeUnitId(text),
+    };
+  }
+
   // Evidence-silo fix (step 2): reads whatever quiz.js has recorded for THIS
   // document (never another one — same partitioning quiz-store.js's own
   // documentKey index already uses) since it can't write into
@@ -454,9 +470,14 @@ export async function createHost(deps) {
   // answer on the same paragraph happens between two quiz answers — a real,
   // disclosed limitation, not something worth a timestamp/sort mechanism
   // for this step.
-  async function pickLevel(paragraphKey) {
+  // `identity` is the { paragraphKey, knowledgeUnitId } shape computeIdentity()
+  // above produces — pickLevelForConcept's own compatibility layer (step 3)
+  // is what actually prefers knowledgeUnitId when both sides have one and
+  // falls back to paragraphKey otherwise; this function doesn't duplicate
+  // that decision, only supplies the merged history to decide it against.
+  async function pickLevel(identity) {
     const quizEvidence = await readQuizEvidence(orchestratorRef?.documentKey?.() || null);
-    return engineModule.pickLevelForConcept(paragraphKey, [...responseSignals.history(), ...quizEvidence]);
+    return engineModule.pickLevelForConcept(identity, [...responseSignals.history(), ...quizEvidence]);
   }
 
   const questionCard = cardModule.createQuestionCard({
@@ -499,6 +520,12 @@ export async function createHost(deps) {
         selectedAnswer: typeof record.chosenIndex === 'number' ? record.chosenIndex : null,
         // Item DC-2 — same paragraph-key lookup as onStruggle above.
         explanationPrecededAttempt: wasParagraphExplained(record.paragraphKey),
+        // Knowledge-unit identity (step 3): additive, sent whenever the
+        // record has one (null whenever there was no computable text to
+        // hash at present()-time — outcomes.js's own guard treats that the
+        // same as any other caller that predates this field: simply absent
+        // from the request, never a fabricated value).
+        knowledgeUnitId: record.knowledgeUnitId,
       });
     },
     onDismissed: () => {
@@ -546,20 +573,22 @@ export async function createHost(deps) {
         // with paragraphIndex: null — outcomes.js's own guard already
         // refuses to submit those rather than guessing one.
         for (const p of picked) {
-          const paragraphKey = p.text.slice(0, 80).trim();
-          const level = await pickLevel(paragraphKey);
+          const identity = computeIdentity(p.text);
+          const level = await pickLevel(identity);
           const opts = { count: Math.max(1, Math.round(QUIZ_TARGET_COUNT / picked.length)), kind: 'recall' };
           if (level !== 'recognition') opts.level = level;
           const qs = await fetchQuestions(p.text, opts);
           for (const q of qs) {
             q.paragraphIndex = Number.isInteger(p.paragraphIndex) ? p.paragraphIndex : null;
-            // Evidence-silo fix (step 2): the same key pickLevel() above was
-            // just called with — computed once, attached here rather than
-            // recomputed later, so a quiz answer to this question can be
-            // matched back to "this concept" by quiz.js the same way an
-            // inline answer already is. paragraphIndex (above) alone isn't
-            // enough for that: pickLevelForConcept() matches on paragraphKey.
-            q.paragraphKey = paragraphKey;
+            // Evidence-silo fix (step 2) / knowledge-unit identity (step 3):
+            // the same identity pickLevel() above was just called with —
+            // computed once, attached here rather than recomputed later, so
+            // a quiz answer to this question can be matched back to "this
+            // concept" by quiz.js the same way an inline answer already is.
+            // paragraphIndex (above) alone isn't enough for that:
+            // pickLevelForConcept() matches on paragraphKey/knowledgeUnitId.
+            q.paragraphKey = identity.paragraphKey;
+            q.knowledgeUnitId = identity.knowledgeUnitId;
           }
           questions.push(...qs);
         }
@@ -576,8 +605,7 @@ export async function createHost(deps) {
         // this is usually still the same single call it always was.
         const groups = new Map(); // level -> paragraph texts
         for (const p of picked) {
-          const paragraphKey = p.text.slice(0, 80).trim();
-          const level = await pickLevel(paragraphKey);
+          const level = await pickLevel(computeIdentity(p.text));
           if (!groups.has(level)) groups.set(level, []);
           groups.get(level).push(p.text);
         }
@@ -682,15 +710,15 @@ export async function createHost(deps) {
     try {
       const questions = [];
       for (const entry of picked) {
-        const paragraphKey = entry.text.slice(0, 80).trim();
+        const identity = computeIdentity(entry.text);
         // Item 44: what level to ask THIS concept at is decided from the
         // reader's own session history for it, not always recognition —
         // the same pickLevel() every question-generating path below uses.
-        const level = await pickLevel(paragraphKey);
+        const level = await pickLevel(identity);
         const opts = { count: 1 };
         if (level !== 'recognition') opts.level = level;
         const qs = await fetchQuestions(entry.text, opts);
-        if (qs.length) questions.push({ question: qs[0], paragraphKey, level });
+        if (qs.length) questions.push({ question: qs[0], paragraphKey: identity.paragraphKey, knowledgeUnitId: identity.knowledgeUnitId, level });
         if (questions.length >= count) break;
       }
 
@@ -707,6 +735,7 @@ export async function createHost(deps) {
         const shown = questionCard.show(item.question, {
           evidence: [evidence],
           paragraphKey: item.paragraphKey,
+          knowledgeUnitId: item.knowledgeUnitId,
         });
         if (!shown) continue;
         await waitForCardToClose();
@@ -739,13 +768,13 @@ export async function createHost(deps) {
     const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
     if (!text) return false;
 
-    const paragraphKey = text.slice(0, 80).trim();
+    const identity = computeIdentity(text);
     // Item 44: same engine, same rule, as every other caller — in practice
     // this is almost always 'recognition' here, since the interruption
     // budget already refuses to ask about the same paragraph twice
     // automatically; a higher rung only comes up if this exact paragraph
     // was already tested via a review or the quiz earlier this session.
-    const level = await pickLevel(paragraphKey);
+    const level = await pickLevel(identity);
     const opts = level !== 'recognition' ? { level } : {};
 
     const questions = await fetchQuestions(text, opts);
@@ -760,7 +789,8 @@ export async function createHost(deps) {
     return questionCard.show(questions[0], {
       evidence: evidenceOverride ? [evidenceOverride] : decision.evidence,
       anchorRect,
-      paragraphKey,
+      paragraphKey: identity.paragraphKey,
+      knowledgeUnitId: identity.knowledgeUnitId,
       paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
       wasExplorationSample: decision.wasExplorationSample === true,
       showSelfReport: state.substate === 'unclear',
@@ -819,7 +849,12 @@ export async function createHost(deps) {
       // key produced by selection-explain.js's markParagraphExplained() is
       // directly comparable here with no second convention to keep in sync.
       const explanationPrecededAttempt = wasParagraphExplained(text.slice(0, 80).trim());
-      submitOutcome({ paragraphIndex, struggled: true, substate, selfReported, source: 'inline', explanationPrecededAttempt });
+      // Knowledge-unit identity (step 3): computed straight from the same
+      // text, not via computeIdentity() — this call site never needed a
+      // paragraphKey of its own (wasParagraphExplained above still uses the
+      // old text-slice convention, unchanged), only this one new field.
+      const knowledgeUnitId = knowledgeUnitModule.computeKnowledgeUnitId(text);
+      submitOutcome({ paragraphIndex, struggled: true, substate, selfReported, source: 'inline', explanationPrecededAttempt, knowledgeUnitId });
     },
     onQuizOfferEligible: (result) => showQuizOffer(result),
     onIntervention: async (decision, state, target, paragraphIndex) => {

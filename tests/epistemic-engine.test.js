@@ -244,3 +244,64 @@ describe('card and quiz page produce identical selections for identical historie
     }
   });
 });
+
+/* Knowledge-unit identity compatibility layer (intelligence-architecture
+ * audit, step 3). Every test above this point passes a plain string and
+ * must keep passing unmodified — that IS the backward-compatibility
+ * guarantee, not merely an assumption about it. These are the new object-
+ * shaped-identity tests. */
+describe('pickLevelForConcept — knowledgeUnitId compatibility layer (step 3)', () => {
+  it('a plain string identity behaves exactly as before — untouched by this item', () => {
+    const history = [{ paragraphKey: 'p1', level: 'recognition', correct: true, subtype: 'correct' }];
+    expect(pickLevelForConcept('p1', history)).toBe('free_recall');
+  });
+
+  it('an object identity with a knowledgeUnitId matches on it, even when paragraphKey differs', () => {
+    // The realistic case this exists for: the same content re-extracted
+    // with a different 80-char text-slice (e.g. leading markup differs)
+    // but the SAME normalized content, so the SAME knowledgeUnitId.
+    const history = [{
+      paragraphKey: 'an old, differently-sliced key', knowledgeUnitId: 'k1a2b3', level: 'recognition', correct: true, subtype: 'correct',
+    }];
+    const result = pickLevelForConcept({ paragraphKey: 'a completely different slice', knowledgeUnitId: 'k1a2b3' }, history);
+    expect(result).toBe('free_recall');
+  });
+
+  it('an object identity does NOT match a record with a different knowledgeUnitId, even if paragraphKey happens to be identical', () => {
+    // Both sides have a real knowledgeUnitId and they disagree — this must
+    // never fall back to the (possibly coincidental) paragraphKey match.
+    const history = [{ paragraphKey: 'shared-slice', knowledgeUnitId: 'k-old', level: 'recognition', correct: true, subtype: 'correct' }];
+    const result = pickLevelForConcept({ paragraphKey: 'shared-slice', knowledgeUnitId: 'k-new' }, history);
+    expect(result).toBe('recognition'); // no matching attempt found -> never-before-seen
+  });
+
+  it('falls back to paragraphKey when the HISTORY record predates knowledgeUnitId (no field at all)', () => {
+    const history = [{ paragraphKey: 'p1', level: 'recognition', correct: true, subtype: 'correct' }]; // no knowledgeUnitId — an older record
+    const result = pickLevelForConcept({ paragraphKey: 'p1', knowledgeUnitId: 'k-new' }, history);
+    expect(result).toBe('free_recall');
+  });
+
+  it('falls back to paragraphKey when the CALLER has no computable knowledgeUnitId (e.g. empty text)', () => {
+    const history = [{ paragraphKey: 'p1', knowledgeUnitId: 'k-existing', level: 'recognition', correct: true, subtype: 'correct' }];
+    const result = pickLevelForConcept({ paragraphKey: 'p1', knowledgeUnitId: null }, history);
+    expect(result).toBe('free_recall');
+  });
+
+  it('an object identity with neither field set is simply never-before-seen, not a crash', () => {
+    const history = [{ paragraphKey: 'p1', level: 'recognition', correct: true, subtype: 'correct' }];
+    expect(pickLevelForConcept({}, history)).toBe('recognition');
+    expect(pickLevelForConcept({ paragraphKey: null, knowledgeUnitId: null }, history)).toBe('recognition');
+  });
+
+  it('sessionAnswers (the overconfidence/adversarial-eligibility pool) is unaffected by which identity shape is used — it never filters by concept at all', () => {
+    const history = [
+      { paragraphKey: 'other-1', knowledgeUnitId: 'k-other-1', level: 'scenario', correct: false, confidence: 'high', subtype: 'incorrect' },
+      { paragraphKey: 'other-2', knowledgeUnitId: 'k-other-2', level: 'scenario', correct: false, confidence: 'high', subtype: 'incorrect' },
+      { paragraphKey: 'target', knowledgeUnitId: 'k-target', level: 'scenario', correct: true, confidence: 'high', subtype: 'correct' },
+    ];
+    const byString = pickLevelForConcept('target', history);
+    const byObject = pickLevelForConcept({ paragraphKey: 'target', knowledgeUnitId: 'k-target' }, history);
+    expect(byString).toBe('adversarial');
+    expect(byObject).toBe('adversarial');
+  });
+});

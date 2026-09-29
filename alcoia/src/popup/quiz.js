@@ -179,6 +179,13 @@ function renderQuestion(record, index) {
   // present() already treats that as null, not fabricated.
   responseSignals.present(question, {
     paragraphKey: question.paragraphKey || null,
+    // Knowledge-unit identity (step 3): question.knowledgeUnitId only
+    // exists when host.js's runQuiz() (assignment-context branch) could
+    // attribute this question to one specific paragraph's computeIdentity()
+    // — the same condition paragraphKey above already depends on, so this
+    // is absent under the identical circumstances paragraphKey is.
+    knowledgeUnitId: typeof question.knowledgeUnitId === 'string' && question.knowledgeUnitId
+      ? question.knowledgeUnitId : null,
     paragraphIndex: Number.isInteger(question.paragraphIndex) ? question.paragraphIndex : null,
     questionId: typeof question.id === 'string' && question.id ? question.id : null,
     source: 'quiz',
@@ -252,7 +259,7 @@ function renderQuestion(record, index) {
       // discrete-option identifier question-card.js's inline path sends.
       submitQuizOutcome({
         paragraphIndex: question.paragraphIndex, questionId: question.id, correct, confidence,
-        selectedAnswer: selected,
+        selectedAnswer: selected, knowledgeUnitId: question.knowledgeUnitId || undefined,
       });
       // Evidence-silo fix (step 2): same shape response-signals.js's own
       // deterministic path already produces for the inline card — reused,
@@ -314,7 +321,7 @@ function renderQuestion(record, index) {
         // null, never fabricated.
         submitQuizOutcome({
           paragraphIndex: question.paragraphIndex, questionId: question.id, confidence,
-          selectedAnswer: null,
+          selectedAnswer: null, knowledgeUnitId: question.knowledgeUnitId || undefined,
         });
         // Evidence-silo fix (step 2): adversarial is never graded inline
         // either — respond() already records correct: null for exactly
@@ -370,7 +377,7 @@ function renderQuestion(record, index) {
       submitQuizOutcome({
         paragraphIndex: question.paragraphIndex, questionId: question.id,
         correct: verdict === 'unknown' ? undefined : verdict === 'correct',
-        confidence, selectedAnswer: null,
+        confidence, selectedAnswer: null, knowledgeUnitId: question.knowledgeUnitId || undefined,
       });
       // Evidence-silo fix (step 2): the same already-safety-checked verdict
       // shown to the reader and written to quiz-store above — never the raw
