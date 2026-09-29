@@ -30,12 +30,14 @@ describe('what earns an interruption', () => {
     expect(d.reason).toMatch(/unknown/);
   });
 
-  it.each([STATES.ON_PACE, STATES.ABSENT])('takes no action on %s', (label) => {
+  it('takes no action on on_pace', () => {
     // random: () => 1 disables exploration sampling — that mechanism is
     // covered on its own further down; this test is about the base table.
+    // (ABSENT used to be a second case here; STATES.ABSENT no longer
+    // exists — see the "removed state" describe block below.)
     const p = createInterventionPolicy({ now: fixedClock().now, random: () => 1 });
-    expect(STATE_ACTIONS[label]).toBe('none');
-    expect(p.evaluate({ label, confidence: 0.9, evidence: [] }).allow).toBe(false);
+    expect(STATE_ACTIONS[STATES.ON_PACE]).toBe('none');
+    expect(p.evaluate({ label: STATES.ON_PACE, confidence: 0.9, evidence: [] }).allow).toBe(false);
   });
 
   /* Questions, not summaries. Summarising removes the desirable difficulty
@@ -336,12 +338,10 @@ describe('exploration sampling', () => {
     expect(d.action).not.toBe('ask');
   });
 
-  it('never fires on an absent reader, even when the RNG would sample', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate({ label: STATES.ABSENT, confidence: 0.9, evidence: [] });
-    expect(d.allow).toBe(false);
-    expect(d.wasExplorationSample).toBe(false);
-  });
+  // The "never fires on an absent reader" case that used to live here is
+  // gone along with STATES.ABSENT itself — see the "removed state" describe
+  // block below for the replacement coverage (ABSENT is no longer a value
+  // this policy, or anything else, can be asked to evaluate).
 
   it('still respects the confidence floor', () => {
     const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
@@ -400,5 +400,50 @@ describe('substate (item 13a) is inert here — this file never reads it', () =>
       const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
       expect(p.evaluate(struggling({ substate }))).toEqual(base);
     }
+  });
+});
+
+/* State-engine correctness pass (intelligence-architecture audit): ABSENT
+ * was declared, had a STATE_ACTIONS entry, and had an exploration-exclusion
+ * branch here, but no detector anywhere in the codebase ever produced it —
+ * every prior test exercising it had to fabricate the state object by hand,
+ * which is itself the evidence it was dead. Removed everywhere rather than
+ * kept as an unreachable placeholder. */
+describe('the removed ABSENT state', () => {
+  it('no longer exists on STATES', () => {
+    expect(STATES.ABSENT).toBeUndefined();
+  });
+
+  it('no longer has a STATE_ACTIONS entry', () => {
+    expect(Object.keys(STATE_ACTIONS)).not.toContain('absent');
+  });
+});
+
+/* DRIFTING stays — it is real and reachable — but only via an explicit
+ * reader self-report, never a passive detector. state-engine.js now emits
+ * an additive `isSelfReported` field on every state object precisely so a
+ * caller can tell that apart from an inferred state, rather than DRIFTING's
+ * mere presence being read as "this is detected". This file's own
+ * STATE_ACTIONS/evaluate() logic is unchanged by that field — it still
+ * branches on `label` only, exactly as before — these tests just confirm
+ * the field survives untouched alongside every other state shape this file
+ * already builds by hand. */
+describe('self-reported disengagement is distinguishable from inferred states (isSelfReported)', () => {
+  it('a hand-built DRIFTING decision carrying isSelfReported: true evaluates identically to one without the field', () => {
+    const withFlag = createInterventionPolicy({ now: fixedClock().now }).evaluate({
+      label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting' }, isSelfReported: true,
+    });
+    const without = createInterventionPolicy({ now: fixedClock().now }).evaluate({
+      label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting' },
+    });
+    expect(withFlag).toEqual(without);
+  });
+
+  it('an inferred struggling state has isSelfReported unset, unlike a self-reported one', () => {
+    // This file never sets the field itself (that is state-engine.js's
+    // job) — this just confirms an ordinary hand-built inferred state, the
+    // shape every other test in this file uses, carries no such claim.
+    const inferred = struggling();
+    expect(inferred.isSelfReported).toBeUndefined();
   });
 });
