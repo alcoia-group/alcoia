@@ -38,13 +38,17 @@ const GAZE_FRESH_MS   = 2000;
 const CURSOR_FRESH_MS = 4000;
 const TICK_MS         = 400;   // re-resolve the source when nothing moves
 
-/* Half-height of the clear window per state. Full band is twice this. */
+/* Half-height of the clear window per state. Full band is twice this.
+ * No 'absent' entry: state-engine.js's STATES no longer has an ABSENT
+ * value (nothing ever produced it — see that file's own comment), so this
+ * key would never be looked up. 'drifting' below is real and reachable, but
+ * only via an explicit reader self-report today, never a passive signal —
+ * see state-engine.js and intervention-policy.js's STATE_ACTIONS comment. */
 const BAND_BY_STATE = {
   on_pace:    52,   // 104 px — comfortable reading
   skimming:   80,   // 160 px — moving fast, wide window
   struggling: 34,   //  68 px — tighten; the line is the problem
   drifting:   64,   // 128 px — gentle re-engagement
-  absent:     52,
   unknown:    52,
 };
 const DEFAULT_BAND_PX = 52;

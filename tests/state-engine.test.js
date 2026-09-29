@@ -11,6 +11,19 @@ function engineAt(clock) {
   return createReadingStateEngine({ now: clock.now });
 }
 
+describe('STATES', () => {
+  it('no longer includes ABSENT — nothing in this file ever produced it (intelligence-architecture audit)', () => {
+    expect(STATES.ABSENT).toBeUndefined();
+    expect(Object.values(STATES)).not.toContain('absent');
+  });
+
+  it('still has exactly the five states this engine can actually produce', () => {
+    expect(Object.values(STATES).sort()).toEqual(
+      ['drifting', 'on_pace', 'skimming', 'struggling', 'unknown'].sort(),
+    );
+  });
+});
+
 describe('default behaviour', () => {
   it('starts unknown with no confidence', () => {
     const e = engineAt(fixedClock());
@@ -405,6 +418,57 @@ describe('self-report (item 13a) — the highest-confidence evidence, overrides 
     e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.CONFUSION } });
     expect(e.getState().substate).toBe(SUBSTATES.CONFUSION);
     expect(e.getState().label).toBe(STATES.STRUGGLING);
+  });
+});
+
+/* State-engine correctness pass (intelligence-architecture audit): DRIFTING
+ * is real and reachable, but only through the self-report path above — no
+ * detector in this file ever produces it. `isSelfReported` is the additive
+ * field that makes that distinction checkable on the state object itself,
+ * rather than a caller having to know to dig into `signal?.type` by hand. */
+describe('isSelfReported — distinguishes a direct reader report from an inferred state', () => {
+  it('is true for every self_report-derived state (confusion, overload, disengaged)', () => {
+    const cases = [SELF_REPORT.CONFUSION, SELF_REPORT.OVERLOAD, SELF_REPORT.DISENGAGED];
+    for (const subtype of cases) {
+      const e = engineAt(fixedClock());
+      const s = e.update({ reading: { type: 'self_report', subtype } });
+      expect(s.isSelfReported).toBe(true);
+    }
+  });
+
+  it('disengaged (DRIFTING) is specifically flagged self-reported, not presented as inferred', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.DISENGAGED } });
+    expect(s.label).toBe(STATES.DRIFTING);
+    expect(s.isSelfReported).toBe(true);
+  });
+
+  it('is false for every ordinary inferred state — struggling, skimming, on_pace', () => {
+    const cases = [
+      { type: 'speed_mismatch', subtype: 'too_slow', actualWpm: 90, baselineWpm: 225, readability: { grade: 'standard' } },
+      { type: 'speed_mismatch', subtype: 'too_fast', readability: { grade: 'standard' } },
+      { type: 'response', subtype: 'correct' },
+      { type: 'backtrack', backtrackPx: 200 },
+    ];
+    for (const reading of cases) {
+      const e = engineAt(fixedClock());
+      const s = e.update({ reading });
+      expect(s.isSelfReported).toBe(false);
+    }
+  });
+
+  it('is false when nothing asserts (unknown, default and after a no-op signal)', () => {
+    const e = engineAt(fixedClock());
+    expect(e.getState().isSelfReported).toBe(false);
+    expect(e.update({}).isSelfReported).toBe(false);
+    expect(e.update({ reading: { type: 'idle' } }).isSelfReported).toBe(false);
+  });
+
+  it('an unrecognised self_report subtype asserts nothing, so isSelfReported stays false too', () => {
+    const e = engineAt(fixedClock());
+    const s = e.update({ reading: { type: 'self_report', subtype: 'bogus' } });
+    expect(s.label).toBe(STATES.UNKNOWN);
+    expect(s.isSelfReported).toBe(false);
   });
 });
 
