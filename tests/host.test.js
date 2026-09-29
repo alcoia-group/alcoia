@@ -23,6 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHost } from '../alcoia/src/content/host.js';
 import { createUIController } from '../alcoia/src/content/ui-controller.js';
+import { createResponseSignals } from '../alcoia/src/content/signals/response-signals.js';
 
 const HOST_JS_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)), '..', 'alcoia', 'src', 'content', 'host.js',
@@ -555,6 +556,217 @@ describe('the epistemic engine wired into host.js (item 44)', () => {
 
     expect(await levelRequestedInPage()).toBe(await levelRequestedInQuiz());
     expect(await levelRequestedInPage()).toBe('free_recall');
+  });
+});
+
+/* Evidence-silo fix (intelligence-architecture audit, step 2): quiz.js runs
+ * in a separate tab/JS realm from this content script, so it cannot write
+ * into this file's in-memory responseSignals instance directly — see
+ * host.js's own readQuizEvidence()/pickLevel() comments for why
+ * chrome.storage.local is the bridge instead. These tests seed
+ * chrome.storage.local's sra_quiz_evidence exactly the way quiz.js's own
+ * persistQuizEvidence() would (using the real response-signals.js factory
+ * to build each record, not a hand-typed guess at its shape), then drive
+ * the real handleAsk/runQuiz call sites and confirm the epistemic ladder
+ * actually saw it — the narrowest integration test that proves the shared-
+ * history contract without needing two real browser tabs in one test. */
+describe('quiz evidence reaches the epistemic engine (step 2 — evidence-silo fix)', () => {
+  const LONG_PARAGRAPH = 'A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it, and also enough distinct words in it to pass the separate minimum word count threshold session recall itself enforces before treating this paragraph as something worth asking about again.';
+  const PARAGRAPH_KEY = LONG_PARAGRAPH.slice(0, 80).trim();
+  const DOC_KEY = 'doc-quiz-evidence-1';
+
+  function stubQuestionsEndpoint(captureBody) {
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        if (captureBody) captureBody.body = msg.body;
+        cb({ ok: true, data: { questions: [{ q: 'Q2?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a span for the generated question' }] } });
+      } else {
+        cb({ ok: true, data: { summary: 'a canned summary' } });
+      }
+    };
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+  }
+
+  /* Builds one quiz-evidence record exactly the way quiz.js's own
+   * responseSignals.answer()/answerGraded()/respond() + persistQuizEvidence()
+   * would, then seeds it directly into the fake chrome.storage.local — the
+   * same storage key host.js's readQuizEvidence() reads, pre-populated as if
+   * a prior tab had already written it, since this test file cannot spin up
+   * a second real page context to write it live. */
+  function seedQuizEvidence(records) {
+    chrome._store.sra_quiz_evidence = records;
+  }
+  function quizRecord({ paragraphKey = PARAGRAPH_KEY, chosenIndex = 0, answerIndex = 0, confidence = null, documentKey = DOC_KEY } = {}) {
+    const rs = createResponseSignals();
+    rs.present({ q: 'quiz Q', options: ['a', 'b', 'c', 'd'], answerIndex, span: 'x' }, { paragraphKey, source: 'quiz' });
+    const record = rs.answer(chosenIndex, { answerIndex }, confidence);
+    return { documentKey, ...record };
+  }
+
+  it('a correct quiz answer escalates the very next in-page question for the same concept, exactly like an inline correct answer would', async () => {
+    const captured = {};
+    stubQuestionsEndpoint(captured);
+    const { host, setOrchestrator } = await createHost(baseDeps());
+    setOrchestrator({ documentKey: () => DOC_KEY });
+    seedQuizEvidence([quizRecord()]); // correct, recognition -> free_recall
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    const shown = await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+
+    expect(shown).toBe(true);
+    expect(captured.body.level).toBe('free_recall');
+  });
+
+  it('an incorrect/struggling quiz answer leaves the next in-page question at recognition, same as an inline wrong answer would', async () => {
+    const captured = {};
+    stubQuestionsEndpoint(captured);
+    const { host, setOrchestrator } = await createHost(baseDeps());
+    setOrchestrator({ documentKey: () => DOC_KEY });
+    seedQuizEvidence([quizRecord({ chosenIndex: 1, answerIndex: 0 })]); // wrong
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+
+    expect(captured.body.level).toBeUndefined(); // recognition — omitted, same as the never-tested case
+  });
+
+  it('quiz evidence for a DIFFERENT document is never merged in — no cross-document leakage', async () => {
+    const captured = {};
+    stubQuestionsEndpoint(captured);
+    const { host, setOrchestrator } = await createHost(baseDeps());
+    setOrchestrator({ documentKey: () => DOC_KEY });
+    seedQuizEvidence([quizRecord({ documentKey: 'a-completely-different-document' })]);
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+
+    expect(captured.body.level).toBeUndefined(); // stayed at recognition — the other document's evidence was ignored
+  });
+
+  it('inline and quiz evidence coexist in the same decision — a quiz answer on one concept does not disturb an inline answer on another', async () => {
+    const captured = {};
+    stubQuestionsEndpoint(captured);
+    const { host, setOrchestrator, responseSignals } = await createHost(baseDeps());
+    setOrchestrator({ documentKey: () => DOC_KEY });
+
+    // Inline evidence for a DIFFERENT concept.
+    responseSignals.present({ q: 'other?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: 'some-other-concept' });
+    responseSignals.answer(0, { answerIndex: 0 }, null);
+    // Quiz evidence for THIS concept.
+    seedQuizEvidence([quizRecord()]);
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+
+    // Escalated on the quiz evidence for THIS concept, not affected by (and
+    // not erasing) the unrelated inline record for the other one.
+    expect(captured.body.level).toBe('free_recall');
+    expect(responseSignals.history()).toHaveLength(1); // the inline record is still there, untouched
+  });
+
+  it('multiple quiz answers on the same concept accumulate — the most recent one governs, same as inline history already does', async () => {
+    const captured = {};
+    stubQuestionsEndpoint(captured);
+    const { host, setOrchestrator } = await createHost(baseDeps());
+    setOrchestrator({ documentKey: () => DOC_KEY });
+    // Wrong, then right, then wrong again — three separate quiz attempts at
+    // the same concept (e.g. a resumed/retaken quiz).
+    seedQuizEvidence([
+      quizRecord({ chosenIndex: 1, answerIndex: 0 }),
+      quizRecord({ chosenIndex: 0, answerIndex: 0 }),
+      quizRecord({ chosenIndex: 1, answerIndex: 0 }),
+    ]);
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+
+    // The LAST attempt (wrong) governs — recognition, not free_recall.
+    expect(captured.body.level).toBeUndefined();
+  });
+
+  it('quiz evidence does not bypass the epistemic ladder — correct-at-scenario-but-not-overconfident stays at scenario, exactly as the same history would if it were inline', async () => {
+    const captured = {};
+    stubQuestionsEndpoint(captured);
+    const { host, setOrchestrator } = await createHost(baseDeps());
+    setOrchestrator({ documentKey: () => DOC_KEY });
+
+    const rs = createResponseSignals();
+    rs.present({ q: 'scenario Q', span: 'scenario span', level: 'scenario' }, { paragraphKey: PARAGRAPH_KEY, source: 'quiz' });
+    const record = rs.answerGraded('a well-reasoned answer', 'correct', 'high');
+    seedQuizEvidence([{ documentKey: DOC_KEY, ...record }]);
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+
+    // Not systematically overconfident (no other high-confidence-wrong
+    // pattern established) -> stays at scenario, never climbs to
+    // adversarial just because the evidence came from a quiz.
+    expect(captured.body.level).toBe('scenario');
+  });
+
+  it('reading quiz evidence makes no network call of its own — only chrome.storage.local is touched', async () => {
+    const captured = {};
+    stubQuestionsEndpoint(captured);
+    const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    chrome.runtime.sendMessage = sendMessage;
+    const { host, setOrchestrator } = await createHost(baseDeps());
+    setOrchestrator({ documentKey: () => DOC_KEY });
+    seedQuizEvidence([quizRecord()]);
+
+    document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+
+    // Exactly the one /api/questions call this interruption always makes —
+    // nothing extra from resolving the quiz evidence merge itself.
+    const nonQuestionCalls = sendMessage.mock.calls.filter(([msg]) => !msg.url?.includes('/api/questions'));
+    expect(nonQuestionCalls).toHaveLength(0);
+  });
+
+  it("runQuiz's ordinary (non-assignment) generation path still attaches no paragraphKey — questions there can come from several paragraphs' combined text, so this stays undefined rather than a guessed one", async () => {
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        // At least QUIZ_MIN_QUESTIONS (5), same as the pre-existing
+        // "runQuiz groups picked paragraphs..." test above — runQuiz()
+        // silently declines to open the quiz page at all below that floor.
+        const count = msg.body.count || 1;
+        cb({ ok: true, data: { questions: Array.from({ length: Math.max(count, 5) }, (_, i) => ({ q: `Q${i}?`, options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: `span ${i}` })) } });
+      } else cb({ ok: true, data: {} });
+    };
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    const { setOrchestrator, sessionRecall, runQuiz } = await createHost(baseDeps());
+    setOrchestrator({ documentKey: () => DOC_KEY });
+    sessionRecall.recordRead(LONG_PARAGRAPH, 5000, 3);
+
+    await runQuiz();
+
+    const pending = chrome._store.sra_quiz_pending;
+    expect(pending.questions[0].paragraphKey).toBeUndefined();
+  });
+
+  it("runQuiz's assignment-context generation path attaches a real paragraphKey alongside paragraphIndex, so a later quiz answer to it can be matched back to this concept", async () => {
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        // Respects the requested count, same reasoning as the pre-existing
+        // "runQuiz() under assignment context..." describe block further
+        // down this file — one picked paragraph here means one call asking
+        // for QUIZ_TARGET_COUNT (8) questions, clearing QUIZ_MIN_QUESTIONS.
+        const count = msg.body.count || 1;
+        cb({ ok: true, data: { questions: Array.from({ length: count }, (_, i) => ({ q: `Q${i}?`, options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: `span ${i}` })) } });
+      } else cb({ ok: true, data: {} });
+    };
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    const { setOrchestrator, sessionRecall, runQuiz } = await createHost(baseDeps({
+      assignmentId: 'assign-1',
+      getSession: async () => ({ token: 'sess-tok', email: 'r@example.com', expiresAt: Date.now() + 999_999 }),
+    }));
+    setOrchestrator({ documentKey: () => DOC_KEY });
+    sessionRecall.recordRead(LONG_PARAGRAPH, 5000, 3); // real paragraphIndex: 3
+
+    await runQuiz();
+
+    const pending = chrome._store.sra_quiz_pending;
+    expect(pending.questions[0].paragraphIndex).toBe(3);
+    expect(pending.questions[0].paragraphKey).toBe(PARAGRAPH_KEY);
   });
 });
 
