@@ -503,3 +503,123 @@ describe('interventionId (step 5)', () => {
     expect(d.interventionId).not.toMatch(/@/);
   });
 });
+
+// Intelligence-architecture audit, step 7. See evaluateRetentionCandidate's
+// own header for why it isn't just evaluateContentTrigger with a different
+// action string — it checks dismissal backoff and mints an interventionId,
+// neither of which pretest's own content-trigger path needs.
+describe('evaluateRetentionCandidate (step 7)', () => {
+  it('allows a due candidate under ordinary conditions', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('retention');
+    expect(typeof d.interventionId).toBe('string');
+    expect(d.interventionId.length).toBeGreaterThan(0);
+  });
+
+  it('spends from the SAME budget as evaluate() -- an ask followed immediately by a retention candidate hits the cooldown', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    take(p, struggling());
+    const d = p.evaluateRetentionCandidate({ paragraphKey: 'a different paragraph' });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/since the last interruption/);
+  });
+
+  it('respects the session cap, shared with every other path', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now, budget: { baseAllowance: 1, minGapMs: 0 } });
+    const first = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    p.record(first);
+    const second = p.evaluateRetentionCandidate({ paragraphKey: 'k2' });
+    expect(second.allow).toBe(false);
+    expect(second.reason).toMatch(/session budget spent/);
+  });
+
+  it('never interrupts twice on the same paragraph, sharing the dedup set with evaluate()/evaluateContentTrigger', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now, budget: { minGapMs: 0 } });
+    const first = p.evaluateRetentionCandidate({ paragraphKey: 'same-key' });
+    p.record(first);
+    const second = p.evaluateRetentionCandidate({ paragraphKey: 'same-key' });
+    expect(second.allow).toBe(false);
+    expect(second.reason).toMatch(/already interrupted/);
+  });
+
+  it('a paragraph already asked about via evaluate() cannot also be picked up as a retention candidate in the same session', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now, budget: { minGapMs: 0 } });
+    take(p, struggling({ signal: { text: 'shared paragraph' } }));
+    const d = p.evaluateRetentionCandidate({ paragraphKey: 'shared paragraph'.slice(0, 80).trim() });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/already interrupted/);
+  });
+
+  it('holds off once dismissal backoff has raised the bar, unlike evaluateContentTrigger which never checks it', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now, budget: { minGapMs: 0 } });
+    p.recordDismissal();
+    p.recordDismissal();
+    const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/consecutive dismissals/);
+  });
+
+  it('stops entirely once the hard dismissal-backoff stop is reached', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now, budget: { minGapMs: 0 } });
+    p.recordDismissal();
+    p.recordDismissal();
+    p.recordDismissal();
+    const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/declined 3 questions in a row/);
+  });
+
+  it('a real answer resets the backoff, unblocking a subsequent retention candidate', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now, budget: { minGapMs: 0 } });
+    p.recordDismissal();
+    p.recordDismissal();
+    p.recordAnswered();
+    const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    expect(d.allow).toBe(true);
+  });
+
+  it('record(decision) spends the shared budget exactly like every other decision shape', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now, budget: { minGapMs: 180000 } });
+    const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    p.record(d);
+    expect(p.stats().count).toBe(1);
+    const next = p.evaluateRetentionCandidate({ paragraphKey: 'k2' });
+    expect(next.allow).toBe(false);
+  });
+
+  it('a denied decision is never recorded against the budget (record() no-ops on allow: false)', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now, budget: { baseAllowance: 0, minGapMs: 0 } });
+    const denied = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    expect(denied.allow).toBe(false);
+    p.record(denied);
+    expect(p.stats().count).toBe(0);
+  });
+
+  it('is deterministic under a fixed clock and RNG, same as evaluate()\'s own ask path', () => {
+    const a = createInterventionPolicy({ now: fixedClock().now, random: () => 0 }).evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    const b = createInterventionPolicy({ now: fixedClock().now, random: () => 0 }).evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    expect(a.interventionId).toBe(b.interventionId);
+  });
+
+  it('accepts an injected generateInterventionId, same DI shape as every other path', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, generateInterventionId: () => 'fixed-retention-id' });
+    const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    expect(d.interventionId).toBe('fixed-retention-id');
+  });
+
+  it('never embeds anything resembling an account id, email, or pseudonym', () => {
+    const d = createInterventionPolicy({ now: fixedClock().now }).evaluateRetentionCandidate({ paragraphKey: 'k1' });
+    expect(d.interventionId).not.toMatch(/@/);
+  });
+});
