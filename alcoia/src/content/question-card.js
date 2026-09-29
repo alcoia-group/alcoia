@@ -115,7 +115,15 @@ export function createQuestionCard(deps = {}) {
     }
 
     const fingerprint = 'q-' + (question.span || question.q).slice(0, 80).trim();
-    const root = ui.reservePopup(fingerprint);
+    // Step 9A: tags this popup as a genuine question card — the ONE thing
+    // ui-controller.js's hasVisibleQuestionCard() looks for, so the policy
+    // can tell "a retrieval question is on screen" apart from every other
+    // popup kind (self-report, quiz-offer, plain explain) this same
+    // reservePopup() machinery also serves. This is the single call site
+    // every intervention type ('ask', 'session_recall', 'retention') already
+    // shares — see this file's own header — so tagging it here covers all
+    // three without a second call site to keep in sync.
+    const root = ui.reservePopup(fingerprint, 'question');
     if (!root) return false;
 
     // Step 5: this card's own identity for the whole rest of its lifetime —

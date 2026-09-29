@@ -81,6 +81,28 @@ export const DEFAULT_BUDGET = Object.freeze({
     raisedMinConfidence:  0.75,
     stopAskingAfter:      3,  // 3rd consecutive dismissal: stop asking until an answer
   },
+  // Adaptive intervention policy (intelligence-architecture audit, step 8).
+  // A single, uncorroborated genuine scroll-back is weaker evidence than
+  // every other STRUGGLING source — see regressionEvidenceStrength()'s own
+  // header below for the full reasoning. 2 mirrors state-engine.js's own
+  // CONFUSION_REREAD_COUNT exactly — the same repeat count that already
+  // earns a confusion-substate hint is what earns a scroll-back-only
+  // candidate its interruption too, rather than a second, independently
+  // tuned number for the same underlying fact.
+  regressionRepeatThreshold: 2,
+  // Repeated WRONG answers, like repeated dismissals, are real friction and
+  // raise the same kind of bar before the policy fires another 'ask' — a
+  // reader who keeps getting asked and keeps missing needs room for the
+  // explanation question-card.js already shows them to land, not another
+  // question stacked on top of it. A separate counter and a separate config
+  // block from dismissalBackoff on purpose: declining a question and
+  // getting one wrong are both real friction, but distinct signals worth
+  // tracking, and testing, independently — see evaluate()'s own comment at
+  // its call site and recordAnswered()'s header.
+  failureBackoff: {
+    raiseConfidenceAfter: 2,
+    raisedMinConfidence:  0.75,
+  },
 });
 
 /* Every label collected so far comes from a paragraph the state machine
@@ -100,6 +122,50 @@ function paragraphKey(state, fallbackEl) {
   const text = (state.signal && state.signal.text) ||
                (el && (el.innerText || el.textContent)) || '';
   return text.trim().slice(0, 80) || null;
+}
+
+/* Step 8 (adaptive intervention policy / candidate-vs-decision boundary).
+ *
+ * DETECTION IS NOT THE SAME AS AN INTERRUPTION BEING WARRANTED. A genuine
+ * scroll-back regression already passed through a real filter before it
+ * ever became a signal at all — scroll-regression.js's own header explains
+ * that a quick, oculomotor-style correction never resolves into a signal;
+ * only a slower return with real dwell at the earlier point does. But even
+ * a GENUINE re-read, taken alone, is exactly as ambiguous to this system as
+ * it is unremarkable to a fluent human reader who paused once to check
+ * something — CLAUDE.md's own "a wrong interruption costs more than a
+ * missed one" applies with special force here, since re-reading is
+ * ordinary, competent behaviour far more often than it is unresolved
+ * difficulty. So a lone regression signal is a CANDIDATE, not an
+ * intervention, until something else says otherwise.
+ *
+ * Returns null when `state` isn't regression-sourced STRUGGLING evidence at
+ * all (nothing to weigh); otherwise `{ repeated, corroborated }`, using
+ * ONLY evidence this codebase already computes elsewhere — nothing here is
+ * a new detector:
+ *
+ *   - repeated: scroll-regression.js's own sameIndexRereadCount, the exact
+ *     repeat count state-engine.js's classifySubstate() already requires
+ *     before it will attach a CONFUSION hint. A reader who keeps returning
+ *     to the SAME passage is giving materially stronger evidence than one
+ *     who went back once.
+ *   - corroborated: state-engine.js's own corroboration pass appends a
+ *     second evidence line whenever another signal in the same batch
+ *     agreed (selection, copy, uneven scrolling…) — evidence.length > 1 is
+ *     that fact, already computed, read here rather than re-derived.
+ *
+ * `slow_return` never reaches here in practice — state-engine.js resolves
+ * it straight to ON_PACE, never STRUGGLING, since a slow, deliberate return
+ * is competent reading, not struggle — excluded explicitly anyway so this
+ * function's own contract does not silently depend on that staying true
+ * elsewhere. */
+function regressionEvidenceStrength(state, repeatThreshold) {
+  const sig = state.signal;
+  if (!sig || sig.type !== 'regression' || sig.subtype === 'slow_return') return null;
+  return {
+    repeated: typeof sig.sameIndexRereadCount === 'number' && sig.sameIndexRereadCount >= repeatThreshold,
+    corroborated: Array.isArray(state.evidence) && state.evidence.length > 1,
+  };
 }
 
 export function createInterventionPolicy(config = {}) {
@@ -127,6 +193,13 @@ export function createInterventionPolicy(config = {}) {
   let msRead = 0;
 
   let consecutiveDismissals = 0;
+  // Step 8: two more small, session-local counters, fed the same way
+  // consecutiveDismissals already is (a terminal call from host.js after a
+  // real answer) — see recordAnswered()'s own header for exactly what each
+  // tracks and why they are independent of consecutiveDismissals and of
+  // each other.
+  let consecutiveIncorrectAnswers = 0;
+  let lastAnswerCorrect = null;
 
   function sessionCap() {
     const paragraphUnits = Math.floor(paragraphsRead / budget.paragraphsPerUnit);
@@ -199,6 +272,63 @@ export function createInterventionPolicy(config = {}) {
       }
       if (consecutiveDismissals >= raiseConfidenceAfter && state.confidence < raisedMinConfidence) {
         return deny(`confidence ${state.confidence.toFixed(2)} below the raised bar of ${raisedMinConfidence} after ${consecutiveDismissals} consecutive dismissals`);
+      }
+
+      // Step 8: repeated WRONG answers raise the same kind of bar repeated
+      // dismissals already do — a reader who keeps getting asked and keeps
+      // missing needs room for the repair question-card.js already shows
+      // them (the explanation offered after a wrong answer) to land, rather
+      // than another question stacked immediately on top of it. See
+      // recordAnswered()'s own header for how the counter moves.
+      const { raiseConfidenceAfter: failRaiseAfter, raisedMinConfidence: failRaisedMin } = budget.failureBackoff;
+      if (consecutiveIncorrectAnswers >= failRaiseAfter && state.confidence < failRaisedMin) {
+        return deny(`confidence ${state.confidence.toFixed(2)} below the raised bar of ${failRaisedMin} after ${consecutiveIncorrectAnswers} consecutive wrong answers`);
+      }
+
+      // Step 8: candidate-vs-decision boundary for scroll-back regressions
+      // specifically — see regressionEvidenceStrength()'s own header for
+      // the full reasoning. `null` means this proposal isn't regression-
+      // sourced at all (an incorrect answer, a self-report, a slow-pace or
+      // blur-return signal), so every one of those is completely unaffected
+      // by this block and falls straight through to the checks below, same
+      // as before this item.
+      const strength = regressionEvidenceStrength(state, budget.regressionRepeatThreshold);
+      if (strength) {
+        const boosted = strength.repeated || strength.corroborated;
+        if (!boosted) {
+          return deny('a single scroll-back is not enough evidence on its own to interrupt — held as a candidate, not acted on');
+        }
+        // A recent, genuinely successful retrieval is itself real evidence
+        // the reader is doing fine — reason enough to hold off on a
+        // borderline candidate a moment longer, though not reason enough to
+        // override a regression that is BOTH repeated AND corroborated,
+        // which is strong evidence in its own right regardless of what the
+        // reader's last answer was (requirement 4: this must remain capable
+        // of intervening when the evidence is strong, never a blanket
+        // "never on scroll-up" rule).
+        const doublyBoosted = strength.repeated && strength.corroborated;
+        if (lastAnswerCorrect === true && !doublyBoosted) {
+          return deny('a recent correct answer means this scroll-back alone is not enough evidence yet to interrupt again');
+        }
+      }
+
+      // Step 9A (active intervention awareness): a candidate that has
+      // already cleared every evidence/adaptation check above is still not
+      // promoted to a decision if the reader is already dealing with a
+      // question — ctx.questionCardVisible is ground truth from
+      // ui-controller.js's own openPopups (see hasVisibleQuestionCard()'s
+      // header), transported here by the caller (orchestrator.js, via
+      // host.isQuestionCardVisible()), never guessed at by this module.
+      // Sits deliberately AFTER evidence-strength so a candidate that was
+      // never good enough on its own still reports THAT as the reason, and
+      // BEFORE budget/cooldown/paragraph-dedup below, matching this item's
+      // own candidate -> evidence -> active-card -> budget ordering. A
+      // candidate denied here spends nothing (deny() never touches the
+      // dismissal/failure counters, never calls record(), never mints an
+      // interventionId) — it is simply not promoted this time, and remains
+      // exactly as re-evaluable on the next signal as it always was.
+      if (ctx.questionCardVisible) {
+        return deny('a question card is already visible — holding off on a redundant interruption');
       }
     }
 
@@ -335,6 +465,18 @@ export function createInterventionPolicy(config = {}) {
       return deny(`${consecutiveDismissals} consecutive dismissals — holding off retention until answered`);
     }
 
+    // Step 9A: same active-card gate as evaluate()'s own 'ask' path, same
+    // ground truth (ctx.questionCardVisible, ui-controller.js's
+    // hasVisibleQuestionCard()) — a retention retrieval renders through the
+    // exact same question-card.js machinery an 'ask' does, so it is
+    // suppressed by, and itself counts toward, the same "a question is
+    // already on screen" fact. Placed in the same relative position as
+    // evaluate()'s own check: after every adaptation/dismissal check above,
+    // before the paragraph-dedup/budget check below.
+    if (ctx.questionCardVisible) {
+      return deny('a question card is already visible — holding off on a redundant interruption');
+    }
+
     const key = ctx.paragraphKey || null;
     if (key && seenParagraphs.has(key)) {
       return deny('already interrupted on this paragraph');
@@ -385,11 +527,41 @@ export function createInterventionPolicy(config = {}) {
   }
 
   /* Any answer — correct or incorrect — is engagement with the card, which
-   * is what the backoff exists to detect the absence of. Reset regardless of
-   * correctness: this is not about performance, only about willingness to
-   * be tested at all. */
-  function recordAnswered() {
+   * is what the dismissal backoff exists to detect the absence of. Reset
+   * unconditionally regardless of correctness: that half is not about
+   * performance, only about willingness to be tested at all — unchanged by
+   * this item.
+   *
+   * `correct` (step 8, optional, boolean | null) additionally tracks two
+   * new, independent things:
+   *   - consecutiveIncorrectAnswers: reset the moment a correct answer
+   *     arrives, incremented on a wrong one, left untouched by an
+   *     ungraded/unknown verdict — an ungraded answer asserts nothing about
+   *     performance, the same treatment CLAUDE.md gives it everywhere else
+   *     in this system, so it neither raises nor lowers this counter.
+   *   - lastAnswerCorrect: whether the reader's MOST RECENT graded answer
+   *     was right — read only by regressionEvidenceStrength()'s call site
+   *     in evaluate(), to soften a borderline, single-signal scroll-back
+   *     candidate specifically. It never overrides a genuinely strong
+   *     signal (an incorrect answer, a self-report): both still fire at
+   *     their own full confidence regardless of this flag.
+   *
+   * Every caller that predates this item — every existing test, and any
+   * call site that never passes an argument — gets `correct === undefined`,
+   * which falls into the same "ungraded" branch as an explicit `null`:
+   * dismissal backoff still resets exactly as before, neither new counter
+   * moves. */
+  function recordAnswered(correct) {
     consecutiveDismissals = 0;
+    if (correct === true) {
+      consecutiveIncorrectAnswers = 0;
+      lastAnswerCorrect = true;
+    } else if (correct === false) {
+      consecutiveIncorrectAnswers += 1;
+      lastAnswerCorrect = false;
+    } else {
+      lastAnswerCorrect = null;
+    }
   }
 
   return {
@@ -407,10 +579,13 @@ export function createInterventionPolicy(config = {}) {
       remaining: Math.max(0, sessionCap() - count),
       paragraphsRead, msRead,
       consecutiveDismissals,
+      // Step 8.
+      consecutiveIncorrectAnswers, lastAnswerCorrect,
     }),
     reset() {
       lastAt = 0; count = 0; seenParagraphs.clear();
       paragraphsRead = 0; msRead = 0; consecutiveDismissals = 0;
+      consecutiveIncorrectAnswers = 0; lastAnswerCorrect = null;
     },
   };
 }
