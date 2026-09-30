@@ -1564,6 +1564,248 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
   });
 });
 
+/* Intelligence-architecture audit, step 9A — active intervention awareness.
+ * ui.hasVisibleQuestionCard() (ui-controller.js) and host.isQuestionCardVisible()
+ * (the one callback that carries that fact across the orchestrator/host
+ * boundary — see host.js's own comment on it) are both exhaustively unit-
+ * tested elsewhere (tests/ui-controller.test.js, tests/orchestrator.test.js).
+ * This block is the end-to-end proof that they reflect a REAL rendered
+ * card in this file's own real-host/real-ui/real-question-card setup, the
+ * same standard the step-7 retention block just above already holds
+ * itself to. */
+describe('active intervention awareness (step 9A)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const DUE_URL = 'https://api.test.invalid/api/knowledge-state/due';
+  // fetchQuestions() refuses anything under 120 characters (host.js's own
+  // floor) — every paragraph fed to handleAsk() in this block has to clear
+  // it, or `shown` silently comes back false and nothing renders at all.
+  const LONG_P_A = 'The first paragraph used in this test, deliberately padded well past the hundred-and-twenty character floor fetchQuestions enforces.';
+  const LONG_P_B = 'A second, completely different paragraph, also padded past that same hundred-and-twenty character floor so its own question can generate.';
+
+  function assignmentDeps(overrides = {}) {
+    return baseDeps({
+      assignmentId: 'assign-9a',
+      getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    // Same reset, same reason, as the retention describe block above.
+    document.body.innerHTML = '';
+    // The file-level beforeEach only stubs SUMMARIZE_URL/TOKEN_URL — the
+    // assignment-context tests in this block also need ASSIGNMENTS_URL
+    // (interventions/outcomes) and KNOWLEDGE_STATE_DUE_URL (retention),
+    // the same values the step-7 retention block above stubs for the
+    // identical reason.
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+      TOKEN_URL: 'https://api.test.invalid/api/token',
+      ASSIGNMENTS_URL,
+      KNOWLEDGE_STATE_DUE_URL: DUE_URL,
+    });
+  });
+
+  async function realKnowledgeUnitId(text) {
+    const mod = await import('../alcoia/src/content/signals/knowledge-unit.js');
+    return mod.computeKnowledgeUnitId(text);
+  }
+
+  function stubQuestions() {
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({
+      ok: true,
+      data: { questions: [{ q: 'Still there?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a span' }] },
+    });
+  }
+
+  function proxyFetchImpl(calls, candidates) {
+    return vi.fn((url, options) => {
+      calls.push({ url, options });
+      if (url === DUE_URL) return { ok: true, status: 200, data: { candidates } };
+      return { ok: true, status: 200, data: { recorded: true } };
+    });
+  }
+
+  it('host.isQuestionCardVisible() reflects a real rendered ask card, and flips back once it is answered and closed', async () => {
+    const { host } = await createHost(baseDeps());
+    expect(host.isQuestionCardVisible()).toBe(false);
+
+    document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_1' };
+    const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    expect(shown).toBe(true);
+    expect(host.isQuestionCardVisible()).toBe(true);
+
+    queryAlcoia('.sra-q-option[data-index="0"]').click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+    // Instruction 12's own distinction: an outcome having been recorded
+    // does not mean the card disappeared — it is still on screen showing
+    // the result until the reader closes it.
+    expect(host.isQuestionCardVisible()).toBe(true);
+
+    queryAlcoia('.sra-q-skip').click(); // relabelled "Close" by finish() post-answer
+    expect(host.isQuestionCardVisible()).toBe(false);
+  });
+
+  it('host.isQuestionCardVisible() flips back to false on a plain dismissal too (no answer at all)', async () => {
+    const { host } = await createHost(baseDeps());
+    document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_2' };
+    const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    expect(shown).toBe(true);
+    expect(host.isQuestionCardVisible()).toBe(true);
+
+    queryAlcoia('.sra-close-btn').click();
+    expect(host.isQuestionCardVisible()).toBe(false);
+  });
+
+  it('an ask card left open (unanswered) suppresses a due retention candidate even after the shared cooldown has elapsed', async () => {
+    const dueText = 'A due paragraph, padded well past the 120-character question-generation floor so it can clear it for this integration test.';
+    const knowledgeUnitId = await realKnowledgeUnitId(dueText);
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    // minGapMs: 0 isolates this test to the active-card gate specifically —
+    // without it, the pre-existing "shares the SAME budget" test just above
+    // already proves suppression, but for the cooldown, a different reason
+    // this test is not about.
+    const interventionPolicy = engineModule.createInterventionPolicy({ budget: { minGapMs: 0 } });
+    setOrchestrator({ interventionPolicy });
+
+    document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
+    const decision = { allow: true, action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_open' };
+    const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    expect(shown).toBe(true);
+    interventionPolicy.record(decision);
+    expect(host.isQuestionCardVisible()).toBe(true);
+
+    host.onParagraphRead(dueText, 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // The ask card is STILL open and unanswered — no retention
+    // intervention fires, even though minGapMs: 0 means the shared budget/
+    // cooldown alone would already have allowed one.
+    expect(calls.filter((c) => c.url.endsWith('/interventions')).length).toBe(1); // just the ask
+    expect(queryAllAlcoia('.sra-q-badge')).toHaveLength(1);
+  });
+
+  it('the same due candidate fires once the open ask card is dismissed (test D)', async () => {
+    const dueText = 'Another due paragraph, padded well past the 120-character floor so it can clear it for this particular integration test case.';
+    const knowledgeUnitId = await realKnowledgeUnitId(dueText);
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    const interventionPolicy = engineModule.createInterventionPolicy({ budget: { minGapMs: 0 } });
+    setOrchestrator({ interventionPolicy });
+
+    document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
+    const decision = { allow: true, action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_to_close' };
+    const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    expect(shown).toBe(true);
+    interventionPolicy.record(decision);
+    expect(host.isQuestionCardVisible()).toBe(true);
+
+    host.onParagraphRead(dueText, 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls.filter((c) => c.url.endsWith('/interventions')).length).toBe(1); // suppressed so far
+
+    // Dismiss the still-open ask card — the popup dedicated to the 'ask'
+    // question ('q-' + its own span/text), the ONLY question card open.
+    queryAlcoia('.sra-close-btn').click();
+    expect(host.isQuestionCardVisible()).toBe(false);
+
+    // dueKnowledgeUnits still holds this candidate — it was never consumed,
+    // since it was never actually shown (see checkRetentionCandidate's own
+    // "budget spent only on yes" comment). A fresh paragraph-read now
+    // succeeds.
+    host.onParagraphRead(dueText, 5000, 1);
+    await vi.waitFor(() => expect(calls.filter((c) => c.url.endsWith('/interventions')).length).toBe(2));
+    const retentionCall = calls.filter((c) => c.url.endsWith('/interventions'))[1];
+    expect(JSON.parse(retentionCall.options.body).type).toBe('retention');
+  });
+
+  it('(test E) two concurrent question cards — closing one leaves the other, and Step 5 attribution, intact', async () => {
+    // The two cards need DISTINCT questions — question-card.js's own
+    // dedup fingerprint is derived from the question's span/text
+    // (`'q-' + (question.span || question.q)`), so two calls answered with
+    // the SAME canned question (the file-level default beforeEach's own
+    // stub) would collide on that fingerprint and the second reservePopup()
+    // would just flash the first rather than opening a genuinely second
+    // card — a different failure mode than this test is about.
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      const forB = msg.body?.text?.includes(LONG_P_B.slice(0, 20));
+      cb({
+        ok: true,
+        data: { questions: [{
+          q: forB ? 'Question B?' : 'Question A?',
+          options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e',
+          span: forB ? 'span-b' : 'span-a',
+        }] },
+      });
+    };
+    const { host } = await createHost(baseDeps());
+
+    document.body.innerHTML = `<p id="a">${LONG_P_A}</p><p id="b">${LONG_P_B}</p>`;
+    const decisionA = { action: 'ask', evidence: ['a'], wasExplorationSample: false, interventionId: 'iv_A' };
+    const decisionB = { action: 'ask', evidence: ['b'], wasExplorationSample: false, interventionId: 'iv_B' };
+
+    const shownA = await host.onIntervention(decisionA, {}, document.getElementById('a'), 0);
+    const shownB = await host.onIntervention(decisionB, {}, document.getElementById('b'), 1);
+    expect(shownA).toBe(true);
+    expect(shownB).toBe(true);
+    expect(queryAllAlcoia('.sra-q-badge')).toHaveLength(2);
+    expect(host.isQuestionCardVisible()).toBe(true);
+
+    // Answer B first, by its own interventionId — Step 5's concurrency
+    // guarantee (pendingByIntervention) is what makes this resolve the
+    // RIGHT card rather than clobbering A's still-pending state.
+    const [cardA, cardB] = queryAllAlcoia('.sra-q-badge').map((b) => b.closest('.sra-popup'));
+    cardB.querySelector('.sra-q-option[data-index="0"]').click();
+    cardB.querySelector('.sra-q-conf-btn[data-conf="high"]').click();
+    cardB.querySelector('.sra-q-skip').click(); // closes B — openPopups drops it synchronously, the DOM node itself only after closePopup()'s own 250ms transition
+
+    expect(host.isQuestionCardVisible()).toBe(true); // A is still up
+
+    cardA.querySelector('.sra-close-btn').click(); // dismiss A
+    expect(host.isQuestionCardVisible()).toBe(false);
+  });
+
+  it('a session-recall card (reader-initiated) is also tagged as a visible question card, since it renders through the same machinery', async () => {
+    const { host, sessionRecall, runSessionRecall } = await createHost(baseDeps());
+    // session-recall.js's own thresholds: minWords 40 (LONG_P_A is only 17
+    // words — plenty for fetchQuestions' 120-char floor, not enough for
+    // this one), minDwellMs 4000.
+    const recallText = 'A long paragraph used specifically for the session recall test, which requires at least forty distinct words and a dwell time of four seconds or more before it becomes a real recall candidate the reader can be asked about later in the session.';
+    sessionRecall.recordRead(recallText, 5000, 0);
+
+    const recallPromise = runSessionRecall(1);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    expect(host.isQuestionCardVisible()).toBe(true);
+
+    queryAlcoia('.sra-close-btn').click();
+    await recallPromise;
+    expect(host.isQuestionCardVisible()).toBe(false);
+  });
+
+  it('anonymous readers (no assignmentId/getSession) get the identical isQuestionCardVisible() behavior — purely local UI state, no account involved', async () => {
+    const { host } = await createHost(baseDeps()); // no assignmentId, no getSession
+    expect(host.isQuestionCardVisible()).toBe(false);
+
+    document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_anon' };
+    const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    expect(shown).toBe(true);
+    expect(host.isQuestionCardVisible()).toBe(true);
+  });
+});
+
 /* Item DC-1a — the same assignmentId+getSession gate as outcome reporting
  * just above, mirrored for exactly the reason its own header states: the
  * real server endpoint (confirmed against alcoiaServer's

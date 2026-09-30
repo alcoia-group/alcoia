@@ -557,7 +557,17 @@ export async function createHost(deps) {
       try { orchestratorRef?.pumpSignals(record); } catch (e) {}
       try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
       if (record.paragraphKey) sessionRecall.recordAnswered(record.paragraphKey, record.correct);
-      try { orchestratorRef?.interventionPolicy.recordAnswered(); } catch (e) {}
+      // Step 8: the same record's own `correct` (boolean, or null for an
+      // ungraded/adversarial verdict) — see intervention-policy.js's own
+      // recordAnswered() header for what this now feeds (consecutive-
+      // wrong-answer backoff, and "was the last answer right" for the
+      // scroll-back candidate check). Not a second read of anything: this
+      // is the exact same field submitOutcome() below already sends.
+      try {
+        orchestratorRef?.interventionPolicy.recordAnswered(
+          typeof record.correct === 'boolean' ? record.correct : null,
+        );
+      } catch (e) {}
       // Item S6/E4 follow-up. Deliberately excludes quiz.js's separate
       // standalone-quiz answers — those never reach this callback at all
       // (quiz.js writes straight to quiz-store.js's IndexedDB, which its
@@ -910,7 +920,15 @@ export async function createHost(deps) {
 
     if (await snoozeControl.isActive()) return;
 
-    const decision = orchestratorRef.interventionPolicy.evaluateRetentionCandidate({ paragraphKey: identity.paragraphKey });
+    // Step 9A: ui.hasVisibleQuestionCard() is called directly here (this
+    // closure already holds `ui`, unlike orchestrator.js, which reaches it
+    // through host.isQuestionCardVisible() instead — see that callback's
+    // own comment below for why two different call sites need two
+    // different paths to the same fact).
+    const decision = orchestratorRef.interventionPolicy.evaluateRetentionCandidate({
+      paragraphKey: identity.paragraphKey,
+      questionCardVisible: ui.hasVisibleQuestionCard(),
+    });
     if (!decision.allow) return;
 
     const level = await pickLevel(identity);
@@ -976,6 +994,15 @@ export async function createHost(deps) {
     setCurrentParagraph: (p) => { currentParagraph = p; },
     setPrevParagraphText: (t) => { prevParagraphText = t; },
     setCogState: (label) => { lastCogState = label; },
+    // Step 9A (active intervention awareness): orchestrator.js has no
+    // reference to `ui` at all (by design — it decides, ui-controller.js
+    // renders), so this is the one callback that carries ui-controller.js's
+    // own hasVisibleQuestionCard() fact across that boundary, the same
+    // "UI controller owns visibility, orchestrator transports the fact,
+    // policy consumes the fact" shape this item's own brief asks for. A
+    // plain, synchronous getter — no new state is created here, this reads
+    // straight through to ui-controller.js's own openPopups.
+    isQuestionCardVisible: () => ui.hasVisibleQuestionCard(),
     onParagraphRead: (text, dwellMs, paragraphIndex) => {
       sessionRecall.recordRead(text, dwellMs, paragraphIndex);
       // Intelligence-architecture audit, step 7 -- fire-and-forget, same
