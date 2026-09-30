@@ -244,6 +244,14 @@ export async function createHost(deps) {
   // ── AI-call infrastructure ────────────────────────────────────────────
   const diagLogModule = await loadModule('src/shared/diag-log.js');
   const diagLog = diagLogModule.createDiagLog();
+
+  // ── Automatic-intervention concurrency guard (Step 12A) ─────────────────
+  // Shared between handleAsk() and checkRetentionCandidate() below — see
+  // automatic-intervention-guard.js's own header for why those two
+  // specifically need one shared lock. Session recall, quiz, and every
+  // manual fetchSummary call are reader-initiated and never acquire this.
+  const automaticInterventionGuardModule = await loadModule('src/content/automatic-intervention-guard.js');
+  const automaticInterventionGuard = automaticInterventionGuardModule.createAutomaticInterventionGuard();
   const tokenUrl = () => {
     try { return new URL('/api/token', s().backendUrl || BACKEND_DEFAULT).href; }
     catch (e) { return self.ALCOIA_CONFIG.TOKEN_URL; }
@@ -866,43 +874,70 @@ export async function createHost(deps) {
     const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
     if (!text) return false;
 
-    const identity = computeIdentity(text);
-    // Item 44: same engine, same rule, as every other caller — in practice
-    // this is almost always 'recognition' here, since the interruption
-    // budget already refuses to ask about the same paragraph twice
-    // automatically; a higher rung only comes up if this exact paragraph
-    // was already tested via a review or the quiz earlier this session.
-    const level = await pickLevel(identity);
-    const opts = level !== 'recognition' ? { level } : {};
+    // Step 12A: this and checkRetentionCandidate (below) are the two
+    // AUTOMATIC paths that reach AI generation — see automatic-
+    // intervention-guard.js's own header. orchestrator.js's own
+    // interventionInFlight already keeps a second state-subscription
+    // dispatch from re-entering this function, but checkRetentionCandidate
+    // is invoked from onParagraphRead, entirely outside that guard, so it
+    // is not enough on its own to prevent this specific function and that
+    // one from generating concurrently. Acquired after the text/target
+    // extraction above (which never reaches an AI call either way, so
+    // guarding it would serve nothing), released in `finally` regardless
+    // of how generation or presentation turns out.
+    if (!automaticInterventionGuard.tryAcquire()) return false;
+    try {
+      const identity = computeIdentity(text);
+      // Item 44: same engine, same rule, as every other caller — in practice
+      // this is almost always 'recognition' here, since the interruption
+      // budget already refuses to ask about the same paragraph twice
+      // automatically; a higher rung only comes up if this exact paragraph
+      // was already tested via a review or the quiz earlier this session.
+      const level = await pickLevel(identity);
+      const opts = level !== 'recognition' ? { level } : {};
 
-    const questions = await fetchQuestions(text, opts);
-    if (!questions.length) return false;
+      const questions = await fetchQuestions(text, opts);
+      if (!questions.length) return false;
 
-    let anchorRect = null;
-    try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
-    if (el) highlightElement(el, 4000);
+      let anchorRect = null;
+      try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
+      if (el) highlightElement(el, 4000);
 
-    const evidenceOverride = engineModule.evidenceLineForLevel(level);
+      const evidenceOverride = engineModule.evidenceLineForLevel(level);
 
-    // Step 5: minted by intervention-policy.js at the moment this 'ask'
-    // decision was made (the "intervention selected" step of the causal
-    // chain) — reused here as-is, not regenerated, so the id genuinely
-    // identifies the decision that led to this presentation.
-    const interventionId = decision.interventionId;
-    const shown = questionCard.show(questions[0], {
-      evidence: evidenceOverride ? [evidenceOverride] : decision.evidence,
-      anchorRect,
-      paragraphKey: identity.paragraphKey,
-      knowledgeUnitId: identity.knowledgeUnitId,
-      paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
-      wasExplorationSample: decision.wasExplorationSample === true,
-      showSelfReport: state.substate === 'unclear',
-      interventionId,
-    });
-    if (shown) {
-      reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask');
+      // Step 5: minted by intervention-policy.js at the moment this 'ask'
+      // decision was made (the "intervention selected" step of the causal
+      // chain) — reused here as-is, not regenerated, so the id genuinely
+      // identifies the decision that led to this presentation.
+      const interventionId = decision.interventionId;
+      const shown = questionCard.show(questions[0], {
+        evidence: evidenceOverride ? [evidenceOverride] : decision.evidence,
+        anchorRect,
+        paragraphKey: identity.paragraphKey,
+        knowledgeUnitId: identity.knowledgeUnitId,
+        paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
+        wasExplorationSample: decision.wasExplorationSample === true,
+        showSelfReport: state.substate === 'unclear',
+        interventionId,
+      });
+      if (shown) {
+        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask');
+      } else {
+        // Step 12A: generation succeeded (a real, usable question came
+        // back) but presentation did not — diagnostic-only, never a budget
+        // spend. record() (called by orchestrator.js) already only runs
+        // when `shown` is true, unchanged by this item; this is purely
+        // what makes the "spent but not shown" case observable, per the
+        // Step 12 audit's §6/§15 finding. Structural fields only —
+        // decision.action/decision.reason are the same fixed, generic
+        // strings orchestrator.js's own debugEnabled branch already logs,
+        // never passage text, an id, or a hash.
+        diagLog.log('questions', `generated_not_presented action=${decision.action} reason=${decision.reason}`);
+      }
+      return shown;
+    } finally {
+      automaticInterventionGuard.release();
     }
-    return shown;
   }
 
   /* Intelligence-architecture audit, step 7 -- a due retention item becomes
@@ -940,30 +975,47 @@ export async function createHost(deps) {
     });
     if (!decision.allow) return;
 
-    const level = await pickLevel(identity);
-    const opts = level !== 'recognition' ? { level } : {};
-    const questions = await fetchQuestions(text, opts);
-    if (!questions.length) return;
+    // Step 12A: same shared guard handleAsk acquires — see that function's
+    // own comment, and automatic-intervention-guard.js's header. This is
+    // the one call site the guard actually exists for: this function is
+    // reached from onParagraphRead, fire-and-forget, outside
+    // orchestrator.js's own interventionInFlight entirely, so without this
+    // a due retention candidate and a state-driven ask could both reach
+    // fetchQuestions() at once.
+    if (!automaticInterventionGuard.tryAcquire()) return;
+    try {
+      const level = await pickLevel(identity);
+      const opts = level !== 'recognition' ? { level } : {};
+      const questions = await fetchQuestions(text, opts);
+      if (!questions.length) return;
 
-    const shown = questionCard.show(questions[0], {
-      evidence: decision.evidence,
-      paragraphKey: identity.paragraphKey,
-      knowledgeUnitId: identity.knowledgeUnitId,
-      paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
-      interventionId: decision.interventionId,
-    });
-    // "Budget spent only on yes" — the same rule orchestrator.js's own
-    // comment states for handleAsk's path, applied here directly since
-    // this path has no orchestrator call site to do it for us.
-    if (shown) {
-      orchestratorRef.interventionPolicy.record(decision);
-      reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'retention');
-      // Belt-and-suspenders alongside the policy's own paragraph-key dedup:
-      // this specific knowledge unit has now been presented this session,
-      // so it should not be attempted again even if a later paragraph
-      // happens to produce a different paragraphKey for the same
-      // knowledgeUnitId (duplicate content at a different position).
-      dueKnowledgeUnits.delete(identity.knowledgeUnitId);
+      const shown = questionCard.show(questions[0], {
+        evidence: decision.evidence,
+        paragraphKey: identity.paragraphKey,
+        knowledgeUnitId: identity.knowledgeUnitId,
+        paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
+        interventionId: decision.interventionId,
+      });
+      // "Budget spent only on yes" — the same rule orchestrator.js's own
+      // comment states for handleAsk's path, applied here directly since
+      // this path has no orchestrator call site to do it for us.
+      if (shown) {
+        orchestratorRef.interventionPolicy.record(decision);
+        reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'retention');
+        // Belt-and-suspenders alongside the policy's own paragraph-key dedup:
+        // this specific knowledge unit has now been presented this session,
+        // so it should not be attempted again even if a later paragraph
+        // happens to produce a different paragraphKey for the same
+        // knowledgeUnitId (duplicate content at a different position).
+        dueKnowledgeUnits.delete(identity.knowledgeUnitId);
+      } else {
+        // Step 12A: same "generated but not presented" diagnostic as
+        // handleAsk — see that function's own comment for the exact
+        // conditions and privacy reasoning.
+        diagLog.log('questions', `generated_not_presented action=${decision.action} reason=${decision.reason}`);
+      }
+    } finally {
+      automaticInterventionGuard.release();
     }
   }
 
