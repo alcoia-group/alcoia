@@ -197,7 +197,8 @@ export async function createHost(deps) {
     };
   }
 
-  // ── Retention due-list (intelligence-architecture audit, step 7) ───────
+  // ── Retention due-list (intelligence-architecture audit, step 7 built,
+  // step 10 context-scoped) ────────────────────────────────────────────
   // Same account-only gate as every reporting manager above -- there is no
   // "account session without an assignment" path in this extension today,
   // so this reuses that exact boundary rather than inventing a new one.
@@ -205,6 +206,14 @@ export async function createHost(deps) {
   // header has the full reasoning for that. Keyed by knowledgeUnitId so
   // checkRetentionCandidate (below, near handleAsk) can do a cheap Map
   // lookup per paragraph read, rather than a linear scan.
+  //
+  // STEP 10: dueUrl is now built per-assignment, the same way
+  // interventionsUrl/explanationEventsUrl already are above, not a flat
+  // config constant -- Knowledge State (and its due-list route) is now
+  // scoped by (account, assignment, knowledge unit), so a due candidate
+  // fetched here is only ever due WITHIN this one assignmentId, never
+  // blended with any other assignment the same account may have used the
+  // same content in.
   const dueKnowledgeUnits = new Map();
   if (assignmentId && getSession) {
     // Same routing reason as submitOutcome above.
@@ -212,7 +221,7 @@ export async function createHost(deps) {
     const retentionModule = await loadModule('src/shared/retention.js');
     const retentionManager = retentionModule.createRetentionManager({
       getSession,
-      dueUrl: self.ALCOIA_CONFIG.KNOWLEDGE_STATE_DUE_URL,
+      dueUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/knowledge-state/due`,
       fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
     try {
