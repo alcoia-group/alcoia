@@ -117,13 +117,23 @@
     // -> { recorded: true }. Not nested under ASSIGNMENTS_URL like outcomes —
     // this is a flat route with assignmentId as a body field, not a path param.
     KINEMATICS_URL: BACKEND_ORIGIN + '/api/sessions/kinematics',
-    // Intelligence-architecture audit, step 7 — src/shared/retention.js's
-    // getDue(). Confirmed by reading alcoiaServer's src/http/routes/
-    // knowledge-state.js directly: GET here (Authorization: Bearer only,
-    // no path/body params — self-scoped to the caller's own account) ->
-    // { candidates: [{ knowledgeUnitId, retentionStage, nextRetrievalAt }] }.
-    // Flat, like KINEMATICS_URL — Knowledge State has no assignment_id
-    // column, so there is nothing to nest this under.
-    KNOWLEDGE_STATE_DUE_URL: BACKEND_ORIGIN + '/api/knowledge-state/due',
+    // Intelligence-architecture audit, step 7 (built) / step 10 (this
+    // value's own shape — context-scoped Knowledge State). src/shared/
+    // retention.js's getDue(). Confirmed by reading alcoiaServer's
+    // src/http/routes/knowledge-state.js directly: GET
+    // ASSIGNMENTS_URL + "/:assignmentId/knowledge-state/due"
+    // (Authorization: Bearer, participant-checked, scoped to the caller's
+    // own account AND this one assignment) -> { candidates: [{
+    // knowledgeUnitId, retentionStage, nextRetrievalAt }] }.
+    //
+    // STEP 10 CORRECTION: was a flat KNOWLEDGE_STATE_DUE_URL constant, on
+    // the reasoning that "Knowledge State has no assignment_id column, so
+    // there is nothing to nest this under" — true when this was written,
+    // no longer true. Knowledge State is now scoped by
+    // (account_id, assignment_id, knowledge_unit_id), and the due-list
+    // route moved under ASSIGNMENTS_URL to match, exactly like outcomes'
+    // own "/:id/outcomes" append shown above. No separate constant here
+    // any more — host.js builds the per-assignment URL itself, the same
+    // way it already builds interventionsUrl.
   });
 })(typeof self !== 'undefined' ? self : this);
