@@ -1567,6 +1567,365 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
   });
 });
 
+/* Step 12A — automatic-intervention concurrency guard. Proves the one race
+ * the Step 12 audit found (checkRetentionCandidate, invoked fire-and-forget
+ * from onParagraphRead, sits entirely outside orchestrator.js's own
+ * interventionInFlight and could therefore generate concurrently with a
+ * state-driven ask) is actually closed, and that the fix does not touch
+ * anything interventionPolicy.js already owns (record() semantics, the
+ * cooldown, the session cap, paragraph dedup) or reader-initiated paths
+ * (session recall). Uses a REAL createInterventionPolicy() instance
+ * throughout, the same "prove it against the real module, not a mock"
+ * standard the step-7 retention block above already holds itself to.
+ */
+describe('automatic-intervention concurrency guard (Step 12A)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const DUE_URL = 'https://api.test.invalid/api/assignments/assign-12a/knowledge-state/due';
+
+  function assignmentDeps(overrides = {}) {
+    return baseDeps({
+      assignmentId: 'assign-12a',
+      getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+      TOKEN_URL: 'https://api.test.invalid/api/token',
+      ASSIGNMENTS_URL,
+    });
+  });
+
+  async function realKnowledgeUnitId(text) {
+    const mod = await import('../alcoia/src/content/signals/knowledge-unit.js');
+    return mod.computeKnowledgeUnitId(text);
+  }
+
+  function proxyFetchImpl(calls, candidates) {
+    return vi.fn((url, options) => {
+      calls.push({ url, options });
+      if (url === DUE_URL) return { ok: true, status: 200, data: { candidates } };
+      return { ok: true, status: 200, data: { recorded: true } };
+    });
+  }
+
+  /* Captures every /api/questions request instead of answering it
+   * immediately, so a test can hold generation "in flight" and control
+   * exactly when (and whether) it resolves — the only way to actually prove
+   * a concurrent second attempt was blocked, rather than merely lucky in its
+   * timing. Anything else (summarize) resolves immediately, unchanged from
+   * this file's own default. */
+  function deferredQuestions() {
+    const pendingCallbacks = [];
+    const impl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        pendingCallbacks.push(cb);
+      } else {
+        cb({ ok: true, data: { summary: 'a canned summary' } });
+      }
+    };
+    return {
+      impl,
+      pendingCount: () => pendingCallbacks.length,
+      resolveNext(data = { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] }) {
+        const cb = pendingCallbacks.shift();
+        if (cb) cb({ ok: true, data });
+      },
+      failNext() {
+        const cb = pendingCallbacks.shift();
+        if (cb) cb({ ok: false, status: 500 });
+      },
+    };
+  }
+
+  function installSendMessage(deferred) {
+    globalThis.__sendMessageImpl = deferred.impl;
+    const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    chrome.runtime.sendMessage = sendMessage;
+    return sendMessage;
+  }
+
+  function questionsCallCount(sendMessage) {
+    return sendMessage.mock.calls.filter(([msg]) => msg.url?.includes('/api/questions')).length;
+  }
+
+  const ASK_TEXT = 'The paragraph the reader is currently struggling with, long enough to clear fetchQuestions\' own 120-character floor easily.';
+  const DUE_TEXT = 'A completely different due paragraph the reader also happens to read in the same moment, also long enough to clear that floor.';
+
+  it('ask starts first: a retention candidate arriving mid-generation never reaches fetchQuestions', async () => {
+    const knowledgeUnitId = await realKnowledgeUnitId(DUE_TEXT);
+    const deferred = deferredQuestions();
+    const sendMessage = installSendMessage(deferred);
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    const interventionPolicy = engineModule.createInterventionPolicy({});
+    setOrchestrator({ interventionPolicy });
+
+    document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_race' };
+    const askPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
+
+    // Retention's own async chain (snoozeControl check, policy evaluation,
+    // pickLevel) all runs before it would ever reach fetchQuestions — give
+    // it real time to get there and be blocked, not just one microtask.
+    host.onParagraphRead(DUE_TEXT, 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Only ask's own request ever reached the network — retention's own
+    // tryAcquire() failed before it got anywhere near fetchQuestions.
+    expect(deferred.pendingCount()).toBe(1);
+    expect(questionsCallCount(sendMessage)).toBe(1);
+
+    deferred.resolveNext();
+    const shown = await askPromise;
+    expect(shown).toBe(true);
+    expect(deferred.pendingCount()).toBe(0);
+  });
+
+  it('retention starts first: an ask arriving mid-generation never reaches fetchQuestions', async () => {
+    const knowledgeUnitId = await realKnowledgeUnitId(DUE_TEXT);
+    const deferred = deferredQuestions();
+    const sendMessage = installSendMessage(deferred);
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    const interventionPolicy = engineModule.createInterventionPolicy({});
+    setOrchestrator({ interventionPolicy });
+
+    // Start retention first — onParagraphRead is fire-and-forget, so give
+    // its own chain real time to run up to (and past) tryAcquire() before
+    // ask arrives.
+    host.onParagraphRead(DUE_TEXT, 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(deferred.pendingCount()).toBe(1); // retention's own request is the one in flight
+
+    document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_race_2' };
+    const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
+
+    // Ask never entered generation at all.
+    expect(shown).toBe(false);
+    expect(questionsCallCount(sendMessage)).toBe(1);
+
+    deferred.resolveNext();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(deferred.pendingCount()).toBe(0);
+  });
+
+  it('guard releases after a generation failure — a subsequent candidate can still generate', async () => {
+    const knowledgeUnitId = await realKnowledgeUnitId(DUE_TEXT);
+    const deferred = deferredQuestions();
+    const sendMessage = installSendMessage(deferred);
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    const interventionPolicy = engineModule.createInterventionPolicy({});
+    setOrchestrator({ interventionPolicy });
+
+    document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_fail' };
+    const askPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    // pickLevel() awaits a chrome.storage read before fetchQuestions() is
+    // ever reached, so the request does not land on the same synchronous
+    // tick as the call above — wait for it to actually arrive.
+    await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1));
+
+    // Generation itself fails — fetchQuestions degrades to [] rather than
+    // actually rejecting its own promise (host.js's own design; there is no
+    // code path in this codebase where fetchQuestions() throws).
+    deferred.failNext();
+    const shown = await askPromise;
+    expect(shown).toBe(false);
+    expect(interventionPolicy.stats().count).toBe(0); // no budget spent on a failed generation
+
+    // A second, independent automatic candidate can still generate — the
+    // guard was not left permanently held.
+    host.onParagraphRead(DUE_TEXT, 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(questionsCallCount(sendMessage)).toBe(2);
+    deferred.resolveNext();
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
+  it('guard releases after a presentation failure (malformed question) — record() is not called, and a subsequent candidate can still generate', async () => {
+    const knowledgeUnitId = await realKnowledgeUnitId(DUE_TEXT);
+    const diagLogEntries = [];
+    const deferred = deferredQuestions();
+    const sendMessage = installSendMessage(deferred);
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, diagLog, setOrchestrator } = await createHost(assignmentDeps());
+    vi.spyOn(diagLog, 'log').mockImplementation((...args) => diagLogEntries.push(args));
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    const interventionPolicy = engineModule.createInterventionPolicy({});
+    setOrchestrator({ interventionPolicy });
+
+    document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_malformed', reason: 'struggling at 0.90' };
+    const shownPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1));
+
+    // A structurally malformed question — questionCard.show()'s own shape
+    // check (options.length !== 4) rejects it. Generation itself genuinely
+    // succeeded (a real, non-empty questions array came back), so this is
+    // the one already-documented non-network reason show() can return
+    // false after fetchQuestions() succeeded.
+    deferred.resolveNext({ questions: [{ q: 'Q?', options: ['a', 'b'], answerIndex: 0, explanation: 'e', span: 'a real span' }] });
+    const shown = await shownPromise;
+
+    expect(shown).toBe(false);
+    expect(interventionPolicy.stats().count).toBe(0); // record() was not called
+    expect(diagLogEntries.some(([context, message]) => context === 'questions' && message.includes('generated_not_presented'))).toBe(true);
+
+    // The guard was released — the already-configured retention candidate
+    // can still generate right away.
+    host.onParagraphRead(DUE_TEXT, 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(questionsCallCount(sendMessage)).toBe(2);
+    deferred.resolveNext();
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    expect(interventionPolicy.stats().count).toBe(1); // retention's own record() DID fire
+  });
+
+  it('a presentation failure spends no policy budget at all — count, lastAt, and paragraph dedup all remain untouched', async () => {
+    const deferred = deferredQuestions();
+    installSendMessage(deferred);
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    const interventionPolicy = engineModule.createInterventionPolicy({});
+    setOrchestrator({ interventionPolicy });
+
+    document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_budget' };
+    const shownPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1));
+    // Malformed -> questionCard.show() returns false, same as above.
+    deferred.resolveNext({ questions: [{ q: 'Q?', options: ['a', 'b'], answerIndex: 0, explanation: 'e', span: 'a real span' }] });
+    const shown = await shownPromise;
+    expect(shown).toBe(false);
+
+    const stats = interventionPolicy.stats();
+    expect(stats.count).toBe(0);
+    expect(stats.lastAt).toBe(0);
+
+    // Paragraph dedup untouched: the SAME text, evaluated for real this
+    // time, is still allowed rather than denied as "already interrupted on
+    // this paragraph" — the only way that denial reason can fire, so its
+    // absence here proves seenParagraphs was never touched by the failed
+    // presentation above (only record() ever writes to it, and record()
+    // was never called).
+    const stateEngineModule = await import('../alcoia/src/content/state-engine.js');
+    const state = { label: stateEngineModule.STATES.STRUGGLING, confidence: 0.9, evidence: ['because'], signal: { text: ASK_TEXT } };
+    const secondDecision = interventionPolicy.evaluate(state, {});
+    expect(secondDecision.allow).toBe(true);
+  });
+
+  it('a policy denial spends nothing at all — no network call, no diagnostic, no budget change', async () => {
+    const knowledgeUnitId = await realKnowledgeUnitId(DUE_TEXT);
+    const diagLogEntries = [];
+    const deferred = deferredQuestions();
+    const sendMessage = installSendMessage(deferred);
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, diagLog, setOrchestrator } = await createHost(assignmentDeps());
+    vi.spyOn(diagLog, 'log').mockImplementation((...args) => diagLogEntries.push(args));
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    const interventionPolicy = engineModule.createInterventionPolicy({});
+    setOrchestrator({ interventionPolicy });
+
+    // Force the cooldown: a prior, already-recorded interruption denies
+    // every candidate for the next 3 minutes regardless of what triggered
+    // it — the same shared-budget mechanism the step-7 block above already
+    // proves ask and retention share.
+    interventionPolicy.record({ allow: true, paragraphKey: 'some-other-paragraph' });
+    const statsBefore = interventionPolicy.stats();
+
+    host.onParagraphRead(DUE_TEXT, 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(questionsCallCount(sendMessage)).toBe(0);
+    expect(diagLogEntries.some(([context, message]) => context === 'questions' && message.includes('generated_not_presented'))).toBe(false);
+    expect(interventionPolicy.stats().count).toBe(statsBefore.count);
+    expect(interventionPolicy.stats().lastAt).toBe(statsBefore.lastAt);
+  });
+
+  it('emits exactly one "generated but not presented" diagnostic event, structural fields only — no passage text, hash, or identity', async () => {
+    const diagLogEntries = [];
+    const deferred = deferredQuestions();
+    installSendMessage(deferred);
+
+    const { host, diagLog, setOrchestrator } = await createHost(assignmentDeps());
+    vi.spyOn(diagLog, 'log').mockImplementation((...args) => diagLogEntries.push(args));
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    const interventionPolicy = engineModule.createInterventionPolicy({});
+    setOrchestrator({ interventionPolicy });
+
+    document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_diag', reason: 'struggling at 0.87' };
+    const shownPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1));
+    deferred.resolveNext({ questions: [{ q: 'Q?', options: ['a', 'b'], answerIndex: 0, explanation: 'e', span: 'a real span' }] });
+    await shownPromise;
+
+    const notPresentedEntries = diagLogEntries.filter(([context, message]) => context === 'questions' && message.includes('generated_not_presented'));
+    expect(notPresentedEntries).toHaveLength(1);
+
+    const [, message] = notPresentedEntries[0];
+    expect(message).toContain('action=ask');
+    expect(message).toContain('reason=struggling at 0.87');
+    expect(message).not.toContain(ASK_TEXT);
+    expect(message).not.toContain(ASK_TEXT.slice(0, 40));
+    expect(message).not.toContain('iv_ask_diag'); // interventionId not logged — no demonstrated need for it here
+    expect(message).not.toContain('reader@example.com');
+    const knowledgeUnitId = await realKnowledgeUnitId(ASK_TEXT);
+    expect(message).not.toContain(knowledgeUnitId);
+  });
+
+  it('an in-flight automatic generation does not block reader-initiated session recall', async () => {
+    const deferred = deferredQuestions();
+    installSendMessage(deferred);
+
+    const { host, sessionRecall, runSessionRecall } = await createHost(baseDeps());
+
+    document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
+    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_vs_recall' };
+    const askPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
+    await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1)); // ask's own generation is held open, guard held
+
+    // session-recall.js's own recordRead() requires >= 40 distinct words
+    // (MIN_WORDS) before a paragraph is even eligible to be picked — DUE_TEXT
+    // above clears fetchQuestions' 120-character floor but not that
+    // separate word-count one, so a dedicated, longer paragraph is used
+    // here instead.
+    const RECALL_TEXT = 'This is a much longer paragraph, deliberately written with plenty of distinct words in it, so that it clears both the hundred and twenty character floor fetchQuestions enforces and the forty word minimum session recall itself requires before treating any paragraph as something worth asking about again during a review.';
+    sessionRecall.recordRead(RECALL_TEXT, 5000, 1);
+    const recallPromise = runSessionRecall(1);
+
+    // Session recall's own fetchQuestions call reaches the network too — it
+    // is never routed through the automatic-intervention guard ask is
+    // currently holding (session recall never calls tryAcquire() at all).
+    await vi.waitFor(() => expect(deferred.pendingCount()).toBe(2));
+
+    // FIFO: ask's request was queued first, session recall's second.
+    deferred.resolveNext(); // ask's — a real, single question
+    deferred.resolveNext({ questions: [] }); // session recall's — empty, so it finishes without a card to wait on
+    await Promise.all([askPromise, recallPromise]);
+  });
+});
+
 /* Intelligence-architecture audit, step 9A — active intervention awareness.
  * ui.hasVisibleQuestionCard() (ui-controller.js) and host.isQuestionCardVisible()
  * (the one callback that carries that fact across the orchestrator/host
