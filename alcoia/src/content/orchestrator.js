@@ -212,7 +212,17 @@ export async function createOrchestrator(deps) {
         try { host.onStruggle(t.trim(), activeParagraphIndex(), substate, selfReported); } catch (e) {}
       }
     }
-    const decision  = interventionPolicy.evaluate(state, { currentEl });
+    // Step 9A: host.isQuestionCardVisible() is the one callback that
+    // carries ui-controller.js's own openPopups fact across the
+    // orchestrator/host boundary (orchestrator.js never touches `ui`
+    // directly — see host.js's own comment on this callback). Optional-
+    // chained + coerced to a real boolean so a `host` built without it
+    // (existing tests' own stubHost()) behaves exactly as before this item:
+    // `questionCardVisible: false`, never gating anything.
+    const decision  = interventionPolicy.evaluate(state, {
+      currentEl,
+      questionCardVisible: !!host.isQuestionCardVisible?.(),
+    });
 
     if (s().debugEnabled) {
       host.log(`State: ${state.label} (conf ${state.confidence.toFixed(2)}) — ${decision.allow ? 'ACT: ' + decision.action : 'hold: ' + decision.reason}`);
