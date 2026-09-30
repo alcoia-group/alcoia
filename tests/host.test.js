@@ -1386,7 +1386,11 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
  * in that module, not merely that it calls some object shaped like one. */
 describe('retention scheduling (intelligence-architecture audit, step 7)', () => {
   const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
-  const DUE_URL = 'https://api.test.invalid/api/knowledge-state/due';
+  // Step 10: no longer a flat KNOWLEDGE_STATE_DUE_URL config constant --
+  // host.js now builds this itself, the same way it already builds
+  // interventionsUrl, from ASSIGNMENTS_URL + this block's own assignmentId
+  // ('assign-42', set in assignmentDeps below).
+  const DUE_URL = 'https://api.test.invalid/api/assignments/assign-42/knowledge-state/due';
 
   function assignmentDeps(overrides = {}) {
     return baseDeps({
@@ -1401,7 +1405,6 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
       SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
       TOKEN_URL: 'https://api.test.invalid/api/token',
       ASSIGNMENTS_URL,
-      KNOWLEDGE_STATE_DUE_URL: DUE_URL,
     });
     // A card left open (or open-and-answered but not DOM-removed) by an
     // earlier test in this block would otherwise still occupy a
@@ -1575,7 +1578,10 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
  * itself to. */
 describe('active intervention awareness (step 9A)', () => {
   const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
-  const DUE_URL = 'https://api.test.invalid/api/knowledge-state/due';
+  // Step 10: built from ASSIGNMENTS_URL + this block's own assignmentId
+  // ('assign-9a', set in assignmentDeps below), same as the step-7
+  // retention block above -- no longer a flat config constant.
+  const DUE_URL = 'https://api.test.invalid/api/assignments/assign-9a/knowledge-state/due';
   // fetchQuestions() refuses anything under 120 characters (host.js's own
   // floor) — every paragraph fed to handleAsk() in this block has to clear
   // it, or `shown` silently comes back false and nothing renders at all.
@@ -1595,14 +1601,13 @@ describe('active intervention awareness (step 9A)', () => {
     document.body.innerHTML = '';
     // The file-level beforeEach only stubs SUMMARIZE_URL/TOKEN_URL — the
     // assignment-context tests in this block also need ASSIGNMENTS_URL
-    // (interventions/outcomes) and KNOWLEDGE_STATE_DUE_URL (retention),
-    // the same values the step-7 retention block above stubs for the
-    // identical reason.
+    // (interventions/outcomes/retention, step 10 -- all three are built
+    // from it now), the same value the step-7 retention block above stubs
+    // for the identical reason.
     vi.stubGlobal('ALCOIA_CONFIG', {
       SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
       TOKEN_URL: 'https://api.test.invalid/api/token',
       ASSIGNMENTS_URL,
-      KNOWLEDGE_STATE_DUE_URL: DUE_URL,
     });
   });
 
