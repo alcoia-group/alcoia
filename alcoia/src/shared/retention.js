@@ -1,12 +1,19 @@
-/* retention.js — fetches the account's due Knowledge State candidates
- * (intelligence-architecture audit, step 7)
+/* retention.js — fetches the account's due Knowledge State candidates,
+ * scoped to one assignment (intelligence-architecture audit, step 7 built,
+ * step 10 context-scoped)
  *
  * Same injectable-dependency, never-throws shape as outcomes.js/
  * interventions.js — read those files' own headers first, this one
  * repeats only what differs.
  *
- *   GET /api/knowledge-state/due -> 200 { candidates: [{ knowledgeUnitId,
- *     retentionStage, nextRetrievalAt }] }
+ *   GET {ASSIGNMENTS_URL}/:assignmentId/knowledge-state/due -> 200
+ *     { candidates: [{ knowledgeUnitId, retentionStage, nextRetrievalAt }] }
+ *
+ * dueUrl is passed in fully built by the caller (host.js), already
+ * carrying the one assignmentId this session is for — this module has no
+ * assignment-specific logic of its own, it just fetches whatever URL it's
+ * given, the same "caller builds the URL, this module just calls it" shape
+ * interventions.js/explanation-events.js already use.
  *
  * Fires ONCE, at host.js construction, gated the identical way every other
  * server-reporting manager in this codebase already is (assignmentId +
