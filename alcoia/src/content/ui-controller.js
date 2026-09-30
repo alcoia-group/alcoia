@@ -225,7 +225,15 @@ export function createUIController(deps = {}) {
    * every slot is taken by a pinned popup. Both branches used to be duplicated
    * in each caller, and the comprehension renderer had drifted — it did the
    * dedup check but not the cap. */
-  function reservePopup(fingerprint) {
+  /* `kind` (step 9A, optional) tags what this popup IS, for callers that
+   * need to distinguish popup TYPES from the outside without reaching into
+   * the DOM — today, only question-card.js passes `'question'` (see its own
+   * call site). Every other caller (the self-report card, the quiz-offer
+   * card, the plain explain/summary popup) omits it, exactly as before this
+   * item — `kind` is `undefined` for them, unchanged in every other respect.
+   * Purely additive: nothing here reads or branches on it except
+   * hasVisibleQuestionCard() below. */
+  function reservePopup(fingerprint, kind) {
     if (openPopups.has(fingerprint)) {
       const entry = openPopups.get(fingerprint);
       if (entry.el && entry.el.isConnected) { flashPopup(entry.el); return null; }
@@ -248,8 +256,38 @@ export function createUIController(deps = {}) {
     root.addEventListener('mouseenter', () => { root._mouseOver = true; clearTimeout(root._hideT); });
     root.addEventListener('mouseleave', () => { root._mouseOver = false; resetAutohide(root, fingerprint); });
     shadow.appendChild(root);
-    openPopups.set(fingerprint, { el: root });
+    openPopups.set(fingerprint, { el: root, kind });
     return root;
+  }
+
+  /* Step 9A (active intervention awareness) — the intervention policy's one
+   * authoritative source for "is a question card currently visible to the
+   * reader right now". Reuses openPopups, the SAME map every lifecycle
+   * method in this file already mutates through reservePopup()/
+   * closePopup() — no new tracking structure, no DOM query.
+   *
+   * "Question card" means specifically a popup reserved with
+   * `kind: 'question'` — question-card.js's own show(), the ONE machinery
+   * 'ask', 'session_recall' AND 'retention' all render through (see that
+   * file's own header) — never the self-report card, the quiz-offer card,
+   * or an ordinary explain/summary popup, none of which are a retrieval
+   * question the reader must answer. The standalone quiz itself runs in a
+   * separate extension tab (popup/quiz.js) with its own DOM and its own
+   * controller instance entirely — it was never reachable through this map
+   * and still isn't; this function only ever answers for the current tab.
+   *
+   * Every removal path in this file (dismiss, the close/skip buttons,
+   * autohide, MAX_POPUPS eviction) already deletes the openPopups entry
+   * synchronously, before anything else — so this reads live state on every
+   * call, never a value that can go stale between a card closing and the
+   * next policy evaluation. `el.isConnected` is defensive, the same
+   * belt-and-suspenders check hidePopup()/reservePopup() already make
+   * elsewhere in this file. */
+  function hasVisibleQuestionCard() {
+    for (const { el, kind } of openPopups.values()) {
+      if (kind === 'question' && el && el.isConnected) return true;
+    }
+    return false;
   }
 
   /* Show, place and start the autohide countdown. */
@@ -535,6 +573,7 @@ export function createUIController(deps = {}) {
     highlightElement, clearHighlight,
     placePopup, closePopup, flashPopup, hidePopup,
     reservePopup, showPopup, resetAutohide,
+    hasVisibleQuestionCard,
     renderPopup,
     showNudge, showSimulateToast, showStatusToast,
     ensureSelfReportTrigger,

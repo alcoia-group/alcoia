@@ -107,6 +107,92 @@ describe('reservePopup', () => {
   });
 });
 
+/* Step 9A (active intervention awareness) — the intervention policy's one
+ * source of truth for "is a question card visible right now". question-
+ * card.js tags its own reservePopup() call with kind: 'question'; every
+ * other caller in this codebase (self-report, quiz-offer, the plain
+ * explain popup) omits it, so this file exercises both halves of that
+ * distinction directly against the real openPopups map, plus the multi-
+ * card lifecycle (test E) Step 5's concurrency architecture requires. */
+describe('hasVisibleQuestionCard (step 9A)', () => {
+  it('is false with nothing on screen', () => {
+    const ui = build();
+    expect(ui.hasVisibleQuestionCard()).toBe(false);
+  });
+
+  it('is true once a popup is reserved with kind: "question"', () => {
+    const ui = build();
+    ui.reservePopup('q-abc', 'question');
+    expect(ui.hasVisibleQuestionCard()).toBe(true);
+  });
+
+  it('is false for a popup reserved without a kind — the self-report/quiz-offer/plain-explain shape', () => {
+    const ui = build();
+    ui.reservePopup('abc');
+    expect(ui.hasVisibleQuestionCard()).toBe(false);
+  });
+
+  it('is false for a popup reserved with a different kind entirely', () => {
+    const ui = build();
+    ui.reservePopup('abc', 'self-report');
+    expect(ui.hasVisibleQuestionCard()).toBe(false);
+  });
+
+  it('a mix of a question card and a non-question popup at the same time still reads true', () => {
+    const ui = build();
+    ui.reservePopup('self-report-card');
+    ui.reservePopup('q-abc', 'question');
+    expect(ui.hasVisibleQuestionCard()).toBe(true);
+  });
+
+  it('becomes false again once the question card is closed', () => {
+    const ui = build();
+    const root = ui.reservePopup('q-abc', 'question');
+    expect(ui.hasVisibleQuestionCard()).toBe(true);
+    ui.closePopup(root, 'q-abc');
+    expect(ui.hasVisibleQuestionCard()).toBe(false);
+  });
+
+  it('(test E) two concurrent question cards: closing one leaves the other still counted as visible; closing both clears it', () => {
+    const ui = build();
+    const rootA = ui.reservePopup('q-a', 'question');
+    const rootB = ui.reservePopup('q-b', 'question');
+    expect(ui.hasVisibleQuestionCard()).toBe(true);
+
+    ui.closePopup(rootA, 'q-a');
+    expect(ui.hasVisibleQuestionCard()).toBe(true); // B is still up
+
+    ui.closePopup(rootB, 'q-b');
+    expect(ui.hasVisibleQuestionCard()).toBe(false); // both gone now
+  });
+
+  it('a question card evicted at the MAX_POPUPS cap no longer counts as visible', () => {
+    const ui = build();
+    // Fill every slot with question cards, oldest first, so the 6th
+    // reservation evicts p0 via reservePopup()'s own cap logic.
+    for (let i = 0; i < 5; i++) ui.reservePopup(`q-p${i}`, 'question');
+    expect(ui.hasVisibleQuestionCard()).toBe(true);
+    ui.reservePopup('q-p5', 'question');
+    expect(ui.openPopups.has('q-p0')).toBe(false);
+    expect(ui.hasVisibleQuestionCard()).toBe(true); // p1..p5 still up
+  });
+
+  it('a pinned question card keeps counting as visible after hidePopup() (Escape) — only an unpinned one is closed by it', () => {
+    const ui = build();
+    const root = ui.reservePopup('q-abc', 'question');
+    root.dataset.pinned = 'true';
+    ui.hidePopup();
+    expect(ui.hasVisibleQuestionCard()).toBe(true);
+  });
+
+  it('an unpinned question card no longer counts as visible after hidePopup() (Escape)', () => {
+    const ui = build();
+    ui.reservePopup('q-abc', 'question');
+    ui.hidePopup();
+    expect(ui.hasVisibleQuestionCard()).toBe(false);
+  });
+});
+
 describe('closePopup', () => {
   it('deregisters immediately and removes the node after the transition', () => {
     vi.useFakeTimers();
