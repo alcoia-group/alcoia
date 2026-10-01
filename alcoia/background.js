@@ -202,11 +202,15 @@ function handleLtiLaunchMessage(payload, sendResponse) {
     chrome.storage.local.set({
       [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: session,
       // Same key, same shape join-class.js/upgrade.js already read for
-      // display (item S6/S6-follow-up) — seatId/role are genuinely absent
-      // from this response (see invites.js's own header on the one real
-      // consequence: "Leave this class" cannot release a seat it has no
-      // id for).
-      sra_class_membership: { classId: payload.classId, seatId: null, role: null, joinedAt: Date.now() },
+      // display. The server now returns seatId/role with the launch (null
+      // only against an older server), so "Leave this class" can release
+      // the seat.
+      sra_class_membership: {
+        classId: payload.classId,
+        seatId: typeof payload.seatId === 'string' && payload.seatId ? payload.seatId : null,
+        role: typeof payload.role === 'string' && payload.role ? payload.role : null,
+        joinedAt: Date.now(),
+      },
     }, () => {
       sendResponse({ ok: true, disclosureRequired: false });
     });
