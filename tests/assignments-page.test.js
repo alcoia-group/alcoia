@@ -16,6 +16,8 @@ const ASSIGNMENTS_HTML_PATH = path.resolve(
 
 const MINE_URL = 'https://api.alcoia.invalid/api/assignments/mine';
 const DOCUMENTS_URL = 'https://api.alcoia.invalid/api/documents';
+const ASSIGNMENTS_URL = 'https://api.alcoia.invalid/api/assignments';
+const READER_ORIGIN = 'https://assignments.alcoia.invalid';
 
 function loadAssignmentsBody() {
   const html = fs.readFileSync(ASSIGNMENTS_HTML_PATH, 'utf8');
@@ -51,6 +53,8 @@ function fakeConfig() {
     SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize',
     SESSION_STORAGE_KEY: 'sra_session',
     ASSIGNMENTS_MINE_URL: MINE_URL,
+    ASSIGNMENTS_URL,
+    READER_ORIGIN,
     DOCUMENTS_URL,
   };
 }
@@ -183,69 +187,114 @@ describe('opening a PDF assignment loads it through the existing viewer, sourced
   });
 });
 
-describe('a PPTX/DOCX assignment shows the honest not-viewable state, never a silent failure', () => {
-  it('a pptx document with no openable pdf shows "Not viewable in the extension yet" and a working Download instead, no Open button', async () => {
+const oneAssignment = (documents) => async () => ({
+  ok: true,
+  json: async () => ({ assignments: [{ assignmentId: 'a1', classId: 'c1', className: 'Slides 101', closesAt: '2099-01-01T00:00:00Z', documents }] }),
+});
+
+describe('opening in the web reader', () => {
+  it('a pptx opens in the reader with a one-time code in the URL fragment', async () => {
+    loadAssignmentsBody();
+    const chrome = fakeChrome({ sra_session: VALID_SESSION });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    const fetchMock = routedFetch([
+      [MINE_URL, oneAssignment([{ documentId: 'd1', format: 'pptx', status: 'accepted' }])],
+      [`${ASSIGNMENTS_URL}/a1/reader-handoff`, async () => ({ ok: true, status: 201, json: async () => ({ code: 'c0de+/=', expiresAt: '2099-01-01T00:00:00Z' }) })],
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await importFreshAssignmentsJs();
+    await vi.waitFor(() => expect(document.querySelector('.assign-row')).toBeTruthy());
+    [...document.querySelectorAll('button')].find((b) => b.textContent === 'Open').click();
+
+    await vi.waitFor(() => expect(chrome._tabsCreated.length).toBe(1));
+    const url = chrome._tabsCreated[0].url;
+    expect(url).toBe(`${READER_ORIGIN}/a/a1#c=${encodeURIComponent('c0de+/=')}`);
+    // the code is in the fragment, never a query string
+    expect(url).not.toContain('?');
+    const handoffCall = fetchMock.mock.calls.find(([u]) => u.endsWith('/reader-handoff'));
+    expect(handoffCall[1].method).toBe('POST');
+    expect(handoffCall[1].headers.Authorization).toBe('Bearer tok-1');
+  });
+
+  it('a docx also opens in the reader, even with a stale unsupported status', async () => {
     loadAssignmentsBody();
     const chrome = fakeChrome({ sra_session: VALID_SESSION });
     vi.stubGlobal('chrome', chrome);
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     vi.stubGlobal('fetch', routedFetch([
-      [MINE_URL, async () => ({
-        ok: true,
-        json: async () => ({
-          assignments: [{
-            assignmentId: 'a1', classId: 'c1', className: 'Slides 101', closesAt: '2099-01-01T00:00:00Z',
-            documents: [{ documentId: 'd1', format: 'pptx', status: 'unsupported' }],
-          }],
-        }),
-      })],
-      [`${DOCUMENTS_URL}/d1/download-url`, async () => ({ ok: true, json: async () => ({ url: 'https://storage.example/slides.pptx?sig=x', expiresInSeconds: 900 }) })],
+      [MINE_URL, oneAssignment([{ documentId: 'd1', format: 'docx', status: 'unsupported' }])],
+      [`${ASSIGNMENTS_URL}/a1/reader-handoff`, async () => ({ ok: true, status: 201, json: async () => ({ code: 'x' }) })],
     ]));
-
     await importFreshAssignmentsJs();
     await vi.waitFor(() => expect(document.querySelector('.assign-row')).toBeTruthy());
-
-    const row = document.querySelector('.assign-row');
-    expect(row.textContent).toMatch(/not viewable in the extension yet/i);
-    expect([...row.querySelectorAll('button')].some((b) => b.textContent === 'Open')).toBe(false);
-
-    const dlBtn = [...row.querySelectorAll('button')].find((b) => b.textContent === 'Download instead');
-    expect(dlBtn).toBeTruthy();
-    dlBtn.click();
+    [...document.querySelectorAll('button')].find((b) => b.textContent === 'Open').click();
     await vi.waitFor(() => expect(chrome._tabsCreated.length).toBe(1));
-    expect(chrome._tabsCreated[0].url).toBe('https://storage.example/slides.pptx?sig=x');
+    expect(chrome._tabsCreated[0].url).toMatch(/^https:\/\/assignments\.alcoia\.invalid\/a\/a1#c=/);
+  });
+
+  it('a pdf falls back to the extension viewer when the reader handoff is not available', async () => {
+    loadAssignmentsBody();
+    const chrome = fakeChrome({ sra_session: VALID_SESSION });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([
+      [MINE_URL, oneAssignment([{ documentId: 'd1', format: 'pdf', status: 'accepted' }])],
+      [`${ASSIGNMENTS_URL}/a1/reader-handoff`, async () => ({ ok: false, status: 404, json: async () => ({ error: 'assignment_not_found' }) })],
+      [`${DOCUMENTS_URL}/d1/download-url`, async () => ({ ok: true, json: async () => ({ url: 'https://storage.example/x.pdf?sig=1', expiresInSeconds: 900 }) })],
+    ]));
+    await importFreshAssignmentsJs();
+    await vi.waitFor(() => expect(document.querySelector('.assign-row')).toBeTruthy());
+    [...document.querySelectorAll('button')].find((b) => b.textContent === 'Open').click();
+    await vi.waitFor(() => expect(chrome._tabsCreated.length).toBe(1));
+    expect(chrome._tabsCreated[0].url).toContain('src/pdf-viewer/viewer.html');
+  });
+
+  it('a pptx whose handoff fails shows an error and opens nothing', async () => {
+    loadAssignmentsBody();
+    const chrome = fakeChrome({ sra_session: VALID_SESSION });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([
+      [MINE_URL, oneAssignment([{ documentId: 'd1', format: 'pptx', status: 'accepted' }])],
+      [`${ASSIGNMENTS_URL}/a1/reader-handoff`, async () => ({ ok: false, status: 500, json: async () => ({ error: 'internal_error' }) })],
+    ]));
+    await importFreshAssignmentsJs();
+    await vi.waitFor(() => expect(document.querySelector('.assign-row')).toBeTruthy());
+    [...document.querySelectorAll('button')].find((b) => b.textContent === 'Open').click();
+    await vi.waitFor(() => expect(document.getElementById('pageError').hidden).toBe(false));
+    expect(chrome._tabsCreated).toEqual([]);
+  });
+});
+
+describe('a file type the reader does not show, or no file, says so plainly', () => {
+  it('an unknown format shows no Open button and a working Download instead', async () => {
+    loadAssignmentsBody();
+    const chrome = fakeChrome({ sra_session: VALID_SESSION });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([
+      [MINE_URL, oneAssignment([{ documentId: 'd1', format: 'odt', status: 'unsupported' }])],
+      [`${DOCUMENTS_URL}/d1/download-url`, async () => ({ ok: true, json: async () => ({ url: 'https://storage.example/file.odt?sig=x', expiresInSeconds: 900 }) })],
+    ]));
+    await importFreshAssignmentsJs();
+    await vi.waitFor(() => expect(document.querySelector('.assign-row')).toBeTruthy());
+    const row = document.querySelector('.assign-row');
+    expect(row.textContent).toMatch(/can't be opened here/i);
+    expect([...row.querySelectorAll('button')].some((b) => b.textContent === 'Open')).toBe(false);
+    [...row.querySelectorAll('button')].find((b) => b.textContent === 'Download instead').click();
+    await vi.waitFor(() => expect(chrome._tabsCreated.length).toBe(1));
+    expect(chrome._tabsCreated[0].url).toBe('https://storage.example/file.odt?sig=x');
   });
 
   it('an assignment with no document uploaded yet shows that honestly too, not a crash or a blank row', async () => {
     loadAssignmentsBody();
     vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION }));
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
-    vi.stubGlobal('fetch', routedFetch([[MINE_URL, async () => ({
-      ok: true,
-      json: async () => ({ assignments: [{ assignmentId: 'a1', classId: 'c1', className: 'X', closesAt: '2099-01-01T00:00:00Z', documents: [] }] }),
-    })]]));
-
+    vi.stubGlobal('fetch', routedFetch([[MINE_URL, oneAssignment([])]]));
     await importFreshAssignmentsJs();
     await vi.waitFor(() => expect(document.querySelector('.assign-row')).toBeTruthy());
     expect(document.querySelector('.assign-row').textContent).toMatch(/no document uploaded yet/i);
-  });
-
-  it('a docx document behaves the same honest way as pptx', async () => {
-    loadAssignmentsBody();
-    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION }));
-    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
-    vi.stubGlobal('fetch', routedFetch([[MINE_URL, async () => ({
-      ok: true,
-      json: async () => ({
-        assignments: [{
-          assignmentId: 'a1', classId: 'c1', className: 'X', closesAt: '2099-01-01T00:00:00Z',
-          documents: [{ documentId: 'd1', format: 'docx', status: 'unsupported' }],
-        }],
-      }),
-    })]]));
-
-    await importFreshAssignmentsJs();
-    await vi.waitFor(() => expect(document.querySelector('.assign-row')).toBeTruthy());
-    expect(document.querySelector('.assign-row').textContent).toMatch(/not viewable in the extension yet/i);
   });
 });
