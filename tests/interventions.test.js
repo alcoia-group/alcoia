@@ -80,6 +80,46 @@ describe('submit — a successful intervention record', () => {
     expect(seenBody).not.toHaveProperty('accountId');
     expect(seenBody).not.toHaveProperty('email');
   });
+
+  // Step 19 -- the real Content Intelligence trigger. `text` is the exact
+  // bounded passage the caller already has at the point it calls submit();
+  // this module never fetches, truncates, or otherwise touches it beyond
+  // forwarding it as-is.
+  it('includes text when given one, the exact bounded passage already in hand', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const m = createInterventionsManager({ fetchImpl, interventionsUrl: INTERVENTIONS_URL, getSession: sessionOf('tok-1') });
+
+    await m.submit({ interventionId: 'iv_1', type: 'ask', knowledgeUnitId: 'k5a20958613', text: 'The exact paragraph the reader struggled with.' });
+    expect(seenBody).toEqual({
+      intervention_id: 'iv_1', type: 'ask', knowledge_unit_id: 'k5a20958613',
+      text: 'The exact paragraph the reader struggled with.',
+    });
+  });
+
+  it('omits text entirely when not given, never sent as null/undefined/empty string', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const m = createInterventionsManager({ fetchImpl, interventionsUrl: INTERVENTIONS_URL, getSession: sessionOf('tok-1') });
+
+    await m.submit({ interventionId: 'iv_1', type: 'retention' });
+    expect(seenBody).not.toHaveProperty('text');
+
+    await m.submit({ interventionId: 'iv_1', type: 'retention', text: '' });
+    expect(seenBody).not.toHaveProperty('text');
+
+    await m.submit({ interventionId: 'iv_1', type: 'retention', text: null });
+    expect(seenBody).not.toHaveProperty('text');
+  });
+
+  it('a non-string text is omitted, never sent as-is', async () => {
+    let seenBody = null;
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const m = createInterventionsManager({ fetchImpl, interventionsUrl: INTERVENTIONS_URL, getSession: sessionOf('tok-1') });
+
+    await m.submit({ interventionId: 'iv_1', type: 'ask', text: 12345 });
+    expect(seenBody).not.toHaveProperty('text');
+  });
 });
 
 describe('submit — validation and failure handling', () => {
