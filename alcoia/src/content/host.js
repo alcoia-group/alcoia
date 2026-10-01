@@ -191,9 +191,14 @@ export async function createHost(deps) {
       interventionsUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/interventions`,
       fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
-    reportIntervention = (interventionId, knowledgeUnitId, paragraphIndex, type) => {
+    // `text` (step 19): the exact bounded passage this intervention's own
+    // identity/knowledgeUnitId was already computed from, at each call
+    // site below — never re-fetched, never more than the one paragraph
+    // already in hand. Optional, the same as every parameter above it —
+    // see interventions.js's own header for the full reasoning.
+    reportIntervention = (interventionId, knowledgeUnitId, paragraphIndex, type, text) => {
       if (!interventionId) return;
-      interventionsManager.submit({ interventionId, knowledgeUnitId, paragraphIndex, type }).catch(() => {});
+      interventionsManager.submit({ interventionId, knowledgeUnitId, paragraphIndex, type, text }).catch(() => {});
     };
   }
 
@@ -816,7 +821,10 @@ export async function createHost(deps) {
         const opts = { count: 1 };
         if (level !== 'recognition') opts.level = level;
         const qs = await fetchQuestions(entry.text, opts);
-        if (qs.length) questions.push({ question: qs[0], paragraphKey: identity.paragraphKey, knowledgeUnitId: identity.knowledgeUnitId, paragraphIndex: entry.paragraphIndex, level });
+        // text: entry.text carried through so reportIntervention below can
+        // report it (step 19) -- the exact same text identity was already
+        // computed from a few lines up, never re-fetched.
+        if (qs.length) questions.push({ question: qs[0], paragraphKey: identity.paragraphKey, knowledgeUnitId: identity.knowledgeUnitId, paragraphIndex: entry.paragraphIndex, level, text: entry.text });
         if (questions.length >= count) break;
       }
 
@@ -843,7 +851,7 @@ export async function createHost(deps) {
           interventionId,
         });
         if (!shown) continue;
-        reportIntervention(interventionId, item.knowledgeUnitId, item.paragraphIndex, 'session_recall');
+        reportIntervention(interventionId, item.knowledgeUnitId, item.paragraphIndex, 'session_recall', item.text);
         await waitForCardToClose();
       }
     } finally {
@@ -921,7 +929,7 @@ export async function createHost(deps) {
         interventionId,
       });
       if (shown) {
-        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask');
+        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text);
       } else {
         // Step 12A: generation succeeded (a real, usable question came
         // back) but presentation did not — diagnostic-only, never a budget
@@ -1001,7 +1009,7 @@ export async function createHost(deps) {
       // this path has no orchestrator call site to do it for us.
       if (shown) {
         orchestratorRef.interventionPolicy.record(decision);
-        reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'retention');
+        reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'retention', text);
         // Belt-and-suspenders alongside the policy's own paragraph-key dedup:
         // this specific knowledge unit has now been presented this session,
         // so it should not be attempted again even if a later paragraph
