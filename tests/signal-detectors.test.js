@@ -216,6 +216,18 @@ describe('paragraph-tracker: injected block source (item 30b)', () => {
     expect(regression.toIndex).toBe(1);
   });
 
+  it('scans the DOM when the block source answers null, and uses its blocks when it does not', () => {
+    const doc = fakeDocument([
+      { name: 'a', text: words(50), top: 0,   height: 200 },
+      { name: 'b', text: words(50), top: 250, height: 200 },
+    ]);
+    const dom = createParagraphTracker({ document: doc, viewportHeight: () => 800, blockSource: () => null });
+    expect(dom.update().entered.index).toBe(1);
+    const injected = [{ el: { getBoundingClientRect: () => ({ top: 0, bottom: 200, height: 200 }), textContent: words(30) }, words: 30, media: false }];
+    const t = createParagraphTracker({ document: doc, viewportHeight: () => 800, blockSource: () => injected });
+    expect(t.update().entered.index).toBe(0);
+  });
+
   it('leaves the DOM path completely unchanged when no blockSource is supplied', () => {
     // Same fixture/expectations as "picks the paragraph straddling the reading
     // line" above, run again here to pin that omitting blockSource is a no-op.
