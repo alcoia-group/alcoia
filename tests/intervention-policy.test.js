@@ -73,20 +73,43 @@ describe('what earns an interruption', () => {
   });
 });
 
-describe('skimming is only worth interrupting over dense text', () => {
+describe('skimming is only worth a full interruption over dense text', () => {
   const skim = (grade) => ({
     label: STATES.SKIMMING, confidence: 0.6, evidence: [],
     signal: { text: 'p', readability: { grade } },
   });
 
-  it.each(['easy', 'standard'])('declines on %s text', (grade) => {
+  // Step 23 (REPLACE, documented in intervention-policy.js's own
+  // POLICY_ACTIONS header): previously a bare denial (nothing happened at
+  // all) — now a real, lightweight ATTENTION outcome, rendered through the
+  // same 'nudge' affordance DRIFTING already uses. Still allowed, still
+  // real evidence, just not worth a full retrieval question. This is one of
+  // the central behavior changes this rebuild exists to make: a weak signal
+  // no longer collapses to silence merely because it isn't strong enough
+  // for the heaviest response.
+  it.each(['easy', 'standard'])('earns a lightweight attention nudge, not a question, on %s text', (grade) => {
     const p = createInterventionPolicy({ now: fixedClock().now });
-    expect(p.evaluate(skim(grade)).allow).toBe(false);
+    const d = p.evaluate(skim(grade));
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('nudge');
+    expect(d.policyAction).toBe('attention');
   });
 
-  it.each(['difficult', 'very_difficult'])('allows on %s text', (grade) => {
+  it.each(['difficult', 'very_difficult'])('earns a full retrieval question on %s text', (grade) => {
     const p = createInterventionPolicy({ now: fixedClock().now });
-    expect(p.evaluate(skim(grade)).allow).toBe(true);
+    const d = p.evaluate(skim(grade));
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('ask');
+    expect(d.policyAction).toBe('retrieve');
+  });
+
+  it('a non-dense skimming attention nudge still spends the shared budget, like every other non-reader-initiated action', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    expect(take(p, skim('easy')).allow).toBe(true);
+    const tooSoon = p.evaluate(skim('easy'));
+    expect(tooSoon.allow).toBe(false);
+    expect(tooSoon.reason).toMatch(/since the last interruption/);
   });
 });
 
@@ -1003,5 +1026,203 @@ describe('active intervention awareness (step 9A)', () => {
       expect(d.allow).toBe(false);
       expect(d.reason).toMatch(/declined 3 questions in a row/);
     });
+  });
+});
+
+/* ===========================================================================
+ * Step 23 — Intervention Policy Reconstruction: the new 8-value action
+ * vocabulary (POLICY_ACTIONS). Every scenario below reuses the exact same
+ * fixtures/helpers the rest of this file already established — no private
+ * helper is reached into, same discipline as every describe block above.
+ * ===========================================================================
+ */
+describe('Step 23 — policy action vocabulary (decision.policyAction)', () => {
+  it('none: a denied decision always carries policyAction "none", regardless of what it almost became', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate({ label: STATES.UNKNOWN, confidence: 0.9, evidence: [] });
+    expect(d.allow).toBe(false);
+    expect(d.policyAction).toBe('none');
+  });
+
+  it('nudge: a drifting self-report carries policyAction "nudge", distinct from "attention"', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate({ label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting' } });
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('nudge');
+    expect(d.policyAction).toBe('nudge');
+  });
+
+  it('retrieve: an ordinary, non-regression struggling signal strong enough on its own carries policyAction "retrieve"', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(struggling());
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('ask');
+    expect(d.policyAction).toBe('retrieve');
+  });
+
+  it('retrieve: an exploration sample also carries policyAction "retrieve"', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const d = p.evaluate({ label: STATES.ON_PACE, confidence: 0.9, evidence: [], signal: { text: 'an on-pace paragraph' } });
+    expect(d.allow).toBe(true);
+    expect(d.wasExplorationSample).toBe(true);
+    expect(d.policyAction).toBe('retrieve');
+  });
+
+  describe('explain vs retrieve — the new distinction within regression-sourced evidence', () => {
+    it('a REPEATED scroll-back (the stronger signal) is policyAction "retrieve"', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      const d = p.evaluate(regressionStruggling({
+        signal: { type: 'regression', subtype: 'return', sameIndexRereadCount: 2, text: 'repeated re-read' },
+      }));
+      expect(d.allow).toBe(true);
+      expect(d.action).toBe('ask');
+      expect(d.policyAction).toBe('retrieve');
+    });
+
+    it('a CORROBORATED-ONLY scroll-back (single occurrence, a second signal agrees) is policyAction "explain", not "retrieve"', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      const d = p.evaluate(regressionStruggling({
+        evidence: ['You went back a paragraph to re-read', 'Your scrolling became uneven here'],
+      }));
+      expect(d.allow).toBe(true);
+      // Still renders through the existing 'ask' dispatch — see
+      // POLICY_ACTIONS' own header for why a distinct UI component for
+      // 'explain' specifically is disclosed future work, not built here.
+      expect(d.action).toBe('ask');
+      expect(d.policyAction).toBe('explain');
+    });
+
+    it('evidence that is BOTH repeated AND corroborated is policyAction "retrieve" — the stronger label wins, not "explain"', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordAnswered(true); // would otherwise soften a merely-corroborated candidate — proves doubly-boosted overrides it
+      const d = p.evaluate(regressionStruggling({
+        signal: { type: 'regression', subtype: 'return', sameIndexRereadCount: 2, text: 'x' },
+        evidence: ['You went back a paragraph to re-read', 'Your scrolling became uneven here'],
+      }));
+      expect(d.allow).toBe(true);
+      expect(d.policyAction).toBe('retrieve');
+    });
+  });
+
+  describe('repair — a failed retrieval escalates the NEXT retrieve candidate', () => {
+    it('a struggling candidate that would be "retrieve" becomes "repair" when the reader\'s most recent graded answer was wrong', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordAnswered(false);
+      const d = p.evaluate(struggling({ signal: { text: 'a different paragraph' } }));
+      expect(d.allow).toBe(true);
+      expect(d.action).toBe('ask'); // same rendering as retrieve — see header
+      expect(d.policyAction).toBe('repair');
+    });
+
+    it('a correct answer does NOT produce repair — the candidate stays "retrieve"', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordAnswered(true);
+      const d = p.evaluate(struggling({ signal: { text: 'a different paragraph' } }));
+      expect(d.allow).toBe(true);
+      expect(d.policyAction).toBe('retrieve');
+    });
+
+    it('no prior answer at all does NOT produce repair — the candidate stays "retrieve"', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      const d = p.evaluate(struggling());
+      expect(d.policyAction).toBe('retrieve');
+    });
+
+    it('repair applies to a repeated-regression candidate too, not only an ordinary struggling signal', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordAnswered(false);
+      const d = p.evaluate(regressionStruggling({
+        signal: { type: 'regression', subtype: 'return', sameIndexRereadCount: 2, text: 'x' },
+      }));
+      expect(d.allow).toBe(true);
+      expect(d.policyAction).toBe('repair');
+    });
+
+    it('repair does NOT apply to an "explain" candidate — a corroborated-only signal stays "explain" even after a wrong answer', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordAnswered(false);
+      const d = p.evaluate(regressionStruggling({
+        evidence: ['You went back a paragraph to re-read', 'Your scrolling became uneven here'],
+      }));
+      expect(d.allow).toBe(true);
+      expect(d.policyAction).toBe('explain');
+    });
+
+    it('repair still spends the shared budget and respects every existing cooldown/dedup check, exactly like an ordinary retrieve', () => {
+      const clock = fixedClock();
+      const p = createInterventionPolicy({ now: clock.now });
+      p.recordAnswered(false);
+      const first = take(p, struggling({ signal: { text: 'repair paragraph' } }));
+      expect(first.policyAction).toBe('repair');
+      const tooSoon = p.evaluate(struggling({ signal: { text: 'a second paragraph' } }));
+      expect(tooSoon.allow).toBe(false);
+      expect(tooSoon.reason).toMatch(/since the last interruption/);
+    });
+
+    it('a denied repair candidate (e.g. three consecutive dismissals) is never recorded and carries policyAction "none", not "repair"', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordAnswered(false);
+      p.recordDismissal();
+      p.recordDismissal();
+      p.recordDismissal();
+      const d = p.evaluate(struggling({ confidence: 0.99, signal: { text: 'x' } }));
+      expect(d.allow).toBe(false);
+      expect(d.policyAction).toBe('none');
+    });
+  });
+
+  describe('delayed_retrieve — retention stays gated exactly like every immediate candidate, never a shortcut', () => {
+    it('an allowed retention candidate carries policyAction "delayed_retrieve"', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+      expect(d.allow).toBe(true);
+      expect(d.action).toBe('retention');
+      expect(d.policyAction).toBe('delayed_retrieve');
+    });
+
+    it('a due retention item still respects the 3-minute cooldown — "delayed" describes when it became due, not how it is gated once due', () => {
+      const clock = fixedClock();
+      const p = createInterventionPolicy({ now: clock.now });
+      take(p, struggling({ signal: { text: 'an ordinary ask' } }));
+      const d = p.evaluateRetentionCandidate({ paragraphKey: 'a due knowledge unit' });
+      expect(d.allow).toBe(false);
+      expect(d.policyAction).toBe('none');
+    });
+
+    it('a denied retention candidate carries policyAction "none"', () => {
+      const p = createInterventionPolicy({ now: fixedClock().now });
+      p.recordDismissal();
+      p.recordDismissal();
+      p.recordDismissal();
+      const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
+      expect(d.allow).toBe(false);
+      expect(d.policyAction).toBe('none');
+    });
+  });
+
+  describe('apply — defined for vocabulary completeness, not reachable', () => {
+    it('is a real member of POLICY_ACTIONS', async () => {
+      const policyModule = await import('../alcoia/src/content/intervention-policy.js');
+      expect(policyModule.POLICY_ACTIONS.APPLY).toBe('apply');
+    });
+
+    it('no evaluate()/evaluateRetentionCandidate() scenario in this entire file ever produces it', async () => {
+      // A structural, not exhaustive, confirmation: grepping this file's own
+      // assertions for the literal string is the honest way to state "no
+      // test exercises a path that returns it" without claiming a formal
+      // proof this single file can't actually offer.
+      const fs = await import('node:fs');
+      const path = await import('node:path');
+      const thisFile = fs.readFileSync(path.join(import.meta.dirname, 'intervention-policy.test.js'), 'utf8');
+      const policyActionApplyAssertions = thisFile.match(/policyAction\)\.toBe\('apply'\)/g) || [];
+      expect(policyActionApplyAssertions).toHaveLength(0);
+    });
+  });
+
+  it('evaluateContentTrigger (pretest) carries no policyAction field at all — it is explicitly outside this vocabulary, content-triggered rather than reading-state-driven', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluateContentTrigger({ evidence: ['a pretest trigger'] });
+    expect(d.allow).toBe(true);
+    expect(d).not.toHaveProperty('policyAction');
   });
 });
