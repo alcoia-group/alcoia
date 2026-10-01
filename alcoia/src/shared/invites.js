@@ -42,8 +42,8 @@
  * successful ack is what mints one, the same "authenticates with no prior
  * session" shape session.js's own exchangeCode() already has for the
  * magic-link path. The response also has no seatId/role field at all
- * (unlike accept's), so a seat produced this way is stored locally with
- * both null — join-class.js's own "member" display never reads either,
+ * (unlike accept's) on an older server, so a seat produced that way is
+ * stored locally with both null — join-class.js's own "member" display never reads either,
  * only classId; the one thing that degrades is the existing "Leave this
  * class" button, which cannot release a seat it has no id for. That is a
  * real, honest consequence of the confirmed response shape, not
@@ -176,6 +176,8 @@ export function createInvitesManager(opts = {}) {
         ok: true,
         sessionToken: data.sessionToken,
         classId: data.classId,
+        seatId: typeof data.seatId === 'string' && data.seatId ? data.seatId : null,
+        role: typeof data.role === 'string' && data.role ? data.role : null,
         assignmentId: typeof data.assignmentId === 'string' ? data.assignmentId : null,
         redirectTo: typeof data.redirectTo === 'string' ? data.redirectTo : null,
       };
