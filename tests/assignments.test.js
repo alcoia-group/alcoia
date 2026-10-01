@@ -165,3 +165,30 @@ describe('getDownloadUrl', () => {
     await expect(m.getDownloadUrl('doc-1')).resolves.toEqual({ ok: false, error: 'network_error' });
   });
 });
+
+describe('requestReaderHandoff', () => {
+  const ASSIGNMENTS_URL = 'https://api.alcoia.invalid/api/assignments';
+  it('POSTs with Bearer auth and returns the code', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 201, json: async () => ({ code: 'abc', expiresAt: 'x' }) }));
+    const m = createAssignmentsManager({ fetchImpl, assignmentsUrl: ASSIGNMENTS_URL, getSession: sessionOf('tok-1') });
+    expect(await m.requestReaderHandoff('a/1')).toEqual({ ok: true, code: 'abc' });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe(`${ASSIGNMENTS_URL}/a%2F1/reader-handoff`);
+    expect(init).toMatchObject({ method: 'POST', headers: { Authorization: 'Bearer tok-1' } });
+  });
+  it('maps a 404 to not_available, other statuses to their error, and never throws', async () => {
+    const mk = (resp) => createAssignmentsManager({ fetchImpl: async () => resp, assignmentsUrl: ASSIGNMENTS_URL, getSession: sessionOf('t') });
+    expect(await mk({ ok: false, status: 404, json: async () => ({ error: 'assignment_not_found' }) }).requestReaderHandoff('a')).toEqual({ ok: false, error: 'not_available' });
+    expect(await mk({ ok: false, status: 401, json: async () => ({ error: 'invalid_session' }) }).requestReaderHandoff('a')).toEqual({ ok: false, error: 'invalid_session' });
+    expect(await mk({ ok: true, status: 201, json: async () => ({}) }).requestReaderHandoff('a')).toEqual({ ok: false, error: 'malformed_response' });
+    const boom = createAssignmentsManager({ fetchImpl: async () => { throw new Error('x'); }, assignmentsUrl: ASSIGNMENTS_URL, getSession: sessionOf('t') });
+    expect(await boom.requestReaderHandoff('a')).toEqual({ ok: false, error: 'network_error' });
+  });
+  it('needs a session, an id and a url', async () => {
+    const f = vi.fn();
+    expect(await createAssignmentsManager({ fetchImpl: f, assignmentsUrl: ASSIGNMENTS_URL, getSession: sessionOf(null) }).requestReaderHandoff('a')).toEqual({ ok: false, error: 'no_session' });
+    expect(await createAssignmentsManager({ fetchImpl: f, assignmentsUrl: ASSIGNMENTS_URL, getSession: sessionOf('t') }).requestReaderHandoff('')).toEqual({ ok: false, error: 'no_assignment_id' });
+    expect(await createAssignmentsManager({ fetchImpl: f, getSession: sessionOf('t') }).requestReaderHandoff('a')).toEqual({ ok: false, error: 'no_assignments_url' });
+    expect(f).not.toHaveBeenCalled();
+  });
+});
