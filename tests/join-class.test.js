@@ -339,7 +339,7 @@ describe('an LTI launch cannot complete without the disclosure having been rende
       expect(init.headers.Authorization).toBeUndefined();
       return {
         ok: true,
-        json: async () => ({ sessionToken: 'lti-sess-2', kind: 'lti', classId: 'lti-class-2', assignmentId: null, redirectTo: null }),
+        json: async () => ({ sessionToken: 'lti-sess-2', kind: 'lti', classId: 'lti-class-2', seatId: 'seat-9', role: 'student', assignmentId: null, redirectTo: null }),
       };
     });
     vi.stubGlobal('fetch', routedFetch([[LTI_ACK_URL, ackFetch], [ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
@@ -356,7 +356,8 @@ describe('an LTI launch cannot complete without the disclosure having been rende
     // The join genuinely completed — a real session now exists, minted
     // entirely by this confirm action (there was none before it).
     expect(chrome._store.sra_session).toEqual({ token: 'lti-sess-2', email: '', expiresAt: expect.any(Number) });
-    expect(chrome._store.sra_class_membership).toEqual({ classId: 'lti-class-2', seatId: null, role: null, joinedAt: expect.any(Number) });
+    // The seat id and role the server returns are kept, so "Leave this class" works.
+    expect(chrome._store.sra_class_membership).toEqual({ classId: 'lti-class-2', seatId: 'seat-9', role: 'student', joinedAt: expect.any(Number) });
   });
 
   it('an expired ack code (401 code_expired) fails cleanly — no session, no membership, honest message, retry still possible', async () => {

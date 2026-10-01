@@ -169,8 +169,17 @@ async function completeJoin() {
     // already acknowledged; this is the branch for the one that wasn't).
     await new Promise((resolve) => chrome.storage.local.set({
       [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: { token: result.sessionToken, email: '', expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1000 },
-      [CLASS_MEMBERSHIP_KEY]: { classId: result.classId, seatId: null, role: null, joinedAt: Date.now() },
+      [CLASS_MEMBERSHIP_KEY]: { classId: result.classId, seatId: result.seatId || null, role: result.role || null, joinedAt: Date.now() },
     }, resolve));
+    // Open the assignment signed in (the redirect carries a one-use reader
+    // code), but only on the reader's own origin: never follow an
+    // arbitrary URL from a response.
+    try {
+      const readerOrigin = self.ALCOIA_CONFIG.READER_ORIGIN;
+      if (result.redirectTo && readerOrigin && new URL(result.redirectTo).origin === readerOrigin) {
+        chrome.tabs.create({ url: result.redirectTo });
+      }
+    } catch (e) { /* a malformed redirect is ignored; the join itself is done */ }
   } else {
     await new Promise((resolve) => chrome.storage.local.set({
       [CLASS_MEMBERSHIP_KEY]: { classId: result.classId, seatId: result.seatId, role: result.role, joinedAt: Date.now() },
