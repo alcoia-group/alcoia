@@ -82,17 +82,13 @@
     // is no session yet at this point in the flow; a successful ack is
     // what MINTS one.
     LTI_DISCLOSURE_ACK_URL: BACKEND_ORIGIN + '/api/lti/disclosure/ack',
-    // The web page a Canvas launch actually lands the student's browser
-    // on (whatever receives /api/lti/launch's JSON and hands it to this
-    // extension) does not exist in any repo available here yet — same gap
-    // WEB_APP_ORIGIN above already accepted for item S3 ("alcoia.app does
-    // not resolve yet; this whole roadmap is designed to work without
-    // it"). This value is NOT invented: it is copied verbatim from
-    // alcoiaServer's own default parameter for ltiReaderBaseUrl in
-    // src/http/routes/lti.js (createLtiRouter's own `.invalid`
-    // placeholder), so background.js's origin check matches what the
-    // server itself already assumes that page's origin will be.
-    LTI_READER_ORIGIN: 'https://console.alcoia.invalid',
+    // The page that receives the launch exchange and messages this
+    // extension is the marketing site's /lti/launch (alcoiaWeb), so the
+    // sender origin to trust is that site's, the same origin as
+    // WEB_APP_ORIGIN. (It used to be a `.invalid` placeholder, which no real
+    // launch page could ever match.) Chrome's own externally_connectable
+    // list in manifest.json still decides who may message at all.
+    LTI_READER_ORIGIN: WEB_APP_ORIGIN,
     // Assignments entry point (S6/E4 follow-up) — src/shared/assignments.js
     // and src/content/host.js's outcome reporting. Both confirmed by
     // reading alcoiaServer's src/http/routes/assignments.js, documents.js
