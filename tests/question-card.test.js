@@ -942,3 +942,118 @@ describe('self-report, active surfacing (item 13a)', () => {
     expect(onSelfReport).toHaveBeenCalledWith('disengaged');
   });
 });
+
+/* Learning Intelligence step 24 — showExplanation(), the explain/repair
+ * renderer. A fake UI that records the `kind` reservePopup() was called
+ * with, since that is the one thing ui-controller.js's real
+ * hasVisibleQuestionCard() actually checks (see that file's own header) —
+ * confirming it here is what proves an explain/repair card can never be
+ * mistaken for a retrieval question by the policy's own active-card gate. */
+function fakeUIWithKind() {
+  const root = document.createElement('div');
+  document.body.appendChild(root);
+  const reservedKinds = [];
+  return {
+    root,
+    reservedKinds,
+    reservePopup: (fingerprint, kind) => { reservedKinds.push(kind); return root; },
+    showPopup: () => {},
+    closePopup: (el) => { el.remove(); },
+    flashPopup: () => {},
+  };
+}
+
+describe('showExplanation() (Learning Intelligence step 24)', () => {
+  it('returns false for empty/missing text, reserving no popup', () => {
+    const ui = fakeUIWithKind();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+    expect(card.showExplanation('explain', '', {})).toBe(false);
+    expect(card.showExplanation('explain', '   ', {})).toBe(false);
+    expect(card.showExplanation('explain', null, {})).toBe(false);
+    expect(ui.reservedKinds).toHaveLength(0);
+  });
+
+  it('tags the popup "explain", never "question" — so hasVisibleQuestionCard() would not count it', () => {
+    const ui = fakeUIWithKind();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+    const shown = card.showExplanation('explain', 'A plain explanation of the idea.', {});
+    expect(shown).toBe(true);
+    expect(ui.reservedKinds).toEqual(['explain']);
+  });
+
+  it('tags the popup "repair", also never "question"', () => {
+    const ui = fakeUIWithKind();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+    const shown = card.showExplanation('repair', 'The correct idea, contrasted with a common mix-up.', {});
+    expect(shown).toBe(true);
+    expect(ui.reservedKinds).toEqual(['repair']);
+  });
+
+  it('renders the given text, already highlighted the same way a wrong-answer explanation is', () => {
+    const ui = fakeUIWithKind();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+    card.showExplanation('explain', 'A plain explanation of the idea.', {});
+    expect(ui.root.querySelector('.sra-explain-text').textContent).toContain('A plain explanation of the idea.');
+  });
+
+  it('explain and repair show different, fixed, non-AI-sounding badge copy', () => {
+    const uiA = fakeUIWithKind();
+    const cardA = createQuestionCard({ ui: uiA, esc, responseSignals: createResponseSignals() });
+    cardA.showExplanation('explain', 'text', {});
+    const explainBadge = uiA.root.querySelector('.sra-explain-badge').textContent;
+
+    const uiB = fakeUIWithKind();
+    const cardB = createQuestionCard({ ui: uiB, esc, responseSignals: createResponseSignals() });
+    cardB.showExplanation('repair', 'text', {});
+    const repairBadge = uiB.root.querySelector('.sra-explain-badge').textContent;
+
+    expect(explainBadge).not.toBe(repairBadge);
+    for (const copy of [explainBadge, repairBadge]) {
+      expect(copy.toLowerCase()).not.toMatch(/\b(ai|generation intent|policy action|content intelligence|llm|model)\b/);
+    }
+  });
+
+  it('shows no answerable question markup — no options, no free-text box, no confidence step', () => {
+    const ui = fakeUIWithKind();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+    card.showExplanation('repair', 'text', {});
+    expect(ui.root.querySelector('.sra-q-option')).toBeNull();
+    expect(ui.root.querySelector('.sra-q-freetext')).toBeNull();
+    expect(ui.root.querySelector('.sra-q-confidence')).toBeNull();
+    expect(ui.root.querySelector('.sra-q-text')).toBeNull();
+  });
+
+  it('never calls responseSignals.present/answer/dismiss or onAnswered/onDismissed — dismissing is not a graded event', () => {
+    const ui = fakeUIWithKind();
+    const responseSignals = createResponseSignals();
+    const presentSpy = vi.spyOn(responseSignals, 'present');
+    const dismissSpy = vi.spyOn(responseSignals, 'dismiss');
+    const onAnswered = vi.fn();
+    const onDismissed = vi.fn();
+    const card = createQuestionCard({ ui, esc, responseSignals, onAnswered, onDismissed });
+
+    card.showExplanation('explain', 'text', {});
+    ui.root.querySelector('.sra-close-btn').click();
+
+    expect(presentSpy).not.toHaveBeenCalled();
+    expect(dismissSpy).not.toHaveBeenCalled();
+    expect(onAnswered).not.toHaveBeenCalled();
+    expect(onDismissed).not.toHaveBeenCalled();
+  });
+
+  it('shows the evidence line, same markup class as the retrieval question card, when provided', () => {
+    const ui = fakeUIWithKind();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+    card.showExplanation('explain', 'text', { evidence: ['You seemed to slow down here'] });
+    expect(ui.root.querySelector('.sra-q-evidence').textContent).toContain('You seemed to slow down here');
+  });
+
+  it('closing the card removes it from the DOM, same as the question card\'s own dismiss', () => {
+    const ui = fakeUIWithKind();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+    card.showExplanation('repair', 'text', {});
+    expect(ui.root.isConnected).toBe(true);
+    ui.root.querySelector('.sra-q-skip').click();
+    expect(ui.root.isConnected).toBe(false);
+  });
+});
