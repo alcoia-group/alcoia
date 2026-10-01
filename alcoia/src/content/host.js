@@ -948,6 +948,84 @@ export async function createHost(deps) {
     }
   }
 
+  /* Learning Intelligence step 24 — explain / repair generation.
+   *
+   * Reached from the exact same onIntervention() 'ask' branch handleAsk is
+   * (Step 23 kept decision.action === 'ask' for every policyAction that
+   * renders through the question-card shell — see intervention-policy.js's
+   * own POLICY_ACTIONS header, "several policyActions share one rendering
+   * on purpose"); onIntervention below picks THIS function over handleAsk
+   * specifically when decision.policyAction is 'explain' or 'repair'.
+   *
+   * kind: 'explain' | 'repair', passed straight through from the caller.
+   * Chooses the generation mode here — the one place the two intents'
+   * actual server-side DIFFERENCE is decided on this client: 'explain' asks
+   * for mode 'explain_more' (the SAME generator a wrong retrieval answer
+   * already offers — explain is genuinely that same kind of help, offered
+   * proactively rather than only after a miss); 'repair' asks for the new
+   * 'repair' mode (src/ai/summary-prompts.js, alcoiaServer step 24),
+   * addressing a specific prior insufficient attempt rather than a first
+   * encounter. Both are constrained mode strings validated server-side
+   * against SUPPORTED_MODE_SET (step 24 §6/§7) — never a free-text prompt
+   * built or sent by this client.
+   *
+   * Bounded-content discipline (step 24 §8): `text` is the SAME single
+   * paragraph extraction handleAsk already uses — no new content source,
+   * no whole-page or document transmission, no new Content Intelligence
+   * fetch (step 24 §16) — fetchSummary() below sends exactly that text,
+   * the identical bounded call every other summarize mode already makes.
+   *
+   * Shares handleAsk's own automaticInterventionGuard: this is the second
+   * of the two automatic, AI-generation-triggering paths in this file (see
+   * automatic-intervention-guard.js's own header) — the guard is held for
+   * the full duration of the generation call, released only in `finally`,
+   * so a concurrent retrieval/explain/repair/retention generation can never
+   * overlap this one. */
+  async function handleExplainOrRepair(kind, decision, state, target, paragraphIndex) {
+    const el = target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
+    const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
+    if (!text) return false;
+
+    if (!automaticInterventionGuard.tryAcquire()) return false;
+    try {
+      const identity = computeIdentity(text);
+      const mode = kind === 'repair' ? 'repair' : 'explain_more';
+      const generated = await fetchSummary(text, mode);
+      if (!generated) return false;
+
+      let anchorRect = null;
+      try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
+      if (el) highlightElement(el, 4000);
+
+      // Step 5: same reuse pattern as handleAsk — this decision's own
+      // interventionId, minted by intervention-policy.js at the moment the
+      // explain/repair decision was made, never regenerated here.
+      const interventionId = decision.interventionId;
+      const shown = questionCard.showExplanation(kind, generated, {
+        evidence: decision.evidence,
+        anchorRect,
+        paragraphKey: identity.paragraphKey,
+        knowledgeUnitId: identity.knowledgeUnitId,
+        interventionId,
+      });
+      if (shown) {
+        // Step 12: same intervention-evidence contract as handleAsk, same
+        // wire-level type 'ask' — interventions.type's own CHECK constraint
+        // (alcoiaServer) has no separate 'explain'/'repair' value, and this
+        // item's own §12 is explicit that reporting stays additive-or-
+        // reused rather than inventing a new type. The retrieve/explain/
+        // repair distinction lives in which generation mode produced the
+        // content the reader actually saw, not in a new reporting field.
+        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text);
+      } else {
+        diagLog.log('questions', `generated_not_presented action=${decision.action} policyAction=${decision.policyAction} reason=${decision.reason}`);
+      }
+      return shown;
+    } finally {
+      automaticInterventionGuard.release();
+    }
+  }
+
   /* Intelligence-architecture audit, step 7 -- a due retention item becomes
    * an actual interruption only if it matches a paragraph the reader is
    * ALREADY reading (never reconstructed from the hash -- see retention.js's
@@ -1115,6 +1193,17 @@ export async function createHost(deps) {
         return true;
       }
       if (decision.action === 'ask') {
+        // Learning Intelligence step 24: decision.action stays 'ask' for
+        // every policyAction that renders through the question-card shell
+        // (Step 23's own design — see intervention-policy.js's POLICY_ACTIONS
+        // header), so policyAction is what actually picks the generation
+        // path here. 'explain'/'repair' are genuinely different generation
+        // behavior (see handleExplainOrRepair's own header); anything else
+        // ('retrieve', or an older/unset policyAction for backward
+        // compatibility) keeps the existing retrieval-question path.
+        if (decision.policyAction === 'explain' || decision.policyAction === 'repair') {
+          return await handleExplainOrRepair(decision.policyAction, decision, state, target, paragraphIndex);
+        }
         return await handleAsk(decision, state, target, paragraphIndex);
       }
       return false;
