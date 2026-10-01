@@ -244,8 +244,23 @@ async function boot() {
   // extension page alike. See CLAUDE.md's "Extracting the host from
   // content.js (item 30a)" section for the full inventory and reasoning.
   const hostModule = await loadModule('src/content/host.js');
+  // The alcoia web reader (assignments.alcoia.app/a/<id>) is read like any
+  // article, but its URL says which assignment it is, so outcomes can be
+  // reported against it (host.js stays inert without an assignmentId).
+  const readerContextModule = await loadModule('src/shared/reader-context.js');
+  const readerAssignmentId = readerContextModule.readerAssignmentId(window.location, self.ALCOIA_CONFIG.READER_ORIGIN);
+  let readerGetSession = null;
+  let readerBlockSource = null;
+  if (readerAssignmentId) {
+    const sessionModule = await loadModule('src/shared/session.js');
+    readerGetSession = sessionModule.createSessionManager().getSession;
+    const blocksModule = await loadModule('src/content/reader-blocks.js');
+    readerBlockSource = blocksModule.createReaderBlockSource(document);
+  }
   hostApi = await hostModule.createHost({
     loadModule,
+    assignmentId: readerAssignmentId,
+    getSession: readerGetSession,
     ui,
     esc,
     log: _log,
@@ -325,6 +340,7 @@ async function boot() {
       debugEnabled,
     }),
     host: hostCallbacks,
+    ...(readerBlockSource ? { paragraphTrackerOpts: { blockSource: readerBlockSource } } : {}),
   });
   // host.js's questionCard/runQuiz callbacks reference orchestrator, which
   // did not exist yet when they were built — see host.js's own header for
