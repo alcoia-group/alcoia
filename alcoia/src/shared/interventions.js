@@ -6,7 +6,22 @@
  * repeats only what differs.
  *
  *   POST /api/assignments/:id/interventions
- *     { interventionId, knowledgeUnitId?, paragraphIndex?, type } -> 201 { recorded: true }
+ *     { interventionId, knowledgeUnitId?, paragraphIndex?, type, text? } -> 201 { recorded: true }
+ *
+ * `text` (step 19, Content Intelligence's real trigger): the exact same
+ * bounded passage `identity`/`knowledgeUnitId` was already computed from
+ * at this call's own call site (host.js already holds it — handleAsk's own
+ * `text` param, runSessionRecall's `entry.text`, checkRetentionCandidate's
+ * own `text` param) — never re-fetched, never the whole page, never more
+ * than the one paragraph already in hand. Optional: every existing caller
+ * that doesn't pass it keeps behaving exactly as before (the server treats
+ * its absence as "no Content Intelligence signal this time," never a
+ * degraded or rejected submission — see alcoiaServer's own interventions
+ * route). No client-side length cap is enforced here deliberately: a
+ * single paragraph is already naturally far under any reasonable bound,
+ * and the server is the authoritative bound-check (CLAUDE.md's own
+ * standing "the server never trusts a client-side check" convention,
+ * already true for every other field this same submit() sends).
  *
  * Fires once, the moment a question-bearing intervention actually reaches
  * the screen (host.js's handleAsk/runSessionRecall, quiz.js's own
@@ -38,7 +53,7 @@ export function createInterventionsManager(opts = {}) {
    * caller (host.js/quiz.js) already discards this result, same reasoning
    * as outcomes.submit()'s own comment: returned anyway so this stays
    * testable without a real network call. */
-  async function submit({ interventionId, knowledgeUnitId, paragraphIndex, type } = {}) {
+  async function submit({ interventionId, knowledgeUnitId, paragraphIndex, type, text } = {}) {
     if (typeof interventionId !== 'string' || !interventionId) {
       return { ok: false, error: 'invalid_intervention_id' };
     }
@@ -59,6 +74,11 @@ export function createInterventionsManager(opts = {}) {
     // into a client-side 422 the server's own validation already owns.
     if (typeof knowledgeUnitId === 'string' && knowledgeUnitId) body.knowledge_unit_id = knowledgeUnitId;
     if (Number.isInteger(paragraphIndex) && paragraphIndex >= 0) body.paragraph_index = paragraphIndex;
+    // Step 19: the exact passage identity was already computed from --
+    // never a different or re-derived string. Omitted (not sent as an
+    // empty string) when the caller has none, same coercion shape as
+    // every other optional field here.
+    if (typeof text === 'string' && text) body.text = text;
 
     try {
       const resp = await fetchImpl(interventionsUrl, {
