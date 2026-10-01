@@ -108,9 +108,12 @@ export function createParagraphTracker(opts = {}) {
   /* Document order defines the index, which is what regression detection
    * compares against. Rescanned lazily — pages mutate. */
   function scan() {
-    if (blockSource) {
+    // A source may answer null to mean "nothing of mine on this page, scan
+    // the DOM" (the web reader's PDF source does, for Word and PowerPoint).
+    const injected = blockSource ? blockSource() : null;
+    if (injected) {
       const blocks = [];
-      for (const block of blockSource() || []) {
+      for (const block of injected) {
         if (!block || !block.el) continue;
         const media = !!block.media;
         const words = media ? 0 : (block.words || 0);

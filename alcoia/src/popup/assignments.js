@@ -8,12 +8,12 @@
  * 31 proved this before this item touched it) and reading-bridge.js's own
  * header for how assignmentId reaches host.js's outcome reporting.
  *
- * PPTX/DOCX: no viewer exists for either yet (CLAUDE.md §7's own "PDF
- * works... do not advertise three formats before three work"). Shown
- * honestly as not viewable here, with a "Download instead" affordance
- * using the SAME signed URL this page already has — not a silent
- * failure, and not a second server call this item has no confirmed
- * endpoint for.
+ * Opening: PDF, PowerPoint and Word documents open in the alcoia web reader
+ * (assignments.alcoia.app). The popup asks the server for a one-time handoff
+ * code and opens <reader>/a/<id>#c=<code>, which signs the student in with no
+ * sign-in step. If the handoff fails (server not reachable, reader not
+ * deployed yet) a PDF falls back to the extension's own viewer below, which
+ * stays as the fallback; other formats say so plainly and offer a download.
  */
 import { createSessionManager } from '../shared/session.js';
 import { createAssignmentsManager } from '../shared/assignments.js';
@@ -32,6 +32,7 @@ const assignments = createAssignmentsManager({
   getSession: session.getSession,
   mineUrl: self.ALCOIA_CONFIG.ASSIGNMENTS_MINE_URL,
   documentsUrl: self.ALCOIA_CONFIG.DOCUMENTS_URL,
+  assignmentsUrl: self.ALCOIA_CONFIG.ASSIGNMENTS_URL,
 });
 
 const pageError = $('pageError');
@@ -63,14 +64,30 @@ function formatClosesAt(iso) {
   }
 }
 
-// The one PDF a row can open — the first accepted pdf document, matching
-// this item's own "PDF only for now" scope. An assignment can have more
-// than one document row (no uniqueness constraint server-side — see
-// assignments.js's shared-module header); any additional ones are not
-// surfaced separately here, since there is no confirmed way to tell them
-// apart (no per-document title exists either).
-function openablePdf(a) {
-  return a.documents.find((d) => d.format === 'pdf' && d.status === 'accepted') || null;
+// Formats the web reader can show. Status is deliberately not checked: a row
+// uploaded before its format could be read keeps a stale 'unsupported' until
+// the server re-reads it, and the reader (which converts on open) is what
+// corrects that. A file that really cannot be read shows a download there.
+const READER_FORMATS = ['pdf', 'pptx', 'docx'];
+function readerDocument(a) {
+  return a.documents.find((d) => READER_FORMATS.includes(d.format)) || null;
+}
+
+async function openInReader(a, doc) {
+  const handoff = await assignments.requestReaderHandoff(a.assignmentId);
+  if (handoff.ok) {
+    const url = self.ALCOIA_CONFIG.READER_ORIGIN
+      + '/a/' + encodeURIComponent(a.assignmentId)
+      + '#c=' + encodeURIComponent(handoff.code);
+    chrome.tabs.create({ url });
+    return;
+  }
+  // Fall back to what worked before the web reader existed.
+  if (doc.format === 'pdf') {
+    await openPdf(a.assignmentId, doc.documentId, a.className || 'Assignment');
+    return;
+  }
+  showError("Couldn't open that document just now. Try again.");
 }
 
 async function openPdf(assignmentId, documentId, title) {
@@ -112,22 +129,21 @@ function renderRow(a) {
   const actionRow = document.createElement('div');
   actionRow.className = 'assign-row-action';
 
-  const pdf = openablePdf(a);
-  if (pdf) {
+  const doc = readerDocument(a);
+  if (doc) {
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
     openBtn.className = 'btn btn-primary';
     openBtn.textContent = 'Open';
-    openBtn.addEventListener('click', () => openPdf(a.assignmentId, pdf.documentId, a.className || 'Assignment'));
+    openBtn.addEventListener('click', () => openInReader(a, doc));
     actionRow.appendChild(openBtn);
   } else if (a.documents.length > 0) {
-    // A real document exists but this extension cannot render it (pptx,
-    // docx, or a pdf the server itself marked 'unsupported') — honest
-    // state, not a silent failure. "Download instead" uses the SAME
+    // A real document exists in a format the reader does not show —
+    // honest state, not a silent failure. "Download instead" uses the SAME
     // signed URL rather than a second, unconfirmed endpoint.
     const note = document.createElement('p');
     note.className = 'assign-row-note';
-    note.textContent = 'Not viewable in the extension yet.';
+    note.textContent = 'This file type can\'t be opened here.';
     actionRow.appendChild(note);
 
     const dl = document.createElement('button');
