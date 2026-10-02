@@ -241,11 +241,25 @@ export function createUIController(deps = {}) {
     }
 
     if (openPopups.size >= maxPopups) {
-      for (const [fp, { el }] of openPopups.entries()) {
+      for (const [fp, { el, kind: openKind }] of openPopups.entries()) {
         if (!el || !el.isConnected) { openPopups.delete(fp); break; }
-        if (el.dataset.pinned !== 'true') { closePopup(el, fp); break; }
+        // Step 29 (student intervention experience audit): a live,
+        // unanswered retrieval question (kind: 'question') is never
+        // silently evicted to make room for something else — question-
+        // card.js's own rule 1 is "the reader can always leave", on their
+        // own terms (the close/skip buttons, or Escape), never because a
+        // LATER, unrelated popup happened to need the slot. Evicting it
+        // here used to leave response-signals.js's pending answer record
+        // dangling forever (resolved as neither an answer nor a
+        // dismissal) and the reader's in-progress selection discarded
+        // with no trace. Skip past it and keep looking for something
+        // genuinely evictable instead of evicting the first entry found.
+        if (el.dataset.pinned === 'true' || openKind === 'question') continue;
+        closePopup(el, fp);
+        break;
       }
-      // Every open popup is pinned and we are at the cap — do not add another.
+      // Every remaining slot is pinned/protected and we are at the cap —
+      // do not add another.
       if (openPopups.size >= maxPopups) return null;
     }
 
@@ -303,13 +317,29 @@ export function createUIController(deps = {}) {
 
   /* (Re)arm the autohide countdown. It runs only when autohide is on, the card
    * is not pinned, and the reader is not currently hovering it. Hiding a card
-   * someone is still reading is the most irritating thing this UI can do. */
+   * someone is still reading is the most irritating thing this UI can do.
+   *
+   * Step 29 (student intervention experience audit): a popup reserved with
+   * kind: 'question' is exempt outright, regardless of the autohide
+   * setting — a retrieval question is a reader-initiated-close-only
+   * interaction (question-card.js's own rule 1: "the reader can always
+   * leave", on their own terms, not a background timer's). Before this,
+   * a reader who enabled autohide and took longer than its timeout to
+   * read the question, pick an option/type an answer, and go through the
+   * separate confidence step had their card silently vanish mid-answer:
+   * the selection was discarded, no dismissal was ever recorded (so the
+   * policy's own backoff never learned from it), and response-signals.js's
+   * pending record was left dangling forever — resolved as neither an
+   * answer nor a dismissal. Escape (hidePopup) and the explicit close/skip
+   * buttons are unaffected by this — the reader can still always leave,
+   * just never by a timer they didn't ask for. */
   function resetAutohide(root, fingerprint) {
     const { autohideEnabled, autohideTimeoutSec } = getSettings();
     clearTimeout(root._hideT);
     if (!autohideEnabled || root.dataset.pinned === 'true') return;
     if (root._mouseOver) return;
     const fp = fingerprint || findFingerprint(root);
+    if (openPopups.get(fp)?.kind === 'question') return;
     root._hideT = setTimeout(() => closePopup(root, fp), Math.max(3, autohideTimeoutSec || 12) * 1000);
   }
 

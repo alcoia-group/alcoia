@@ -72,9 +72,20 @@ export function createQuestionCard(deps = {}) {
 
   /* question: { q, options[4], answerIndex, explanation, span, level?, span_role? }
    * context: { evidence[], anchorRect, paragraphKey, knowledgeUnitId, interventionId,
-   *            passage?, wasExplorationSample, showSelfReport? } — item 13a:
+   *            passage?, wasExplorationSample, showSelfReport?, badge? } — item 13a:
    *            showSelfReport renders the self-report options alongside this
    *            question, additive to the answer flow, never a replacement for it.
+   *            badge (Step 29, optional, defaults to "quick check"): the one
+   *            visible cue that currently tells a retention/delayed-retrieve
+   *            item apart from an ordinary fresh question — see host.js's own
+   *            checkRetentionCandidate call site. Without it, a retention
+   *            card was visually IDENTICAL to a brand-new question (same
+   *            badge text, same layout), relying entirely on a single small
+   *            caption-sized evidence line to signal "this is something you
+   *            already covered" — easy to miss, and a real UX gap this
+   *            item's own §7 asks to verify against ("recognizable as
+   *            retrieval of previously encountered material... does not
+   *            look like an arbitrary new question").
    *            knowledgeUnitId (step 3) and interventionId (step 5) are documented
    *            here for shape completeness — this component does not compute
    *            either itself; it is response-signals.js's present()/answer() (called
@@ -177,7 +188,7 @@ export function createQuestionCard(deps = {}) {
         <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
       </div>
       <div class="sra-popup-body">
-        <div class="sra-state-badge sra-q-badge">quick check</div>
+        <div class="sra-state-badge sra-q-badge">${esc(context.badge || 'quick check')}</div>
         ${evidence}
         <div class="sra-q-text">${esc(question.q)}</div>
         ${bodyInner}
