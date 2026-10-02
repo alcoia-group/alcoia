@@ -1567,6 +1567,202 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
   });
 });
 
+/* Intelligence-architecture audit, step 27 — mid-session retention
+ * freshness. Before this item, the due list above was fetched exactly
+ * once, at construction (confirmed by reading retention.js's own header,
+ * which disclosed this explicitly as "fetched ONCE... never re-fetched
+ * mid-session"). Retention intervals are day-scale (RETENTION_INTERVAL_DAYS,
+ * alcoiaServer), but a single long-lived reading session (one host.js
+ * instance, one page/document, open for a long time — the PDF viewer via
+ * reading-bridge.js is the real example) can itself span the moment a
+ * knowledge unit crosses from "not yet due" to "due", with no outcome of
+ * this session's own causing it — a genuine staleness gap, not a
+ * hypothetical one. These tests prove the periodic refresh this item adds
+ * actually closes it, and — the harder half — that it cannot resurrect a
+ * knowledge unit already presented this session merely because the mocked
+ * server (simulating the real lag between a presentation and its outcome
+ * actually landing and advancing the schedule) keeps reporting it due. */
+describe('retention due-list periodic refresh (intelligence-architecture audit, step 27)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const DUE_URL = 'https://api.test.invalid/api/assignments/assign-27/knowledge-state/due';
+  const REFRESH_MS = 600_000; // mirrors host.js's own RETENTION_DUE_REFRESH_MS
+
+  function assignmentDeps(overrides = {}) {
+    return baseDeps({
+      assignmentId: 'assign-27',
+      getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+      TOKEN_URL: 'https://api.test.invalid/api/token',
+      ASSIGNMENTS_URL,
+    });
+  });
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  async function realKnowledgeUnitId(text) {
+    const mod = await import('../alcoia/src/content/signals/knowledge-unit.js');
+    return mod.computeKnowledgeUnitId(text);
+  }
+
+  function stubQuestions() {
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({
+      ok: true,
+      data: { questions: [{ q: 'Still there?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'retention span' }] },
+    });
+  }
+
+  // candidatesRef is a mutable box (not a plain array passed by value) so a
+  // test can change what the mocked server reports between the first fetch
+  // and a later refresh tick, simulating real server-side state change.
+  function proxyFetchImpl(calls, candidatesRef) {
+    return vi.fn((url, options) => {
+      calls.push({ url, options });
+      if (url === DUE_URL) return { ok: true, status: 200, data: { candidates: candidatesRef.current } };
+      return { ok: true, status: 200, data: { recorded: true } };
+    });
+  }
+
+  it('re-fetches the due list on a periodic timer, not only once at construction', async () => {
+    const calls = [];
+    const candidatesRef = { current: [] };
+    mockProxyFetch(proxyFetchImpl(calls, candidatesRef));
+    vi.useFakeTimers();
+
+    await createHost(assignmentDeps());
+    expect(calls.filter((c) => c.url === DUE_URL)).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(REFRESH_MS + 1000);
+    expect(calls.filter((c) => c.url === DUE_URL).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('a knowledge unit that becomes due only AFTER construction is picked up once the periodic refresh runs, with no second page load', async () => {
+    const text = 'A paragraph that only becomes a real retention candidate once the periodic due-list refresh runs, long enough to pass the question length floor.';
+    const knowledgeUnitId = await realKnowledgeUnitId(text);
+    stubQuestions();
+    const calls = [];
+    const candidatesRef = { current: [] }; // nothing due yet at construction
+    mockProxyFetch(proxyFetchImpl(calls, candidatesRef));
+    vi.useFakeTimers();
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+
+    host.onParagraphRead(text, 5000, 2);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
+
+    // The server now reports this exact knowledge unit as due -- the same
+    // real-world transition "enough days passed" produces, while this same
+    // host.js instance (and its one dueKnowledgeUnits Map) is still alive.
+    candidatesRef.current = [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }];
+    await vi.advanceTimersByTimeAsync(REFRESH_MS + 1000);
+
+    host.onParagraphRead(text, 5000, 2);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true);
+    const body = JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body);
+    expect(body.type).toBe('retention');
+    expect(body.knowledge_unit_id).toBe(knowledgeUnitId);
+  });
+
+  it('never resurrects a knowledge unit already presented this session, even when a later refresh still reports it due (server lag before the outcome lands)', async () => {
+    // Two occurrences of the SAME content (knowledge-unit.js's own
+    // normalization collapses whitespace before hashing, so these two
+    // strings produce the identical knowledgeUnitId) but with a
+    // DIFFERENT raw paragraphKey (text.slice(0, 80).trim() is taken
+    // BEFORE normalization, so the extra space shifts that 80-character
+    // window's own content) — the exact "duplicate content at a
+    // different position" case checkRetentionCandidate's own
+    // dueKnowledgeUnits.delete() comment names. This is deliberate: if
+    // both calls used byte-identical text, intervention-policy.js's own
+    // paragraphKey-keyed seenParagraphs dedup would independently block
+    // the second attempt on its own, and this test would pass for the
+    // wrong reason — it would never actually exercise
+    // presentedRetentionUnits at all. Confirmed below by removing the
+    // fix and re-running: it genuinely fails without it.
+    const textFirst = 'A due paragraph that gets presented once, long enough on its own to pass the question-generation length floor for this specific race test.';
+    const textSecond = 'A due  paragraph that gets presented once, long enough on its own to pass the question-generation length floor for this specific race test.';
+    const knowledgeUnitId = await realKnowledgeUnitId(textFirst);
+    expect(await realKnowledgeUnitId(textSecond)).toBe(knowledgeUnitId); // same content, confirmed same identity
+    expect(textFirst.slice(0, 80).trim()).not.toBe(textSecond.slice(0, 80).trim()); // but a different raw paragraphKey
+    stubQuestions();
+    const calls = [];
+    const candidatesRef = { current: [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }] };
+    mockProxyFetch(proxyFetchImpl(calls, candidatesRef));
+    vi.useFakeTimers();
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+
+    host.onParagraphRead(textFirst, 5000, 4);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls.filter((c) => c.url.endsWith('/interventions'))).toHaveLength(1);
+
+    // Dismiss the first card -- otherwise evaluateRetentionCandidate's OWN
+    // "a question card is already visible" check would deny the second
+    // attempt regardless of dueKnowledgeUnits, and this test would prove
+    // nothing about the refresh race it exists to catch.
+    queryAlcoia('.sra-close-btn').click();
+    await vi.advanceTimersByTimeAsync(300); // past the DOM-removal delay closePopup() schedules
+
+    // The mocked server keeps reporting the IDENTICAL knowledge unit as
+    // due — this is the real lag between a presentation and its outcome
+    // actually being submitted, graded, and advancing the schedule
+    // server-side. Without presentedRetentionUnits, this refresh would
+    // put the same knowledge unit straight back into dueKnowledgeUnits.
+    await vi.advanceTimersByTimeAsync(REFRESH_MS + 1000);
+
+    // A second occurrence of the same content, at a different raw
+    // paragraphKey -- seenParagraphs alone would NOT catch this one.
+    host.onParagraphRead(textSecond, 5000, 9);
+    await vi.advanceTimersByTimeAsync(50);
+    // Still exactly one — no second retention intervention for the same
+    // knowledge unit this session, even though the "server" still says due
+    // and the paragraph-level dedup alone would have let it through.
+    expect(calls.filter((c) => c.url.endsWith('/interventions'))).toHaveLength(1);
+  });
+
+  it('stopRetentionRefresh stops the periodic fetch', async () => {
+    const calls = [];
+    const candidatesRef = { current: [] };
+    mockProxyFetch(proxyFetchImpl(calls, candidatesRef));
+    vi.useFakeTimers();
+
+    const { stopRetentionRefresh } = await createHost(assignmentDeps());
+    const countAfterConstruction = calls.filter((c) => c.url === DUE_URL).length;
+    stopRetentionRefresh();
+
+    await vi.advanceTimersByTimeAsync(REFRESH_MS * 3);
+    expect(calls.filter((c) => c.url === DUE_URL).length).toBe(countAfterConstruction);
+  });
+
+  it('skips the periodic network call while assistantEnabled is false, without affecting the original construction-time fetch', async () => {
+    const calls = [];
+    const candidatesRef = { current: [] };
+    mockProxyFetch(proxyFetchImpl(calls, candidatesRef));
+    vi.useFakeTimers();
+
+    await createHost(assignmentDeps({ settings: () => ({ assistantEnabled: false }) }));
+    // The construction-time fetch is unconditional, same as before this
+    // item — only the PERIODIC ticks skip while disabled.
+    const countAfterConstruction = calls.filter((c) => c.url === DUE_URL).length;
+    expect(countAfterConstruction).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(REFRESH_MS + 1000);
+    expect(calls.filter((c) => c.url === DUE_URL).length).toBe(countAfterConstruction);
+  });
+});
+
 /* Step 12A — automatic-intervention concurrency guard. Proves the one race
  * the Step 12 audit found (checkRetentionCandidate, invoked fire-and-forget
  * from onParagraphRead, sits entirely outside orchestrator.js's own
