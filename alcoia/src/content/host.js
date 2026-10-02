@@ -1143,6 +1143,13 @@ export async function createHost(deps) {
         knowledgeUnitId: identity.knowledgeUnitId,
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
         interventionId: decision.interventionId,
+        // Step 29: the one badge-level cue that distinguishes "you've seen
+        // this before" from an ordinary fresh question — see question-
+        // card.js's own context doc comment for why the evidence line
+        // alone wasn't a reliable enough signal on its own. Plain,
+        // non-jargon wording — never "retention"/"knowledge state"/
+        // "spaced repetition", none of which a reader should ever see.
+        badge: 'from earlier',
       });
       // "Budget spent only on yes" — the same rule orchestrator.js's own
       // comment states for handleAsk's path, applied here directly since
