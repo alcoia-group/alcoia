@@ -1057,3 +1057,35 @@ describe('showExplanation() (Learning Intelligence step 24)', () => {
     expect(ui.root.isConnected).toBe(false);
   });
 });
+
+/* Step 29 (student intervention experience audit). Before this item, every
+ * card show() renders used the identical hardcoded "quick check" badge --
+ * a fresh retrieval question and a retention/delayed-retrieve item (one
+ * about content the reader already covered) were visually indistinguishable
+ * except for one small caption-sized evidence line. See host.js's
+ * checkRetentionCandidate for the one real caller that now passes a
+ * distinguishing badge. */
+describe('badge override (Step 29)', () => {
+  it('defaults to "quick check" when the caller supplies no badge', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+    card.show(QUESTION, {});
+    expect(ui.root.querySelector('.sra-q-badge').textContent).toBe('quick check');
+  });
+
+  it('renders a caller-supplied badge instead — e.g. a retention item presented as "from earlier"', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+    card.show(QUESTION, { badge: 'from earlier' });
+    expect(ui.root.querySelector('.sra-q-badge').textContent).toBe('from earlier');
+  });
+
+  it('escapes the badge text the same way every other reader-visible string in this card is escaped', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+    card.show(QUESTION, { badge: '<script>alert(1)</script>' });
+    const badge = ui.root.querySelector('.sra-q-badge');
+    expect(badge.innerHTML).not.toContain('<script>');
+    expect(badge.textContent).toContain('<script>alert(1)</script>');
+  });
+});
