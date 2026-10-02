@@ -203,42 +203,104 @@ export async function createHost(deps) {
   }
 
   // ── Retention due-list (intelligence-architecture audit, step 7 built,
-  // step 10 context-scoped) ────────────────────────────────────────────
+  // step 10 context-scoped, step 27 refreshed) ───────────────────────────
   // Same account-only gate as every reporting manager above -- there is no
   // "account session without an assignment" path in this extension today,
   // so this reuses that exact boundary rather than inventing a new one.
-  // Fetched ONCE here, never re-fetched mid-session -- retention.js's own
-  // header has the full reasoning for that. Keyed by knowledgeUnitId so
-  // checkRetentionCandidate (below, near handleAsk) can do a cheap Map
-  // lookup per paragraph read, rather than a linear scan.
+  // Keyed by knowledgeUnitId so checkRetentionCandidate (below, near
+  // handleAsk) can do a cheap Map lookup per paragraph read, rather than a
+  // linear scan.
   //
-  // STEP 10: dueUrl is now built per-assignment, the same way
+  // STEP 10: dueUrl is built per-assignment, the same way
   // interventionsUrl/explanationEventsUrl already are above, not a flat
-  // config constant -- Knowledge State (and its due-list route) is now
-  // scoped by (account, assignment, knowledge unit), so a due candidate
-  // fetched here is only ever due WITHIN this one assignmentId, never
-  // blended with any other assignment the same account may have used the
-  // same content in.
+  // config constant -- Knowledge State (and its due-list route) is scoped
+  // by (account, assignment, knowledge unit), so a due candidate fetched
+  // here is only ever due WITHIN this one assignmentId, never blended with
+  // any other assignment the same account may have used the same content
+  // in.
+  //
+  // STEP 27: a genuine mid-session staleness gap, found by investigation,
+  // not assumed. retention.js's own header (pre-step-27) disclosed this due
+  // list was "fetched ONCE... never re-fetched mid-session... a knowledge
+  // unit that becomes due after this call simply isn't picked up until the
+  // next session." That is real staleness, not a hypothetical: retention
+  // intervals are measured in whole DAYS (RETENTION_INTERVAL_DAYS,
+  // alcoiaServer), but a single reading session on one long document (a
+  // multi-page PDF through reading-bridge.js, or a long SPA-style article)
+  // can itself run long enough for a knowledge unit to cross from "not yet
+  // due" to "due" purely from wall-clock time passing, with no outcome of
+  // this session's own causing it. Fixed with the smallest additive
+  // change: refreshRetentionDue() below is the exact same fetch this block
+  // already made once, now also run on a periodic timer. No second
+  // retention store, no second scheduler, no change to the server contract
+  // or to evaluateRetentionCandidate() itself -- a refresh only ever
+  // updates this Map's data; the only place that ever turns a due entry
+  // into an actual interruption is still checkRetentionCandidate(), via
+  // the same policy gate as before.
+  //
+  // presentedRetentionUnits guards the one real race a periodic refresh
+  // introduces: advanceRetentionSchedule() only runs once the LEARNER'S
+  // OUTCOME for a presented retention item is submitted and graded
+  // server-side, which can be well after checkRetentionCandidate() already
+  // presented it (the reader is still looking at the card, or hasn't
+  // answered yet) -- until that outcome lands, the server's own
+  // next_retrieval_at for that knowledge unit is still in the past, so a
+  // refresh in that window would see it as "still due" and would otherwise
+  // resurrect it into dueKnowledgeUnits, undoing checkRetentionCandidate's
+  // own belt-and-suspenders delete (below) and risking a second retention
+  // ask for the same knowledge unit at a different paragraph position
+  // while the first is still pending. This Set, not the Map, is what
+  // actually has to survive a refresh for that guarantee to hold.
+  const RETENTION_DUE_REFRESH_MS = 600_000; // 10 minutes -- see comment above: ample resolution against a day-scale schedule, not "continuous polling".
   const dueKnowledgeUnits = new Map();
+  const presentedRetentionUnits = new Set();
+  let retentionManager = null;
+  // Deliberately NO assistantEnabled check in here -- this function is also
+  // the original one-time construction-time fetch (unchanged from before
+  // this item), which has never gated on assistantEnabled: a reader who
+  // starts a session with the assistant off but switches it on mid-session
+  // (settings are read live, s() above) should find dueKnowledgeUnits
+  // already populated the moment checkRetentionCandidate starts being
+  // reachable, not empty until some later refresh tick happens to run. The
+  // periodic timer below applies its own assistantEnabled check instead,
+  // purely to skip a pointless network call per tick while disabled.
+  async function refreshRetentionDue() {
+    if (!retentionManager) return;
+    try {
+      const result = await retentionManager.getDue();
+      if (!result.ok) return;
+      for (const c of result.candidates) {
+        if (!c || typeof c.knowledgeUnitId !== 'string' || !c.knowledgeUnitId) continue;
+        if (presentedRetentionUnits.has(c.knowledgeUnitId)) continue; // see presentedRetentionUnits comment above
+        dueKnowledgeUnits.set(c.knowledgeUnitId, { retentionStage: c.retentionStage, nextRetrievalAt: c.nextRetrievalAt });
+      }
+    } catch (e) {}
+  }
+  let retentionRefreshTimer = null;
   if (assignmentId && getSession) {
     // Same routing reason as submitOutcome above.
     const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
     const retentionModule = await loadModule('src/shared/retention.js');
-    const retentionManager = retentionModule.createRetentionManager({
+    retentionManager = retentionModule.createRetentionManager({
       getSession,
       dueUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/knowledge-state/due`,
       fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
-    try {
-      const result = await retentionManager.getDue();
-      if (result.ok) {
-        for (const c of result.candidates) {
-          if (c && typeof c.knowledgeUnitId === 'string' && c.knowledgeUnitId) {
-            dueKnowledgeUnits.set(c.knowledgeUnitId, { retentionStage: c.retentionStage, nextRetrievalAt: c.nextRetrievalAt });
-          }
-        }
-      }
-    } catch (e) {}
+    await refreshRetentionDue(); // the original, one-time fetch this block always made, unconditional as before
+    // Step 27: the periodic half. Not covered by installListeners()'s own
+    // AbortSignal (orchestrator.js's own idleTimer isn't either, for the
+    // identical reason stated there: "the content script lives as long as
+    // the page") -- stopRetentionRefresh is exposed below regardless, same
+    // "owned here, so the ability to stop it belongs here too, even though
+    // nothing calls it today" precedent orchestrator.js's own stop() sets.
+    retentionRefreshTimer = setInterval(() => {
+      if (!s().assistantEnabled) return; // mirrors checkRetentionCandidate's own first real check -- skip this tick's call, not the construction-time one above.
+      refreshRetentionDue();
+    }, RETENTION_DUE_REFRESH_MS);
+  }
+  function stopRetentionRefresh() {
+    if (retentionRefreshTimer) clearInterval(retentionRefreshTimer);
+    retentionRefreshTimer = null;
   }
 
   const {
@@ -1094,6 +1156,12 @@ export async function createHost(deps) {
         // happens to produce a different paragraphKey for the same
         // knowledgeUnitId (duplicate content at a different position).
         dueKnowledgeUnits.delete(identity.knowledgeUnitId);
+        // Step 27: also remembered past this single delete, since
+        // refreshRetentionDue() can otherwise resurrect this exact entry
+        // from a still-stale server response before this presentation's own
+        // outcome has had a chance to advance/regress it -- see that
+        // function's own comment above for the full race.
+        presentedRetentionUnits.add(identity.knowledgeUnitId);
       } else {
         // Step 12A: same "generated but not presented" diagnostic as
         // handleAsk — see that function's own comment for the exact
@@ -1228,6 +1296,12 @@ export async function createHost(deps) {
     // Item DC-2 follow-up — same top-level exposure, same "always safe to
     // call unconditionally" reason as submitKinematics just above.
     reportExplanationEvent,
+    // Step 27 — owned here (the timer is created here), so the ability to
+    // stop it belongs here too, the same "unreachable otherwise" reasoning
+    // orchestrator.js's own stop() already states for its idleTimer. Not
+    // called anywhere today — the content script lives as long as the
+    // page, same as that one.
+    stopRetentionRefresh,
     fetchSummary,
     fetchQuestions,
     fetchGrading,
