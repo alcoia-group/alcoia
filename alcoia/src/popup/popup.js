@@ -209,6 +209,23 @@ document.addEventListener('DOMContentLoaded', () => {
     banner.hidden = entitled;
   }
 
+  async function refreshPlanNotice() {
+    const notice = $('planNotice');
+    if (!notice) return;
+    // Display-only. Shown only while the server says this reader's seat has
+    // stopped giving Reader because the class plan expired, and not at all
+    // once they hold Reader some other way (their own subscription).
+    const [billing, entitled] = await Promise.all([
+      entitlements.getBillingNotice(),
+      entitlements.hasFeature('own_documents'),
+    ]);
+    notice.hidden = !(billing && !entitled);
+    // One banner, not two: the notice already points at the plans.
+    const upgrade = $('upgradeBanner');
+    if (upgrade && !notice.hidden) upgrade.hidden = true;
+  }
+
+  openPage('planNoticeBtn',    'src/popup/upgrade.html');
   openPage('assignmentsBtn',   'src/popup/assignments.html');
   openPage('notesBtn',         'src/popup/notes.html');
   openPage('sessionReportBtn', 'src/popup/session-report.html');
@@ -285,7 +302,7 @@ document.addEventListener('DOMContentLoaded', () => {
     readingMode.hidden = true;
     homeMode.hidden = false;
     refreshAccountStatus();
-    refreshUpgradeBanner();
+    refreshUpgradeBanner().then(refreshPlanNotice);
     quizGateTab = tab || null;
     refreshQuizGate();
   }

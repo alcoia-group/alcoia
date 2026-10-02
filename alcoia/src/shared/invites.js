@@ -6,7 +6,7 @@
  *
  * Every field name is copied from reading alcoiaServer directly, not
  * inferred:
- *   POST /api/invites/accept    { token } -> { classId, seatId, role }
+ *   POST /api/invites/accept    { token, acknowledged: true } -> { classId, seatId, role }
  *     (src/http/routes/invites.js)
  *   POST /api/seats/:id/release -> { released: true }
  *     (src/http/routes/seats.js)
@@ -100,7 +100,9 @@ export function createInvitesManager(opts = {}) {
       const resp = await fetchImpl(acceptUrl, {
         method: 'POST',
         headers: authHeaders(session.token),
-        body: JSON.stringify({ token }),
+        // The join screen shows the reporting notice before this is ever called
+        // (join-class.js), so the server may count the seat as taken up.
+        body: JSON.stringify({ token, acknowledged: true }),
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok) {

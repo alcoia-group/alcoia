@@ -115,6 +115,10 @@ export function createEntitlementsManager(opts = {}) {
         features: data.features,
         expires: typeof data.expires === 'string' ? data.expires : null,
         hasActiveSeat: data.hasActiveSeat === true,
+        // Only the one state a student is ever told about: their seat's class
+        // plan has expired. A grace period is the instructor's business and
+        // the server does not send it to students, so anything else is ignored.
+        ...(data.billing && data.billing.state === 'expired' ? { billing: { state: 'expired' } } : {}),
       };
     } catch (e) {
       return { ...FREE };
@@ -204,5 +208,13 @@ export function createEntitlementsManager(opts = {}) {
     return entitlements;
   }
 
-  return { hasFeature, getEntitlements, getEntitlementSource, refresh };
+  /* DISPLAY-ONLY, like hasActiveSeat: "your class plan expired" is shown so a
+   * reader knows why Reader went away. It never gates anything. Returns
+   * { state: 'expired' } or null. */
+  async function getBillingNotice() {
+    const { billing } = await getEntitlements();
+    return billing && billing.state === 'expired' ? { state: 'expired' } : null;
+  }
+
+  return { hasFeature, getEntitlements, getEntitlementSource, getBillingNotice, refresh };
 }
