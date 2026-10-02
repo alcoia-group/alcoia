@@ -1493,6 +1493,30 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     expect(outcomeBody.knowledge_unit_id).toBe(knowledgeUnitId);
   });
 
+  /* Step 29 (student intervention experience audit): before this item, a
+   * retention item rendered through the exact same questionCard.show() call
+   * an ordinary fresh retrieval question does, with the identical hardcoded
+   * "quick check" badge — the only thing distinguishing "you've already
+   * covered this" from a brand-new question was one small, caption-sized
+   * evidence line, easy to miss. checkRetentionCandidate now passes a
+   * distinguishing badge through to the real, rendered card. */
+  it('a retention item renders with a distinguishing badge, not the generic "quick check" every fresh question uses', async () => {
+    const text = 'A due paragraph, long enough to clear fetchQuestions\' own 120-character floor for this specific badge-distinction test here.';
+    const knowledgeUnitId = await realKnowledgeUnitId(text);
+    stubQuestions();
+    mockProxyFetch(proxyFetchImpl([], [{ knowledgeUnitId, retentionStage: 1, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+
+    host.onParagraphRead(text, 5000, 3);
+
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    expect(queryAlcoia('.sra-q-badge').textContent).toBe('from earlier');
+    expect(queryAlcoia('.sra-q-badge').textContent).not.toBe('quick check');
+  });
+
   it('a paragraph whose knowledge unit is NOT due produces no retention intervention', async () => {
     stubQuestions();
     const calls = [];
