@@ -108,7 +108,7 @@ describe('a join cannot complete without the disclosure screen having been rende
     vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION }));
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     const acceptFetch = vi.fn(async (url, init) => {
-      expect(JSON.parse(init.body)).toEqual({ token: 'some-invite-code' });
+      expect(JSON.parse(init.body)).toEqual({ token: 'some-invite-code', acknowledged: true });
       return { ok: true, json: async () => ({ classId: 'c1', seatId: 's1', role: 'student' }) };
     });
     vi.stubGlobal('fetch', routedFetch([[ACCEPT_URL, acceptFetch]]));
@@ -450,7 +450,7 @@ describe('the invite-link disclosure flow is unaffected by the LTI entry path (r
     vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION })); // no sra_pending_lti_launch at all
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     const acceptFetch = vi.fn(async (url, init) => {
-      expect(JSON.parse(init.body)).toEqual({ token: 'regression-code' });
+      expect(JSON.parse(init.body)).toEqual({ token: 'regression-code', acknowledged: true });
       return { ok: true, json: async () => ({ classId: 'c1', seatId: 's1', role: 'student' }) };
     });
     vi.stubGlobal('fetch', routedFetch([[ACCEPT_URL, acceptFetch], [ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
