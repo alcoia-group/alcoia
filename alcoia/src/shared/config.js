@@ -73,6 +73,7 @@
     // POST seats/:id/release -> { released: true }. SEATS_URL is a base —
     // invites.js appends "/:id/release" itself.
     INVITE_ACCEPT_URL: BACKEND_ORIGIN + '/api/invites/accept',
+    INVITE_PREVIEW_URL: BACKEND_ORIGIN + '/api/invites/preview',
     SEATS_URL: BACKEND_ORIGIN + '/api/seats',
     // LTI launch (item S6/E4 follow-up) — src/shared/invites.js's
     // acknowledgeLtiDisclosure(). Confirmed by reading alcoiaServer's
