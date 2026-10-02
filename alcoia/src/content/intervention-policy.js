@@ -121,10 +121,25 @@ export const STATE_ACTIONS = Object.freeze({
  *                      reachable today via a regression-sourced STRUGGLING
  *                      candidate; see §7/§10 of this item's own report for
  *                      why it was not generalised to every signal type.
- *                      Renders as: `action: 'ask'` (handleAsk, same question-
- *                      card flow 'retrieve' uses -- see this item's own
- *                      report for why a distinct generation/UI path is a
- *                      disclosed follow-up, not built here).
+ *                      Renders as: `action: 'ask'`, dispatched by host.js's
+ *                      onIntervention to handleExplainOrRepair (NOT
+ *                      handleAsk) -- CORRECTED by Step 29's own trace of the
+ *                      actual code rather than this comment: this paragraph
+ *                      originally said EXPLAIN rendered through handleAsk's
+ *                      own retrieval-question flow, with a distinct
+ *                      generation/UI path left as a "disclosed follow-up,
+ *                      not built here". That was accurate when this comment
+ *                      was written (Step 23) but is stale now -- Step 24,
+ *                      landing after it, DID build that distinct path
+ *                      (fetchSummary mode 'explain_more' + question-card.js's
+ *                      showExplanation(), see handleExplainOrRepair's own
+ *                      header) and host.js's onIntervention has routed
+ *                      policyAction 'explain' there, not to handleAsk, ever
+ *                      since. `action` stays 'ask' only because that is what
+ *                      tells onIntervention this decision renders through
+ *                      the question-card shell at all (POLICY_ACTIONS' own
+ *                      header above) -- it does not mean "the same card
+ *                      'retrieve' shows", which this paragraph used to imply.
  *
  *   retrieve          The primary intervention -- a retrieval question about
  *                      the passage. Semantically identical to the pre-
