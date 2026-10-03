@@ -1,5 +1,5 @@
 /* reader-context.js — is this page the alcoia web reader, and which
- * assignment is it showing? (assignments.alcoia.app, repo alcoiaAssignments)
+ * assignment is it showing? (reader.alcoia.app, repo alcoiaAssignments)
  *
  * The web reader is an ordinary web page to the extension, so the content
  * script reads it like any article. The one thing the page cannot say is

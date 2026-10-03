@@ -244,7 +244,7 @@ async function boot() {
   // extension page alike. See CLAUDE.md's "Extracting the host from
   // content.js (item 30a)" section for the full inventory and reasoning.
   const hostModule = await loadModule('src/content/host.js');
-  // The alcoia web reader (assignments.alcoia.app/a/<id>) is read like any
+  // The alcoia web reader (reader.alcoia.app/a/<id>) is read like any
   // article, but its URL says which assignment it is, so outcomes can be
   // reported against it (host.js stays inert without an assignmentId).
   const readerContextModule = await loadModule('src/shared/reader-context.js');
