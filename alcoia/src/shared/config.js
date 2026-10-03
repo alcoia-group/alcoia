@@ -73,6 +73,7 @@
     // POST seats/:id/release -> { released: true }. SEATS_URL is a base —
     // invites.js appends "/:id/release" itself.
     INVITE_ACCEPT_URL: BACKEND_ORIGIN + '/api/invites/accept',
+    INVITE_PREVIEW_URL: BACKEND_ORIGIN + '/api/invites/preview',
     SEATS_URL: BACKEND_ORIGIN + '/api/seats',
     // LTI launch (item S6/E4 follow-up) — src/shared/invites.js's
     // acknowledgeLtiDisclosure(). Confirmed by reading alcoiaServer's
@@ -106,13 +107,13 @@
     // "/:id/outcomes" itself.
     ASSIGNMENTS_MINE_URL: BACKEND_ORIGIN + '/api/assignments/mine',
     ASSIGNMENTS_URL: BACKEND_ORIGIN + '/api/assignments',
-    // The web reader (assignments.alcoia.app, repo alcoiaAssignments). The
+    // The workspace app (workspace.alcoia.app, repo alcoiaAssignments). The
     // popup asks the server for a one-time handoff code
     // (POST ASSIGNMENTS_URL/:id/reader-handoff -> { code, expiresAt }) and
     // opens READER_ORIGIN/a/<id>#c=<code>. The code travels in the URL
     // FRAGMENT so it never reaches a server log or a Referer header. The
     // content script also uses this origin to recognise a reader page.
-    READER_ORIGIN: 'https://assignments.alcoia.app',
+    READER_ORIGIN: 'https://workspace.alcoia.app',
     DOCUMENTS_URL: BACKEND_ORIGIN + '/api/documents',
     // Item DC-1a — src/shared/kinematics.js and host.js's submitKinematics.
     // Confirmed by reading alcoiaServer's src/http/routes/scroll-sessions.js

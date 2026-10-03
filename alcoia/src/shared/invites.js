@@ -6,7 +6,7 @@
  *
  * Every field name is copied from reading alcoiaServer directly, not
  * inferred:
- *   POST /api/invites/accept    { token } -> { classId, seatId, role }
+ *   POST /api/invites/accept    { token, acknowledged: true } -> { classId, seatId, role }
  *     (src/http/routes/invites.js)
  *   POST /api/seats/:id/release -> { released: true }
  *     (src/http/routes/seats.js)
@@ -54,6 +54,7 @@ export function createInvitesManager(opts = {}) {
   const fetchImpl = opts.fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
   const getSession = opts.getSession;
   const acceptUrl = opts.acceptUrl;
+  const previewUrl = opts.previewUrl;
   const seatsUrl = opts.seatsUrl;
   const ltiAckUrl = opts.ltiAckUrl;
 
@@ -80,6 +81,35 @@ export function createInvitesManager(opts = {}) {
     }
   }
 
+  /* POST /api/invites/preview { token } -> { className, reportingMode, domain }.
+   * Public, no session. The join screen needs the class's reporting mode
+   * BEFORE it shows the notice, so the student is told the truth for this
+   * class (anonymous vs identified) rather than a fixed wording. Returns
+   * { ok: true, className, reportingMode } or { ok: false, error }. An
+   * unknown reportingMode is a failure: never guess which promise applies. */
+  async function previewInvite(rawLinkOrCode) {
+    const token = extractToken(rawLinkOrCode);
+    if (!token) return { ok: false, error: 'no_token' };
+    if (!previewUrl || !fetchImpl) return { ok: false, error: 'no_preview_url' };
+    try {
+      const resp = await fetchImpl(previewUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        return { ok: false, error: (data && typeof data.error === 'string' && data.error) || `status_${resp.status}` };
+      }
+      if (!data || (data.reportingMode !== 'anonymous' && data.reportingMode !== 'identified')) {
+        return { ok: false, error: 'malformed_response' };
+      }
+      return { ok: true, className: typeof data.className === 'string' ? data.className : '', reportingMode: data.reportingMode };
+    } catch (e) {
+      return { ok: false, error: 'network_error' };
+    }
+  }
+
   /* Returns { ok: true, classId, seatId, role } or { ok: false, error }.
    * `error` is the server's own code when one came back (invalid_invite,
    * invite_revoked, invite_expired, domain_mismatch, already_a_member,
@@ -100,7 +130,9 @@ export function createInvitesManager(opts = {}) {
       const resp = await fetchImpl(acceptUrl, {
         method: 'POST',
         headers: authHeaders(session.token),
-        body: JSON.stringify({ token }),
+        // The join screen shows the reporting notice before this is ever called
+        // (join-class.js), so the server may count the seat as taken up.
+        body: JSON.stringify({ token, acknowledged: true }),
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok) {
@@ -186,5 +218,5 @@ export function createInvitesManager(opts = {}) {
     }
   }
 
-  return { acceptInvite, releaseSeat, acknowledgeLtiDisclosure };
+  return { acceptInvite, previewInvite, releaseSeat, acknowledgeLtiDisclosure };
 }
