@@ -1,6 +1,6 @@
-/* reader-blocks.js — paragraph source for the alcoia web reader's PDFs.
+/* reader-blocks.js — paragraph source for the alcoia workspace's PDFs.
  *
- * On the web reader (reader.alcoia.app) Word and PowerPoint documents
+ * On the workspace app (workspace.alcoia.app) Word and PowerPoint documents
  * are real <p>/<li> markup, so the content script's ordinary DOM scan reads
  * them unchanged. A PDF is different: pdf.js draws the page to a canvas and
  * lays a transparent .textLayer of <span>s over it, one span per text run, so
