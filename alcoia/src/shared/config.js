@@ -107,13 +107,13 @@
     // "/:id/outcomes" itself.
     ASSIGNMENTS_MINE_URL: BACKEND_ORIGIN + '/api/assignments/mine',
     ASSIGNMENTS_URL: BACKEND_ORIGIN + '/api/assignments',
-    // The web reader (reader.alcoia.app, repo alcoiaAssignments). The
+    // The workspace app (workspace.alcoia.app, repo alcoiaAssignments). The
     // popup asks the server for a one-time handoff code
     // (POST ASSIGNMENTS_URL/:id/reader-handoff -> { code, expiresAt }) and
     // opens READER_ORIGIN/a/<id>#c=<code>. The code travels in the URL
     // FRAGMENT so it never reaches a server log or a Referer header. The
     // content script also uses this origin to recognise a reader page.
-    READER_ORIGIN: 'https://reader.alcoia.app',
+    READER_ORIGIN: 'https://workspace.alcoia.app',
     DOCUMENTS_URL: BACKEND_ORIGIN + '/api/documents',
     // Item DC-1a — src/shared/kinematics.js and host.js's submitKinematics.
     // Confirmed by reading alcoiaServer's src/http/routes/scroll-sessions.js

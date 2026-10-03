@@ -108,7 +108,7 @@ export function createAssignmentsManager(opts = {}) {
   }
 
   /* Returns { ok: true, code } or { ok: false, error }. Asks the server for a
-   * single-use, ~60 s code the web reader trades for its own session, so the
+   * single-use, ~60 s code the workspace trades for its own session, so the
    * student lands on the assignment with no sign-in step. The code is never
    * stored or logged here; the caller puts it in a URL fragment. A 404 means
    * the server has no such assignment for this student (or is not deployed
