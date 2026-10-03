@@ -8,8 +8,8 @@
  * 31 proved this before this item touched it) and reading-bridge.js's own
  * header for how assignmentId reaches host.js's outcome reporting.
  *
- * Opening: PDF, PowerPoint and Word documents open in the alcoia web reader
- * (reader.alcoia.app). The popup asks the server for a one-time handoff
+ * Opening: PDF, PowerPoint and Word documents open in the alcoia workspace
+ * (workspace.alcoia.app). The popup asks the server for a one-time handoff
  * code and opens <reader>/a/<id>#c=<code>, which signs the student in with no
  * sign-in step. If the handoff fails (server not reachable, reader not
  * deployed yet) a PDF falls back to the extension's own viewer below, which
@@ -64,7 +64,7 @@ function formatClosesAt(iso) {
   }
 }
 
-// Formats the web reader can show. Status is deliberately not checked: a row
+// Formats the workspace can show. Status is deliberately not checked: a row
 // uploaded before its format could be read keeps a stale 'unsupported' until
 // the server re-reads it, and the reader (which converts on open) is what
 // corrects that. A file that really cannot be read shows a download there.
@@ -82,7 +82,7 @@ async function openInReader(a, doc) {
     chrome.tabs.create({ url });
     return;
   }
-  // Fall back to what worked before the web reader existed.
+  // Fall back to what worked before the workspace existed.
   if (doc.format === 'pdf') {
     await openPdf(a.assignmentId, doc.documentId, a.className || 'Assignment');
     return;

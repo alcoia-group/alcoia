@@ -17,7 +17,7 @@ const ASSIGNMENTS_HTML_PATH = path.resolve(
 const MINE_URL = 'https://api.alcoia.invalid/api/assignments/mine';
 const DOCUMENTS_URL = 'https://api.alcoia.invalid/api/documents';
 const ASSIGNMENTS_URL = 'https://api.alcoia.invalid/api/assignments';
-const READER_ORIGIN = 'https://reader.alcoia.invalid';
+const READER_ORIGIN = 'https://workspace.alcoia.invalid';
 
 function loadAssignmentsBody() {
   const html = fs.readFileSync(ASSIGNMENTS_HTML_PATH, 'utf8');
@@ -231,7 +231,7 @@ describe('opening in the web reader', () => {
     await vi.waitFor(() => expect(document.querySelector('.assign-row')).toBeTruthy());
     [...document.querySelectorAll('button')].find((b) => b.textContent === 'Open').click();
     await vi.waitFor(() => expect(chrome._tabsCreated.length).toBe(1));
-    expect(chrome._tabsCreated[0].url).toMatch(/^https:\/\/reader\.alcoia\.invalid\/a\/a1#c=/);
+    expect(chrome._tabsCreated[0].url).toMatch(/^https:\/\/workspace\.alcoia\.invalid\/a\/a1#c=/);
   });
 
   it('a pdf falls back to the extension viewer when the reader handoff is not available', async () => {
