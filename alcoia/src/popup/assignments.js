@@ -9,7 +9,7 @@
  * header for how assignmentId reaches host.js's outcome reporting.
  *
  * Opening: PDF, PowerPoint and Word documents open in the alcoia web reader
- * (assignments.alcoia.app). The popup asks the server for a one-time handoff
+ * (reader.alcoia.app). The popup asks the server for a one-time handoff
  * code and opens <reader>/a/<id>#c=<code>, which signs the student in with no
  * sign-in step. If the handoff fails (server not reachable, reader not
  * deployed yet) a PDF falls back to the extension's own viewer below, which
