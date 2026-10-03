@@ -313,3 +313,29 @@ describe('refresh — reflected without a full extension reload', () => {
     expect(seenInit).toEqual({ method: 'GET', headers: { Authorization: 'Bearer tok-xyz' } });
   });
 });
+
+describe('getBillingNotice (a student is told only when their class plan has expired)', () => {
+  const make = (body) => createEntitlementsManager({
+    storage: fakeStorage(),
+    fetchImpl: vi.fn(async () => ({ ok: true, json: async () => body })),
+    entitlementsUrl: ENTITLEMENTS_URL,
+    getSession: sessionOf('tok-1'),
+  });
+
+  it('returns the expired notice for a free reader whose seat stopped counting', async () => {
+    const m = make({ tier: 'free', features: [], expires: null, hasActiveSeat: false, billing: { state: 'expired' } });
+    expect(await m.getBillingNotice()).toEqual({ state: 'expired' });
+    expect(await m.hasFeature('own_documents')).toBe(false);
+  });
+
+  it('never surfaces a grace state, or anything else, to a student', async () => {
+    expect(await make({ tier: 'reader', features: READER_FEATURES, expires: null, hasActiveSeat: true, billing: { state: 'grace', graceEndsAt: '2026-10-20T00:00:00Z' } }).getBillingNotice()).toBeNull();
+    expect(await make({ tier: 'reader', features: READER_FEATURES, expires: null, hasActiveSeat: true }).getBillingNotice()).toBeNull();
+    expect(await make({ tier: 'free', features: [], billing: { state: 'weird' } }).getBillingNotice()).toBeNull();
+  });
+
+  it('fails closed to no notice when the request fails', async () => {
+    const m = createEntitlementsManager({ storage: fakeStorage(), fetchImpl: vi.fn(async () => { throw new Error('x'); }), entitlementsUrl: ENTITLEMENTS_URL, getSession: sessionOf('tok-1') });
+    expect(await m.getBillingNotice()).toBeNull();
+  });
+});

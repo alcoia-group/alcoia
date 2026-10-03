@@ -1,7 +1,7 @@
-/* reader-context.js — is this page the alcoia web reader, and which
- * assignment is it showing? (assignments.alcoia.app, repo alcoiaAssignments)
+/* reader-context.js — is this page the alcoia workspace, and which
+ * assignment is it showing? (workspace.alcoia.app, repo alcoiaAssignments)
  *
- * The web reader is an ordinary web page to the extension, so the content
+ * The workspace is an ordinary web page to the extension, so the content
  * script reads it like any article. The one thing the page cannot say is
  * "this reading belongs to assignment X" for outcome reporting, so the URL
  * does: /a/<assignmentId>. Anything else (the sign-in page, the assignment
