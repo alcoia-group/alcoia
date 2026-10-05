@@ -72,6 +72,13 @@
     // POST invites/accept with { token } -> { classId, seatId, role };
     // POST seats/:id/release -> { released: true }. SEATS_URL is a base —
     // invites.js appends "/:id/release" itself.
+    // Account-based learning (private learner memory): GET the state, POST
+    // {base}/enable ({ confirm: true, scopeVersion } where scopeVersion is
+    // echoed from the server's own GET answer) and {base}/disable, GET
+    // {base}/export, DELETE the base to delete the stored memory. The server
+    // is the only authority on consent; src/shared/learning-memory.js keeps
+    // no consent state of its own.
+    LEARNING_MEMORY_URL: BACKEND_ORIGIN + '/api/account/learning-memory',
     INVITE_ACCEPT_URL: BACKEND_ORIGIN + '/api/invites/accept',
     INVITE_PREVIEW_URL: BACKEND_ORIGIN + '/api/invites/preview',
     SEATS_URL: BACKEND_ORIGIN + '/api/seats',
