@@ -15,11 +15,11 @@ const card = html.match(/<div class="settings-card" id="learningMemory"[\s\S]*?\
 const SCOPE = 4;
 
 // A stand-in for the server: the only holder of consent state.
-function fakeServer({ status = 'never_enabled', memoryRows = 2, failNext = null } = {}) {
+function fakeServer({ status = 'disabled', memoryRows = 2, failNext = null } = {}) {
   const s = { status, memoryRows, calls: [], scope: SCOPE, failNext };
   const view = () => ({
     status: s.status, active: s.status === 'enabled', currentScopeVersion: s.scope,
-    acceptedScopeVersion: s.status === 'never_enabled' ? null : s.scope, grantedAt: null, disabledAt: null, updatedAt: null,
+    acceptedScopeVersion: s.scope, grantedAt: null, disabledAt: null, updatedAt: null,
   });
   s.fetchImpl = async (url, init) => {
     const route = `${init.method} ${url.replace('https://server.test/api/account/learning-memory', '') || '/'}`;
@@ -34,7 +34,7 @@ function fakeServer({ status = 'never_enabled', memoryRows = 2, failNext = null 
       s.status = 'enabled';
       return reply(200, view());
     }
-    if (route === 'POST /disable') { if (s.status !== 'never_enabled') s.status = 'disabled'; return reply(200, view()); }
+    if (route === 'POST /disable') { s.status = 'disabled'; return reply(200, view()); }
     if (route === 'DELETE /') { const n = s.memoryRows; s.memoryRows = 0; return reply(200, { reset: true, deleted: { knowledge_state: n } }); }
     if (route === 'GET /export') return reply(200, JSON.stringify({ knowledgeState: new Array(s.memoryRows).fill({}) }));
     return reply(404, { error: 'not_found' });
@@ -62,22 +62,14 @@ async function setup(opts = {}, session = { token: 't', email: 'a@example.com' }
 describe('Account-based learning card', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
 
-  it('explains the choice up front: optional, purpose, not surveillance, who can see it', () => {
+  it('explains the setting up front: on by default, purpose, not surveillance, who can see it', () => {
     const text = card.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-    expect(text).toMatch(/This is optional\. Alcoia works without it/);
+    expect(text).toMatch(/It is on by default for your account/);
     expect(text).toMatch(/not used by Alcoia for advertising, sold to third parties, or used to build profiles about you for unrelated purposes/);
     expect(text).toMatch(/learning state, not a surveillance history of your reading/);
     expect(text).toMatch(/instructors cannot see it as your private learning memory/);
     expect(text).toMatch(/some class features may use aggregated learning information/);
     expect(text).not.toMatch(/Cross-document|analytics|Exam Mode|upgrade|premium|unlock/i);
-  });
-
-  it('shows Off for never enabled, with no implication memory exists', async () => {
-    const { q } = await setup({ status: 'never_enabled' });
-    expect(q('state-label').textContent).toBe('Off');
-    expect(q('state-detail').textContent).toMatch(/not remembering anything/);
-    expect(q('toggle').getAttribute('aria-checked')).toBe('false');
-    expect(q('toggle').getAttribute('role')).toBe('switch');
   });
 
   it('shows On when current, with the switch exposed to assistive technology', async () => {
@@ -95,26 +87,19 @@ describe('Account-based learning card', () => {
     expect(q('delete-open').disabled).toBe(false);
   });
 
-  it('reconsent required: inactive, says the scope changed, and does not reactivate on its own', async () => {
-    const { q, server } = await setup({ status: 'reconsent_required' });
-    expect(q('state-detail').textContent).toMatch(/Inactive.*changed.*Turn it on again/);
-    expect(q('toggle').getAttribute('aria-checked')).toBe('false');
-    expect(server.calls.map((c) => c.route)).toEqual(['GET /']);
-  });
-
   it('turning on needs an explicit confirmation: clicking the switch alone enables nothing', async () => {
-    const { q, click, server } = await setup({ status: 'never_enabled' });
+    const { q, click, server } = await setup({ status: 'disabled' });
     await click('toggle');
     expect(q('enable-panel').hidden).toBe(false);
     expect(server.calls.map((c) => c.route)).toEqual(['GET /']);
     await click('enable-cancel');
     expect(q('enable-panel').hidden).toBe(true);
-    expect(server.status).toBe('never_enabled');
+    expect(server.status).toBe('disabled');
     expect(server.calls.map((c) => c.route)).toEqual(['GET /']);
   });
 
   it('confirming enables with confirm:true and the scope version the server reported', async () => {
-    const { q, click, server } = await setup({ status: 'never_enabled' });
+    const { q, click, server } = await setup({ status: 'disabled' });
     await click('toggle');
     await click('enable-confirm');
     const call = server.calls.find((c) => c.route === 'POST /enable');
@@ -179,11 +164,11 @@ describe('Account-based learning card', () => {
   });
 
   it('a failed enable leaves the UI on the server-confirmed Off state and says so', async () => {
-    const { q, click, server } = await setup({ status: 'never_enabled', failNext: 'POST /enable' });
+    const { q, click, server } = await setup({ status: 'disabled', failNext: 'POST /enable' });
     await click('toggle');
     await click('enable-confirm');
     expect(q('state-label').textContent).toBe('Off');
-    expect(server.status).toBe('never_enabled');
+    expect(server.status).toBe('disabled');
     expect(q('message').textContent).toMatch(/Nothing was changed/);
     expect(q('message').getAttribute('role')).toBe('alert');
   });
@@ -201,15 +186,6 @@ describe('Account-based learning card', () => {
     await click('delete-confirm');
     expect(server.memoryRows).toBe(2);
     expect(q('message').textContent).toMatch(/Nothing was changed/);
-  });
-
-  it('a scope-version mismatch refreshes the description and does not enable', async () => {
-    const { q, click, server } = await setup({ status: 'never_enabled' });
-    server.scope = SCOPE + 1; // the server's scope moved after the page loaded
-    await click('toggle');
-    await click('enable-confirm');
-    expect(server.status).toBe('never_enabled');
-    expect(q('message').textContent).toMatch(/description changed/);
   });
 
   it('destructive and ordinary actions are distinct, labelled buttons reachable by keyboard', async () => {
