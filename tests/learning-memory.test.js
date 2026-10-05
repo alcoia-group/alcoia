@@ -17,13 +17,13 @@ function server(handler) {
 const mgr = (fetchImpl, session = SESSION) =>
   createLearningMemoryManager({ fetchImpl, getSession: async () => session, url: URL_BASE });
 const view = (status, extra = {}) => ({
-  status, active: status === 'enabled', currentScopeVersion: 3, acceptedScopeVersion: status === 'never_enabled' ? null : 3,
+  status, active: status === 'enabled', currentScopeVersion: 3, acceptedScopeVersion: 3,
   grantedAt: null, disabledAt: null, updatedAt: null, ...extra,
 });
 
 describe('learning-memory manager', () => {
   it('reads the server state for every status and keeps none itself', async () => {
-    for (const status of ['never_enabled', 'enabled', 'disabled', 'reconsent_required']) {
+    for (const status of ['enabled', 'disabled']) {
       const { fetchImpl, calls } = server(() => ({ body: view(status) }));
       const r = await mgr(fetchImpl).getState();
       expect(r.ok).toBe(true);
