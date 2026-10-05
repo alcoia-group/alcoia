@@ -10,21 +10,13 @@
  * the rest of the settings page's chrome.* wiring.
  */
 const STATE_TEXT = {
-  never_enabled: {
-    label: 'Off',
-    detail: 'Not turned on. Alcoia is not remembering anything in your account.',
-  },
   enabled: {
     label: 'On',
-    detail: 'On. Alcoia remembers your learning state in your account, for you.',
+    detail: 'On. Alcoia remembers your learning state in your account, for you. This is the default.',
   },
   disabled: {
     label: 'Off',
     detail: 'Off. Alcoia is not using or adding to your learning memory. Anything stored earlier is kept until you delete it.',
-  },
-  reconsent_required: {
-    label: 'Off',
-    detail: 'Inactive. What account-based learning remembers has changed, so your earlier choice no longer applies. Turn it on again to accept the new description.',
   },
 };
 
