@@ -19,7 +19,7 @@
  * Export and reset deliberately work whatever the consent state: consent
  * governs use of the memory, not the learner's right over what is stored.
  */
-export const STATUSES = Object.freeze(['never_enabled', 'enabled', 'disabled', 'reconsent_required']);
+export const STATUSES = Object.freeze(['enabled', 'disabled']);
 
 export function createLearningMemoryManager(opts = {}) {
   const fetchImpl = opts.fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
