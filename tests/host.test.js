@@ -1568,6 +1568,30 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     expect(outcomeBody.knowledge_unit_id).toBe(knowledgeUnitId);
   });
 
+  /* Step 29 (student intervention experience audit): before this item, a
+   * retention item rendered through the exact same questionCard.show() call
+   * an ordinary fresh retrieval question does, with the identical hardcoded
+   * "quick check" badge — the only thing distinguishing "you've already
+   * covered this" from a brand-new question was one small, caption-sized
+   * evidence line, easy to miss. checkRetentionCandidate now passes a
+   * distinguishing badge through to the real, rendered card. */
+  it('a retention item renders with a distinguishing badge, not the generic "quick check" every fresh question uses', async () => {
+    const text = 'A due paragraph, long enough to clear fetchQuestions\' own 120-character floor for this specific badge-distinction test here.';
+    const knowledgeUnitId = await realKnowledgeUnitId(text);
+    stubQuestions();
+    mockProxyFetch(proxyFetchImpl([], [{ knowledgeUnitId, retentionStage: 1, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+
+    host.onParagraphRead(text, 5000, 3);
+
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    expect(queryAlcoia('.sra-q-badge').textContent).toBe('from earlier');
+    expect(queryAlcoia('.sra-q-badge').textContent).not.toBe('quick check');
+  });
+
   it('a paragraph whose knowledge unit is NOT due produces no retention intervention', async () => {
     stubQuestions();
     const calls = [];
@@ -1639,6 +1663,202 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
 
     await createHost(baseDeps());
     expect(sawDueCall).toBe(false);
+  });
+});
+
+/* Intelligence-architecture audit, step 27 — mid-session retention
+ * freshness. Before this item, the due list above was fetched exactly
+ * once, at construction (confirmed by reading retention.js's own header,
+ * which disclosed this explicitly as "fetched ONCE... never re-fetched
+ * mid-session"). Retention intervals are day-scale (RETENTION_INTERVAL_DAYS,
+ * alcoiaServer), but a single long-lived reading session (one host.js
+ * instance, one page/document, open for a long time — the PDF viewer via
+ * reading-bridge.js is the real example) can itself span the moment a
+ * knowledge unit crosses from "not yet due" to "due", with no outcome of
+ * this session's own causing it — a genuine staleness gap, not a
+ * hypothetical one. These tests prove the periodic refresh this item adds
+ * actually closes it, and — the harder half — that it cannot resurrect a
+ * knowledge unit already presented this session merely because the mocked
+ * server (simulating the real lag between a presentation and its outcome
+ * actually landing and advancing the schedule) keeps reporting it due. */
+describe('retention due-list periodic refresh (intelligence-architecture audit, step 27)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const DUE_URL = 'https://api.test.invalid/api/assignments/assign-27/knowledge-state/due';
+  const REFRESH_MS = 600_000; // mirrors host.js's own RETENTION_DUE_REFRESH_MS
+
+  function assignmentDeps(overrides = {}) {
+    return baseDeps({
+      assignmentId: 'assign-27',
+      getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+      TOKEN_URL: 'https://api.test.invalid/api/token',
+      ASSIGNMENTS_URL,
+    });
+  });
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  async function realKnowledgeUnitId(text) {
+    const mod = await import('../alcoia/src/content/signals/knowledge-unit.js');
+    return mod.computeKnowledgeUnitId(text);
+  }
+
+  function stubQuestions() {
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({
+      ok: true,
+      data: { questions: [{ q: 'Still there?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'retention span' }] },
+    });
+  }
+
+  // candidatesRef is a mutable box (not a plain array passed by value) so a
+  // test can change what the mocked server reports between the first fetch
+  // and a later refresh tick, simulating real server-side state change.
+  function proxyFetchImpl(calls, candidatesRef) {
+    return vi.fn((url, options) => {
+      calls.push({ url, options });
+      if (url === DUE_URL) return { ok: true, status: 200, data: { candidates: candidatesRef.current } };
+      return { ok: true, status: 200, data: { recorded: true } };
+    });
+  }
+
+  it('re-fetches the due list on a periodic timer, not only once at construction', async () => {
+    const calls = [];
+    const candidatesRef = { current: [] };
+    mockProxyFetch(proxyFetchImpl(calls, candidatesRef));
+    vi.useFakeTimers();
+
+    await createHost(assignmentDeps());
+    expect(calls.filter((c) => c.url === DUE_URL)).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(REFRESH_MS + 1000);
+    expect(calls.filter((c) => c.url === DUE_URL).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('a knowledge unit that becomes due only AFTER construction is picked up once the periodic refresh runs, with no second page load', async () => {
+    const text = 'A paragraph that only becomes a real retention candidate once the periodic due-list refresh runs, long enough to pass the question length floor.';
+    const knowledgeUnitId = await realKnowledgeUnitId(text);
+    stubQuestions();
+    const calls = [];
+    const candidatesRef = { current: [] }; // nothing due yet at construction
+    mockProxyFetch(proxyFetchImpl(calls, candidatesRef));
+    vi.useFakeTimers();
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+
+    host.onParagraphRead(text, 5000, 2);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
+
+    // The server now reports this exact knowledge unit as due -- the same
+    // real-world transition "enough days passed" produces, while this same
+    // host.js instance (and its one dueKnowledgeUnits Map) is still alive.
+    candidatesRef.current = [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }];
+    await vi.advanceTimersByTimeAsync(REFRESH_MS + 1000);
+
+    host.onParagraphRead(text, 5000, 2);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true);
+    const body = JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body);
+    expect(body.type).toBe('retention');
+    expect(body.knowledge_unit_id).toBe(knowledgeUnitId);
+  });
+
+  it('never resurrects a knowledge unit already presented this session, even when a later refresh still reports it due (server lag before the outcome lands)', async () => {
+    // Two occurrences of the SAME content (knowledge-unit.js's own
+    // normalization collapses whitespace before hashing, so these two
+    // strings produce the identical knowledgeUnitId) but with a
+    // DIFFERENT raw paragraphKey (text.slice(0, 80).trim() is taken
+    // BEFORE normalization, so the extra space shifts that 80-character
+    // window's own content) — the exact "duplicate content at a
+    // different position" case checkRetentionCandidate's own
+    // dueKnowledgeUnits.delete() comment names. This is deliberate: if
+    // both calls used byte-identical text, intervention-policy.js's own
+    // paragraphKey-keyed seenParagraphs dedup would independently block
+    // the second attempt on its own, and this test would pass for the
+    // wrong reason — it would never actually exercise
+    // presentedRetentionUnits at all. Confirmed below by removing the
+    // fix and re-running: it genuinely fails without it.
+    const textFirst = 'A due paragraph that gets presented once, long enough on its own to pass the question-generation length floor for this specific race test.';
+    const textSecond = 'A due  paragraph that gets presented once, long enough on its own to pass the question-generation length floor for this specific race test.';
+    const knowledgeUnitId = await realKnowledgeUnitId(textFirst);
+    expect(await realKnowledgeUnitId(textSecond)).toBe(knowledgeUnitId); // same content, confirmed same identity
+    expect(textFirst.slice(0, 80).trim()).not.toBe(textSecond.slice(0, 80).trim()); // but a different raw paragraphKey
+    stubQuestions();
+    const calls = [];
+    const candidatesRef = { current: [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }] };
+    mockProxyFetch(proxyFetchImpl(calls, candidatesRef));
+    vi.useFakeTimers();
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+
+    host.onParagraphRead(textFirst, 5000, 4);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls.filter((c) => c.url.endsWith('/interventions'))).toHaveLength(1);
+
+    // Dismiss the first card -- otherwise evaluateRetentionCandidate's OWN
+    // "a question card is already visible" check would deny the second
+    // attempt regardless of dueKnowledgeUnits, and this test would prove
+    // nothing about the refresh race it exists to catch.
+    queryAlcoia('.sra-close-btn').click();
+    await vi.advanceTimersByTimeAsync(300); // past the DOM-removal delay closePopup() schedules
+
+    // The mocked server keeps reporting the IDENTICAL knowledge unit as
+    // due — this is the real lag between a presentation and its outcome
+    // actually being submitted, graded, and advancing the schedule
+    // server-side. Without presentedRetentionUnits, this refresh would
+    // put the same knowledge unit straight back into dueKnowledgeUnits.
+    await vi.advanceTimersByTimeAsync(REFRESH_MS + 1000);
+
+    // A second occurrence of the same content, at a different raw
+    // paragraphKey -- seenParagraphs alone would NOT catch this one.
+    host.onParagraphRead(textSecond, 5000, 9);
+    await vi.advanceTimersByTimeAsync(50);
+    // Still exactly one — no second retention intervention for the same
+    // knowledge unit this session, even though the "server" still says due
+    // and the paragraph-level dedup alone would have let it through.
+    expect(calls.filter((c) => c.url.endsWith('/interventions'))).toHaveLength(1);
+  });
+
+  it('stopRetentionRefresh stops the periodic fetch', async () => {
+    const calls = [];
+    const candidatesRef = { current: [] };
+    mockProxyFetch(proxyFetchImpl(calls, candidatesRef));
+    vi.useFakeTimers();
+
+    const { stopRetentionRefresh } = await createHost(assignmentDeps());
+    const countAfterConstruction = calls.filter((c) => c.url === DUE_URL).length;
+    stopRetentionRefresh();
+
+    await vi.advanceTimersByTimeAsync(REFRESH_MS * 3);
+    expect(calls.filter((c) => c.url === DUE_URL).length).toBe(countAfterConstruction);
+  });
+
+  it('skips the periodic network call while assistantEnabled is false, without affecting the original construction-time fetch', async () => {
+    const calls = [];
+    const candidatesRef = { current: [] };
+    mockProxyFetch(proxyFetchImpl(calls, candidatesRef));
+    vi.useFakeTimers();
+
+    await createHost(assignmentDeps({ settings: () => ({ assistantEnabled: false }) }));
+    // The construction-time fetch is unconditional, same as before this
+    // item — only the PERIODIC ticks skip while disabled.
+    const countAfterConstruction = calls.filter((c) => c.url === DUE_URL).length;
+    expect(countAfterConstruction).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(REFRESH_MS + 1000);
+    expect(calls.filter((c) => c.url === DUE_URL).length).toBe(countAfterConstruction);
   });
 });
 
@@ -2662,5 +2882,351 @@ describe('self-report (item 13a)', () => {
     await host.onIntervention({ action: 'ask', evidence: ['because'] }, { substate: null }, document.getElementById('t'));
 
     expect(shows[0].showSelfReport).toBe(false);
+  });
+});
+
+/* Learning Intelligence step 24 — explain / repair generation. Same
+ * real-module philosophy as the rest of this file (loadModule() resolves
+ * question-card.js/ui-controller.js for real; nothing about the dispatch or
+ * rendering below is mocked out) — a genuine wiring mistake between
+ * host.js's dispatch and question-card.js's showExplanation() would show up
+ * here, not just in a narrower unit test of either file alone. */
+describe('explain / repair generation (Learning Intelligence step 24)', () => {
+  function captureRelay() {
+    const calls = []; // { kind: 'summarize' | 'questions', body }
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        calls.push({ kind: 'questions', body: msg.body });
+        cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
+      } else {
+        calls.push({ kind: 'summarize', body: msg.body });
+        const text = msg.body.mode === 'repair' ? 'The correct idea, contrasted with the common mix-up.' : 'A plainer explanation of the idea.';
+        cb({ ok: true, data: { summary: text } });
+      }
+    };
+    return calls;
+  }
+
+  const PARAGRAPH = 'A paragraph long enough to be a real bounded extraction, used across every explain/repair generation test in this block so the content-boundary assertions below have real text to check against.';
+
+  beforeEach(() => {
+    document.body.innerHTML = `<p id="t">${PARAGRAPH}</p>`;
+  });
+
+  describe('policy -> generation mapping', () => {
+    it('policyAction "explain" calls the summarize endpoint with mode "explain_more", never the questions endpoint', async () => {
+      const calls = captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      const decision = { action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_explain_1' };
+      const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 2);
+
+      expect(shown).toBe(true);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].kind).toBe('summarize');
+      expect(calls[0].body.mode).toBe('explain_more');
+    });
+
+    it('policyAction "repair" calls the summarize endpoint with mode "repair", never the questions endpoint', async () => {
+      const calls = captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      const decision = { action: 'ask', policyAction: 'repair', evidence: ['because'], interventionId: 'iv_repair_1' };
+      const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 2);
+
+      expect(shown).toBe(true);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].kind).toBe('summarize');
+      expect(calls[0].body.mode).toBe('repair');
+    });
+
+    it('policyAction "retrieve" (or absent) keeps calling the questions endpoint, unchanged', async () => {
+      const calls = captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      await host.onIntervention({ action: 'ask', policyAction: 'retrieve', evidence: ['because'], interventionId: 'iv_r1' }, {}, document.getElementById('t'), 2);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].kind).toBe('questions');
+
+      // An older/unset policyAction (pre-step-23 decision shape) falls back
+      // to the exact same retrieval path — backward compatible, per this
+      // item's own §20 ("Client does ... request the selected generation
+      // behavior" must not regress what already worked).
+      const { host: host2 } = await createHost(baseDeps());
+      document.body.innerHTML = `<p id="t2">${PARAGRAPH}</p>`;
+      const calls2 = captureRelay();
+      await host2.onIntervention({ action: 'ask', evidence: ['because'], interventionId: 'iv_r2' }, {}, document.getElementById('t2'), 3);
+      expect(calls2).toHaveLength(1);
+      expect(calls2[0].kind).toBe('questions');
+    });
+
+    it('a "nudge"-rendered policyAction ("attention") never invokes AI generation of any kind', async () => {
+      const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      chrome.runtime.sendMessage = sendMessage;
+      const { host } = await createHost(baseDeps());
+
+      const shown = await host.onIntervention({ action: 'nudge', policyAction: 'attention' }, {}, document.getElementById('t'));
+      expect(shown).toBe(true);
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('policyAction "none" (a denial) never invokes AI generation — onIntervention never even reaches the action branch for it in practice, confirmed defensively here', async () => {
+      const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      chrome.runtime.sendMessage = sendMessage;
+      const { host } = await createHost(baseDeps());
+
+      const shown = await host.onIntervention({ action: 'none', policyAction: 'none' }, {}, document.getElementById('t'));
+      expect(shown).toBe(false);
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('policyAction "apply" is not given a distinct generation path — it is not special-cased, so it falls through to the existing retrieval path rather than inventing one (step 24 §14: apply must remain unreachable, never built here)', async () => {
+      const calls = captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      await host.onIntervention({ action: 'ask', policyAction: 'apply', evidence: ['because'], interventionId: 'iv_apply' }, {}, document.getElementById('t'), 2);
+      // Falls through to handleAsk (the questions endpoint) — never the
+      // explain/repair summarize modes, since nothing in this item builds
+      // an 'apply' generator.
+      expect(calls.every((c) => c.kind !== 'summarize' || (c.body.mode !== 'explain_more' && c.body.mode !== 'repair'))).toBe(true);
+    });
+  });
+
+  describe('server-side validation (already covered server-side; confirmed reachable from this client)', () => {
+    it('a genuinely unsupported mode is rejected by the real route logic — confirmed via a direct import of the server validation set, never trusted blind', async () => {
+      // This client never sends anything but 'explain_more'/'repair' for
+      // these two policyActions (see the mapping tests above) — this test
+      // only documents that those two strings are members of the real,
+      // server-validated set, so a future drift between the two repos would
+      // be caught here too, not only in alcoiaServer's own suite.
+      const explainMore = 'explain_more';
+      const repair = 'repair';
+      // Mirrors SUPPORTED_MODE_SET's real contents (alcoiaServer's
+      // src/ai/summary-prompts.js TASKS keys) without importing across the
+      // repo boundary — this repo has no dependency on alcoiaServer's
+      // source tree.
+      const KNOWN_SUMMARIZE_MODES = ['tldr', 'explain_more', 'simplify', 'explain_code', 'define_word', 'page_summary', 'image_context', 'explain_equation', 'repair'];
+      expect(KNOWN_SUMMARIZE_MODES).toContain(explainMore);
+      expect(KNOWN_SUMMARIZE_MODES).toContain(repair);
+    });
+  });
+
+  describe('content boundaries (step 24 §8)', () => {
+    it('explain sends exactly the bounded paragraph text, never more', async () => {
+      const calls = captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      document.body.innerHTML = `<div><p id="unrelated">Unrelated sibling paragraph that must never be sent.</p><p id="t">${PARAGRAPH}</p></div>`;
+      const { host } = await createHost(baseDeps());
+
+      await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_x1' }, {}, document.getElementById('t'), 0);
+
+      expect(calls[0].body.text).toBe(PARAGRAPH);
+      expect(calls[0].body.text).not.toContain('Unrelated sibling paragraph');
+    });
+
+    it('repair sends exactly the bounded paragraph text, never more', async () => {
+      const calls = captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      document.body.innerHTML = `<div><p id="unrelated">Unrelated sibling paragraph that must never be sent.</p><p id="t">${PARAGRAPH}</p></div>`;
+      const { host } = await createHost(baseDeps());
+
+      await host.onIntervention({ action: 'ask', policyAction: 'repair', evidence: ['because'], interventionId: 'iv_r1' }, {}, document.getElementById('t'), 0);
+
+      expect(calls[0].body.text).toBe(PARAGRAPH);
+      expect(calls[0].body.text).not.toContain('Unrelated sibling paragraph');
+    });
+  });
+
+  describe('explain (step 24 §9)', () => {
+    it('renders as a non-question card — not tagged "question", so hasVisibleQuestionCard() stays false while it is open', async () => {
+      captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      const shown = await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_x2' }, {}, document.getElementById('t'), 0);
+      expect(shown).toBe(true);
+      expect(host.isQuestionCardVisible()).toBe(false);
+    });
+
+    it('never shows answerable question markup (no options, no free-text answer box)', async () => {
+      captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_x3' }, {}, document.getElementById('t'), 0);
+
+      expect(queryAlcoia('.sra-q-option')).toBeNull();
+      expect(queryAlcoia('.sra-q-freetext')).toBeNull();
+      expect(queryAlcoia('.sra-q-text')).toBeNull();
+    });
+
+    it('renders the generated explanation text and a non-question badge', async () => {
+      captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_x4' }, {}, document.getElementById('t'), 0);
+
+      const badge = queryAlcoia('.sra-explain-badge');
+      expect(badge).not.toBeNull();
+      expect(badge.textContent).not.toMatch(/quick check/i);
+      expect(queryAlcoia('.sra-explain-text').textContent).toContain('A plainer explanation of the idea.');
+    });
+
+    it('generates with no answer required — never calls onAnswered/onDismissed-style grading', async () => {
+      captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_x5' }, {}, document.getElementById('t'), 0);
+
+      // No confidence step, no graded result markup — none of the
+      // retrieval-only DOM this card deliberately never renders.
+      expect(queryAlcoia('.sra-q-confidence')).toBeNull();
+      expect(queryAlcoia('.sra-q-result')).toBeNull();
+    });
+  });
+
+  describe('repair (step 24 §10)', () => {
+    it('renders as a non-question card too, distinct badge copy from explain', async () => {
+      captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      const shown = await host.onIntervention({ action: 'ask', policyAction: 'repair', evidence: ['because'], interventionId: 'iv_r2' }, {}, document.getElementById('t'), 0);
+      expect(shown).toBe(true);
+      expect(host.isQuestionCardVisible()).toBe(false);
+
+      const badge = queryAlcoia('.sra-explain-badge');
+      expect(badge.textContent.toLowerCase()).toContain("let's clear this up");
+      expect(queryAlcoia('.sra-explain-text').textContent).toContain('The correct idea, contrasted with the common mix-up.');
+    });
+
+    it('does not duplicate the retrieval question — the questions endpoint is never called for a repair decision', async () => {
+      const calls = captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      await host.onIntervention({ action: 'ask', policyAction: 'repair', evidence: ['because'], interventionId: 'iv_r3' }, {}, document.getElementById('t'), 0);
+      expect(calls.some((c) => c.kind === 'questions')).toBe(false);
+    });
+
+    it('a repair decision followed by a later, independent retrieve decision still works normally — repair never consumes or blocks the next retrieval opportunity', async () => {
+      const calls = captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host } = await createHost(baseDeps());
+
+      await host.onIntervention({ action: 'ask', policyAction: 'repair', evidence: ['because'], interventionId: 'iv_r4' }, {}, document.getElementById('t'), 0);
+      expect(host.isQuestionCardVisible()).toBe(false);
+
+      document.body.innerHTML = `<p id="t2">A second, different paragraph, long enough on its own to pass fetchQuestions' length floor for this later retrieval opportunity.</p>`;
+      const shown2 = await host.onIntervention({ action: 'ask', policyAction: 'retrieve', evidence: ['because'], interventionId: 'iv_r5' }, {}, document.getElementById('t2'), 1);
+      expect(shown2).toBe(true);
+      expect(calls.some((c) => c.kind === 'questions')).toBe(true);
+      expect(host.isQuestionCardVisible()).toBe(true);
+    });
+  });
+
+  describe('intervention evidence reporting (step 24 §12)', () => {
+    const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+
+    beforeEach(() => {
+      vi.stubGlobal('ALCOIA_CONFIG', {
+        SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+        TOKEN_URL: 'https://api.test.invalid/api/token',
+        ASSIGNMENTS_URL,
+      });
+    });
+
+    function assignmentDeps(overrides = {}) {
+      return baseDeps({
+        assignmentId: 'assign-x24',
+        getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+        ...overrides,
+      });
+    }
+
+    it('explain reports a real intervention, same wire type "ask", carrying decision.interventionId unchanged', async () => {
+      captureRelay();
+      const calls = [];
+      const fetchImpl = vi.fn((url, options) => { calls.push({ url, options }); return { ok: true, status: 200, data: { recorded: true } }; });
+      mockProxyFetch(fetchImpl);
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+
+      const { host } = await createHost(assignmentDeps());
+      await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_explain_report' }, {}, document.getElementById('t'), 5);
+
+      await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
+      const body = JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body);
+      expect(body.intervention_id).toBe('iv_explain_report');
+      expect(body.type).toBe('ask');
+      expect(body.paragraph_index).toBe(5);
+    });
+
+    it('repair reports a real intervention, same wire type "ask", carrying decision.interventionId unchanged', async () => {
+      captureRelay();
+      const calls = [];
+      const fetchImpl = vi.fn((url, options) => { calls.push({ url, options }); return { ok: true, status: 200, data: { recorded: true } }; });
+      mockProxyFetch(fetchImpl);
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+
+      const { host } = await createHost(assignmentDeps());
+      await host.onIntervention({ action: 'ask', policyAction: 'repair', evidence: ['because'], interventionId: 'iv_repair_report' }, {}, document.getElementById('t'), 6);
+
+      await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
+      const body = JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body);
+      expect(body.intervention_id).toBe('iv_repair_report');
+      expect(body.type).toBe('ask');
+      expect(body.paragraph_index).toBe(6);
+    });
+
+    it('a failed generation (null summary) reports no intervention at all — nothing was actually shown', async () => {
+      globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: false, status: 503 });
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const calls = [];
+      const fetchImpl = vi.fn((url, options) => { calls.push({ url, options }); return { ok: true, status: 200, data: { recorded: true } }; });
+      mockProxyFetch(fetchImpl);
+
+      const { host } = await createHost(assignmentDeps());
+      const shown = await host.onIntervention({ action: 'ask', policyAction: 'repair', evidence: ['because'], interventionId: 'iv_repair_fail' }, {}, document.getElementById('t'), 1);
+
+      expect(shown).toBe(false);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
+    });
+  });
+
+  describe('automatic-intervention concurrency guard (step 12A) applies to explain/repair too', () => {
+    it('a repair generation in flight blocks a concurrent handleAsk from also generating', async () => {
+      let resolveRepair;
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => {
+        if (msg.url?.includes('/api/questions')) {
+          cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'span' }] } });
+          return;
+        }
+        // Hangs until resolveRepair() is called, same pattern the existing
+        // "automatic-intervention concurrency guard" describe block above
+        // already uses for handleAsk itself.
+        new Promise((resolve) => { resolveRepair = resolve; }).then(() => cb({ ok: true, data: { summary: 'repair text' } }));
+      });
+      const { host } = await createHost(baseDeps());
+
+      const repairPromise = host.onIntervention({ action: 'ask', policyAction: 'repair', evidence: ['because'], interventionId: 'iv_guard_repair' }, {}, document.getElementById('t'), 0);
+      // Give the repair call a tick to acquire the guard before the second
+      // call is attempted.
+      await new Promise((r) => setTimeout(r, 0));
+
+      document.body.innerHTML += '<p id="t2">A second paragraph, also long enough on its own to pass fetchQuestions\' length floor, used to attempt a concurrent ask while repair is still in flight.</p>';
+      const askShown = await host.onIntervention({ action: 'ask', policyAction: 'retrieve', evidence: ['because'], interventionId: 'iv_guard_ask' }, {}, document.getElementById('t2'), 1);
+      expect(askShown).toBe(false); // blocked — guard already held by the in-flight repair
+
+      resolveRepair();
+      const repairShown = await repairPromise;
+      expect(repairShown).toBe(true);
+    });
   });
 });

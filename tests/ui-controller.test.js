@@ -166,15 +166,42 @@ describe('hasVisibleQuestionCard (step 9A)', () => {
     expect(ui.hasVisibleQuestionCard()).toBe(false); // both gone now
   });
 
-  it('a question card evicted at the MAX_POPUPS cap no longer counts as visible', () => {
+  /* Step 29 (student intervention experience audit): previously, the
+   * MAX_POPUPS eviction loop evicted the oldest popup regardless of kind,
+   * which meant a live, unanswered retrieval question could be silently
+   * closed just because a LATER, unrelated popup needed the slot — with no
+   * dismissal ever recorded and the reader's in-progress selection
+   * discarded with no trace. reservePopup() now skips past any
+   * kind: 'question' entry when looking for something to evict. This test
+   * used to fill every slot with question cards and assert the OLDEST one
+   * (q-p0) got evicted to make room for a 6th — the exact bug this item
+   * fixes. Rewritten to assert the corrected behaviour: with nothing
+   * evictable, the 6th reservation is refused outright (the same "every
+   * slot is pinned" shape the test right above this one already asserts),
+   * and every original question card survives untouched. */
+  it('refuses to evict a question card at the MAX_POPUPS cap — a live, unanswered question is never silently closed', () => {
     const ui = build();
-    // Fill every slot with question cards, oldest first, so the 6th
-    // reservation evicts p0 via reservePopup()'s own cap logic.
     for (let i = 0; i < 5; i++) ui.reservePopup(`q-p${i}`, 'question');
     expect(ui.hasVisibleQuestionCard()).toBe(true);
-    ui.reservePopup('q-p5', 'question');
-    expect(ui.openPopups.has('q-p0')).toBe(false);
-    expect(ui.hasVisibleQuestionCard()).toBe(true); // p1..p5 still up
+
+    const sixth = ui.reservePopup('q-p5', 'question');
+    expect(sixth).toBeNull();
+    expect(ui.openPopups.has('q-p0')).toBe(true); // nothing evicted
+    expect(ui.openPopups.size).toBe(5);
+    expect(ui.hasVisibleQuestionCard()).toBe(true);
+  });
+
+  it('evicts a non-question popup to make room even while question cards occupy other slots — only question-kind entries are protected', () => {
+    const ui = build();
+    ui.reservePopup('non-question'); // oldest — no kind
+    for (let i = 0; i < 4; i++) ui.reservePopup(`q-p${i}`, 'question');
+    expect(ui.openPopups.size).toBe(5);
+
+    const sixth = ui.reservePopup('q-p4', 'question');
+    expect(sixth).toBeTruthy();
+    expect(ui.openPopups.has('non-question')).toBe(false); // the evictable one went
+    expect(ui.openPopups.has('q-p0')).toBe(true); // every question card survived
+    expect(ui.openPopups.size).toBe(5);
   });
 
   it('a pinned question card keeps counting as visible after hidePopup() (Escape) — only an unpinned one is closed by it', () => {
@@ -215,6 +242,71 @@ describe('hidePopup', () => {
     ui.hidePopup();
     expect(ui.openPopups.has('a')).toBe(false);
     expect(ui.openPopups.has('b')).toBe(true);
+  });
+});
+
+/* Step 29 (student intervention experience audit). Before this item,
+ * resetAutohide() treated a popup reserved with kind: 'question' exactly
+ * like any other — a reader who enabled autohide and took longer than its
+ * timeout to read the question, pick/type an answer, and go through the
+ * separate confidence step had their card silently vanish mid-answer: the
+ * selection was discarded, no dismissal was ever recorded, and
+ * response-signals.js's own pending record was left dangling forever,
+ * resolved as neither an answer nor a dismissal. */
+describe('autohide exemption for question cards (Step 29)', () => {
+  it('never auto-closes a popup reserved with kind: "question", however long autohide is enabled', () => {
+    vi.useFakeTimers();
+    try {
+      const ui = build({ autohideEnabled: true, autohideTimeoutSec: 3 });
+      const root = ui.reservePopup('q-abc', 'question');
+      ui.showPopup(root, null);
+      vi.advanceTimersByTime(60000);
+      expect(ui.openPopups.has('q-abc')).toBe(true);
+      expect(root.isConnected).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still auto-closes an ordinary (non-question) popup after its timeout — unaffected by the exemption above', () => {
+    vi.useFakeTimers();
+    try {
+      const ui = build({ autohideEnabled: true, autohideTimeoutSec: 3 });
+      const root = ui.reservePopup('abc');
+      ui.showPopup(root, null);
+      vi.advanceTimersByTime(3500);
+      expect(ui.openPopups.has('abc')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a question card exempt from autohide is still closeable by the reader at any time — Escape (hidePopup) is unaffected', () => {
+    vi.useFakeTimers();
+    try {
+      const ui = build({ autohideEnabled: true, autohideTimeoutSec: 3 });
+      const root = ui.reservePopup('q-abc', 'question');
+      ui.showPopup(root, null);
+      ui.hidePopup();
+      expect(ui.openPopups.has('q-abc')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-arming autohide on mouseleave also respects the exemption, not just the initial showPopup() call', () => {
+    vi.useFakeTimers();
+    try {
+      const ui = build({ autohideEnabled: true, autohideTimeoutSec: 3 });
+      const root = ui.reservePopup('q-abc', 'question');
+      ui.showPopup(root, null);
+      root.dispatchEvent(new Event('mouseenter'));
+      root.dispatchEvent(new Event('mouseleave'));
+      vi.advanceTimersByTime(60000);
+      expect(ui.openPopups.has('q-abc')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -52,6 +52,221 @@ export const STATE_ACTIONS = Object.freeze({
   [STATES.UNKNOWN]:    'none',
 });
 
+/* ===========================================================================
+ * Intervention Policy Reconstruction (step 23) -- the policy ACTION VOCABULARY
+ * ===========================================================================
+ *
+ * `decision.action` above (`'ask' | 'nudge' | 'none' | 'pretest' | 'retention'`)
+ * is, and remains, the literal dispatch string host.js's onIntervention and
+ * checkRetentionCandidate switch on to decide WHAT TO RENDER — unchanged by
+ * this item, on purpose: it is also, indirectly, the server's wire contract
+ * (reportIntervention's own `type` argument, constrained server-side by
+ * interventions.type's CHECK to exactly 'ask'/'session_recall'/'quiz'/
+ * 'retention' — confirmed by reading alcoiaServer's own migration before
+ * touching anything here). Renaming it would be a wire-protocol change this
+ * item's own §16 explicitly rules out absent a real necessity, and none was
+ * found: every one of the 8 policy outcomes below already renders through
+ * one of the existing dispatch strings (see "renders as" on each).
+ *
+ * `decision.policyAction` is NEW: the finer-grained, 8-value vocabulary this
+ * item's own brief asks for, added alongside `action`, never replacing it.
+ * Several policyActions share one rendering (`action`) on purpose — the
+ * brief's own words: "These are policy outcomes, not necessarily eight
+ * independent UI components." What's new in THIS item is the policy's
+ * ability to tell these cases apart and choose between them; a from-scratch
+ * UI component per action is explicitly not required and not built here.
+ *
+ * -- The eight outcomes, exact meaning, eligibility, and rendering --
+ *
+ *   none              Nothing warrants a reader-visible event right now.
+ *                      Every denial (`deny()` below) is `policyAction: 'none'`
+ *                      regardless of what it almost became — "no action" has
+ *                      one meaning in this vocabulary, not eight shades of it.
+ *                      Renders as: nothing (`allow: false`).
+ *
+ *   nudge             A reader told the system (self-report) they've lost
+ *                      interest or focus — STATES.DRIFTING, self-report-only,
+ *                      unchanged from before this item (state-engine.js's own
+ *                      STATES comment: no passive drifting detector exists).
+ *                      Renders as: `action: 'nudge'` (ui-controller.js's
+ *                      showNudge — a 2.2s CSS highlight, nothing else).
+ *
+ *   attention         A real, classified signal too weak on its own to
+ *                      justify interrupting with a question, but still worth
+ *                      a near-zero-cost visual accent rather than silence.
+ *                      NEW in this item. The one eligibility path today:
+ *                      STATES.SKIMMING on text that does NOT clear
+ *                      `budget.skimmingGrades` (ordinary-difficulty text) —
+ *                      previously a bare denial (see "REPLACE" in this
+ *                      item's own report), now a real, lightweight outcome.
+ *                      Renders as: `action: 'nudge'` (the SAME showNudge
+ *                      affordance 'nudge' uses — see this comment's own
+ *                      opening paragraph on why one rendering can serve two
+ *                      policyActions). Still spends from the shared budget,
+ *                      consistent with this module's own existing precedent
+ *                      that 'nudge' (unquestionably the lightest existing
+ *                      action) already spends it too — CLAUDE.md's budget is
+ *                      about "not reader-initiated," never about visual
+ *                      loudness, and this item does not invent a second,
+ *                      budget-exempt tier to avoid relitigating that.
+ *
+ *   explain           Corroborated-but-not-repeated evidence of difficulty:
+ *                      real, secondary evidence agrees with the primary
+ *                      signal, but the reader has only encountered this
+ *                      passage once. NEW distinction in this item --
+ *                      `regressionEvidenceStrength()` already computed
+ *                      exactly this split (`repeated` vs `corroborated`)
+ *                      since step 8, but both previously collapsed into the
+ *                      same 'ask' outcome once `boosted` was true. Only
+ *                      reachable today via a regression-sourced STRUGGLING
+ *                      candidate; see §7/§10 of this item's own report for
+ *                      why it was not generalised to every signal type.
+ *                      Renders as: `action: 'ask'`, dispatched by host.js's
+ *                      onIntervention to handleExplainOrRepair (NOT
+ *                      handleAsk) -- CORRECTED by Step 29's own trace of the
+ *                      actual code rather than this comment: this paragraph
+ *                      originally said EXPLAIN rendered through handleAsk's
+ *                      own retrieval-question flow, with a distinct
+ *                      generation/UI path left as a "disclosed follow-up,
+ *                      not built here". That was accurate when this comment
+ *                      was written (Step 23) but is stale now -- Step 24,
+ *                      landing after it, DID build that distinct path
+ *                      (fetchSummary mode 'explain_more' + question-card.js's
+ *                      showExplanation(), see handleExplainOrRepair's own
+ *                      header) and host.js's onIntervention has routed
+ *                      policyAction 'explain' there, not to handleAsk, ever
+ *                      since. `action` stays 'ask' only because that is what
+ *                      tells onIntervention this decision renders through
+ *                      the question-card shell at all (POLICY_ACTIONS' own
+ *                      header above) -- it does not mean "the same card
+ *                      'retrieve' shows", which this paragraph used to imply.
+ *
+ *   retrieve          The primary intervention -- a retrieval question about
+ *                      the passage. Semantically identical to the pre-
+ *                      existing 'ask' outcome for every STRUGGLING/dense-
+ *                      SKIMMING candidate whose evidence is strong enough on
+ *                      its own (repeated regression, or any non-regression
+ *                      STRUGGLING signal that already cleared confidence/
+ *                      backoff), or an exploration sample.
+ *                      Renders as: `action: 'ask'`.
+ *
+ *   repair            A retrieval was already attempted recently and failed
+ *                      (`lastAnswerCorrect === false`, recordAnswered()'s own
+ *                      tracking since step 8) -- the next candidate that
+ *                      would otherwise be 'retrieve' is reframed as repair
+ *                      instead of a cold re-ask. NEW in this item. This is
+ *                      distinct from, and does not replace, question-card.js's
+ *                      own pre-existing, automatic, SAME-CARD explanation
+ *                      offer on a wrong answer (`offerExplanation`, fires
+ *                      instantly, no policy decision needed, unchanged) --
+ *                      this policy-level 'repair' instead governs the NEXT
+ *                      struggling candidate the policy evaluates, so it
+ *                      arrives already framed as a follow-up rather than a
+ *                      fresh cold question. Never repeats the literal same
+ *                      question -- it only ever fires for a NEW paragraph
+ *                      (seenParagraphs' own per-paragraph dedup, unchanged,
+ *                      already guarantees this function is never re-evaluated
+ *                      for an already-asked passage).
+ *                      Renders as: `action: 'ask'`.
+ *
+ *   apply             Defined for vocabulary completeness; NOT REACHABLE
+ *                      today. No eligibility path in this file ever produces
+ *                      it, and none should until a real generation capability
+ *                      backs it: epistemic-engine.js's own LADDER is
+ *                      `['recognition', 'free_recall', 'scenario',
+ *                      'adversarial']` -- no 'apply' rung -- and
+ *                      alcoiaServer's own CLAUDE.md (§15, "Open questions")
+ *                      is explicit that the difficulty-ladder levels beyond
+ *                      recall/explain (an "apply this concept" question
+ *                      included) need a validator this codebase does not
+ *                      have yet, and must not ship without one ("Do not
+ *                      weaken the span rule"). Inventing an 'apply' eligibility
+ *                      path with no real question type behind it would mean
+ *                      a policy decision generation can't fulfil -- flagged
+ *                      as a real, open architectural gap in this item's own
+ *                      report, not silently built around.
+ *
+ *   delayed_retrieve  A server-scheduled retention item, due, and matched to
+ *                      a paragraph the reader is ALREADY reading --
+ *                      evaluateRetentionCandidate()'s own pre-existing
+ *                      'retention' outcome, relabelled (not rebuilt) in this
+ *                      vocabulary. The boundary this item's own §13 asks for
+ *                      was ALREADY true before this item touched anything:
+ *                      retention never pushes/schedules an interruption on
+ *                      its own -- it only ever fires from onParagraphRead,
+ *                      requires a live paragraph match, and spends from, and
+ *                      is gated by, the exact same budget/cooldown/dismissal-
+ *                      backoff/active-card checks as every immediate
+ *                      candidate (see evaluateRetentionCandidate's own header
+ *                      below, unchanged by this item). "Delayed" describes
+ *                      WHEN the underlying knowledge became due, never how
+ *                      the interruption itself is gated once due.
+ *                      Renders as: `action: 'retention'`.
+ *
+ * -- Content Intelligence: integration point deliberately left ABSENT --
+ *
+ * Investigated per this item's own §7 before writing anything: this
+ * extension has no existing fetch path for Content Intelligence data (the
+ * concept/mapping/relationship graph Steps 17-22 built is server-side and
+ * instructor-facing only -- alcoiaConsole reads it, this extension never
+ * has). Wiring one here would be new scope this item's own brief does not
+ * ask for ("do not invent behaviour merely to use the new tables"), so no
+ * `policyContext.contentIntelligence` parameter was added. If a future item
+ * wires real Content Intelligence context into this policy, it must arrive
+ * exactly that way -- an optional, read-only context field this function
+ * MAY consult, never a rule of the shape `if (concept.hasPrerequisite)
+ * retrieve()`. This policy remains the sole authority over whether/how to
+ * intervene regardless of what any future context field says.
+ *
+ * -- The four concerns, and where each one lives (this item's own §6) --
+ *
+ *   A. Signal detection ("what is happening?")   -- state-engine.js, the
+ *      signals/ detectors, scroll-regression.js's own repeat/corroboration
+ *      facts. Entirely unchanged by this item (KEEP) -- this file consumes
+ *      their output, never re-derives it.
+ *   B. Policy ("what should alcoia do?")          -- THIS FILE. evaluate(),
+ *      evaluateContentTrigger(), evaluateRetentionCandidate() below, now
+ *      returning the 8-value vocabulary described above alongside the
+ *      existing render-dispatch `action`.
+ *   C. Generation ("what should it say or ask?")  -- host.js's
+ *      fetchQuestions/fetchSummary, calling the existing, unchanged server
+ *      endpoints (POST /api/questions, /api/summarize) -- never a client-
+ *      side AI call, never a new provider, never touched by this item.
+ *   D. Evidence ("what happened after?")          -- record()/
+ *      recordDismissal()/recordAnswered() below (unchanged shapes, same
+ *      three functions), response-signals.js, and outcomes.js's real
+ *      submission to the server -- this is what feeds Knowledge State,
+ *      NEVER a direct write from this file (this module has no network
+ *      access, no storage access, and no Knowledge State import of any
+ *      kind -- confirmed by this file's own import list, three lines up).
+ *
+ * -- Fixed-interval audit (this item's own §9) --
+ *
+ * Two candidate "arbitrary timing" mechanisms exist in this codebase and
+ * were both checked directly, not assumed innocent: `budget.minGapMs` (the
+ * 3-minute cooldown, below) is a MINIMUM GAP -- a rate limiter between
+ * evidence-driven decisions, not a trigger that fires on its own; it can
+ * only ever make an already-earned decision wait, never manufacture one.
+ * orchestrator.js's `IDLE_TICK_MS` (5s) is a re-evaluation tick -- it
+ * re-runs signal collection/pumping so a reader who stopped scrolling is
+ * still observed, but it asks the SAME evidence-driven evaluate() this file
+ * exports; it has no path of its own to `record()` or to bypass any check
+ * here. Neither is "every N minutes, ask a question regardless of evidence"
+ * -- no such mechanism was found anywhere in this codebase, so none was
+ * removed or replaced; this paragraph is the audit trail that was actually
+ * done, not a silent skip.
+ */
+export const POLICY_ACTIONS = Object.freeze({
+  NONE:             'none',
+  NUDGE:            'nudge',
+  ATTENTION:        'attention',
+  EXPLAIN:          'explain',
+  RETRIEVE:         'retrieve',
+  REPAIR:           'repair',
+  APPLY:            'apply',             // defined, not yet reachable -- see header above
+  DELAYED_RETRIEVE: 'delayed_retrieve',
+});
+
 export const DEFAULT_BUDGET = Object.freeze({
   minGapMs:          180000,  // 3 minutes
   // The cap for a session that has read nothing yet — and the floor under
@@ -223,13 +438,22 @@ export function createInterventionPolicy(config = {}) {
    * causal chain (see intervention-id.js's own header) — generation and
    * rendering (host.js's handleAsk) happen after, using this same id. */
   function evaluate(state, ctx = {}) {
+    // policyAction is always 'none' on a denial -- see POLICY_ACTIONS' own
+    // header comment above: "no action" has one meaning in this vocabulary,
+    // regardless of what a candidate almost became.
     const deny = (reason) =>
-      ({ allow: false, action: 'none', reason, evidence: [], paragraphKey: null, wasExplorationSample: false, interventionId: null });
+      ({ allow: false, action: 'none', policyAction: POLICY_ACTIONS.NONE, reason, evidence: [], paragraphKey: null, wasExplorationSample: false, interventionId: null });
 
     if (!state || !state.label) return deny('no state');
     if (state.label === STATES.UNKNOWN) return deny('state is unknown');
 
     let action = STATE_ACTIONS[state.label] || 'none';
+    // Step 23: the new 8-value vocabulary, derived from `action` and refined
+    // below as more evidence is examined -- see POLICY_ACTIONS' own header
+    // comment for the full meaning of each value.
+    let policyAction = action === 'ask' ? POLICY_ACTIONS.RETRIEVE
+      : action === 'nudge' ? POLICY_ACTIONS.NUDGE
+      : POLICY_ACTIONS.NONE;
     let wasExplorationSample = false;
 
     if (action === 'none') {
@@ -244,6 +468,7 @@ export function createInterventionPolicy(config = {}) {
       const explorationEligible = state.label !== STATES.DRIFTING;
       if (explorationEligible && random() < explorationRate) {
         action = 'ask';
+        policyAction = POLICY_ACTIONS.RETRIEVE;
         wasExplorationSample = true;
       } else {
         return deny(`no action for ${state.label}`);
@@ -257,7 +482,17 @@ export function createInterventionPolicy(config = {}) {
     if (state.label === STATES.SKIMMING) {
       const grade = state.signal && state.signal.readability && state.signal.readability.grade;
       if (!budget.skimmingGrades.includes(grade)) {
-        return deny('skimming, but the text is not dense enough to interrupt over');
+        // Step 23 (REPLACE, documented in this item's own report): ordinary-
+        // difficulty text moved at speed is real, classified evidence, just
+        // too weak on its own to justify a full retrieval interruption --
+        // previously denied outright (nothing happened at all); now a real,
+        // low-cost ATTENTION outcome, rendered through the SAME lightweight
+        // 'nudge' affordance DRIFTING already uses (see POLICY_ACTIONS' own
+        // header for why one rendering serves both). Still spends budget,
+        // still respects every cooldown/dedup check below -- this is not an
+        // exemption, just a different, lighter-weight thing to spend it on.
+        action = 'nudge';
+        policyAction = POLICY_ACTIONS.ATTENTION;
       }
     }
 
@@ -310,6 +545,17 @@ export function createInterventionPolicy(config = {}) {
         if (lastAnswerCorrect === true && !doublyBoosted) {
           return deny('a recent correct answer means this scroll-back alone is not enough evidence yet to interrupt again');
         }
+
+        // Step 23: a genuine repeat on the SAME passage is the stronger of
+        // the two signals regressionEvidenceStrength() already distinguishes
+        // (state-engine.js's own CONFUSION_REREAD_COUNT threshold) and earns
+        // the full retrieval question; corroboration from a SECOND, DIFFERENT
+        // signal in the same batch, with no repetition, is real but weaker --
+        // worth a direct explanation rather than demanding an answer. Both
+        // previously resolved identically once `boosted` was true; this is
+        // the new, finer distinction, using only facts this file already
+        // computed, no new threshold.
+        policyAction = strength.repeated ? POLICY_ACTIONS.RETRIEVE : POLICY_ACTIONS.EXPLAIN;
       }
 
       // Step 9A (active intervention awareness): a candidate that has
@@ -329,6 +575,25 @@ export function createInterventionPolicy(config = {}) {
       // exactly as re-evaluable on the next signal as it always was.
       if (ctx.questionCardVisible) {
         return deny('a question card is already visible — holding off on a redundant interruption');
+      }
+
+      // Step 23: failed-retrieval -> repair. A candidate that has cleared
+      // every check above and is still headed for a fresh RETRIEVE is
+      // reframed as REPAIR when the reader's most recent graded answer was
+      // wrong (recordAnswered()'s own lastAnswerCorrect, step 8, read here
+      // for a new purpose -- previously only consulted to SOFTEN a
+      // borderline regression candidate when true; now also consulted to
+      // ESCALATE a strong one when false). Deliberately does not touch an
+      // EXPLAIN candidate -- explain is already the gentler of the two, and
+      // downgrading a repair need to an explain would understate it, not
+      // correct it. Never a repeat of the same question: this function is
+      // only ever evaluated for the CURRENT paragraph, and seenParagraphs
+      // below already guarantees a paragraph is never asked about twice in
+      // one session, so "repair" always means a genuinely new passage,
+      // framed as a follow-up to the recent miss, not the literal same
+      // question asked again.
+      if (policyAction === POLICY_ACTIONS.RETRIEVE && lastAnswerCorrect === false) {
+        policyAction = POLICY_ACTIONS.REPAIR;
       }
     }
 
@@ -350,6 +615,12 @@ export function createInterventionPolicy(config = {}) {
     return {
       allow: true,
       action,
+      // Step 23: the new 8-value vocabulary (POLICY_ACTIONS). Additive --
+      // every existing consumer of `action` is unaffected; this is new
+      // surface for a future renderer/evidence-reporting path to read, same
+      // shape of addition `wasExplorationSample`/`interventionId` already
+      // were before this item.
+      policyAction,
       reason: wasExplorationSample
         ? `exploration sample on ${state.label}`
         : `${state.label} at ${state.confidence.toFixed(2)}`,
@@ -437,7 +708,7 @@ export function createInterventionPolicy(config = {}) {
    * earlier retention attempt) is correctly skipped here too. */
   function evaluateRetentionCandidate(ctx = {}) {
     const deny = (reason) =>
-      ({ allow: false, action: 'none', reason, evidence: [], paragraphKey: null, interventionId: null });
+      ({ allow: false, action: 'none', policyAction: POLICY_ACTIONS.NONE, reason, evidence: [], paragraphKey: null, interventionId: null });
 
     const cap = sessionCap();
     if (count >= cap) {
@@ -489,6 +760,10 @@ export function createInterventionPolicy(config = {}) {
     return {
       allow: true,
       action: isFocus ? 'focus' : 'retention',
+      // Step 23: this is the DELAYED_RETRIEVE outcome in the new
+      // vocabulary (see POLICY_ACTIONS' own header). A focus question
+      // spends the same budget and gates, so it maps to the same outcome.
+      policyAction: POLICY_ACTIONS.DELAYED_RETRIEVE,
       reason: isFocus ? 'instructor-marked part of this reading' : 'retention item due',
       evidence: [isFocus ? 'This part of the reading is worth checking.' : 'Time to check whether this has stuck.'],
       paragraphKey: key,
