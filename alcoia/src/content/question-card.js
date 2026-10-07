@@ -72,9 +72,20 @@ export function createQuestionCard(deps = {}) {
 
   /* question: { q, options[4], answerIndex, explanation, span, level?, span_role? }
    * context: { evidence[], anchorRect, paragraphKey, knowledgeUnitId, interventionId,
-   *            passage?, wasExplorationSample, showSelfReport? } — item 13a:
+   *            passage?, wasExplorationSample, showSelfReport?, badge? } — item 13a:
    *            showSelfReport renders the self-report options alongside this
    *            question, additive to the answer flow, never a replacement for it.
+   *            badge (Step 29, optional, defaults to "quick check"): the one
+   *            visible cue that currently tells a retention/delayed-retrieve
+   *            item apart from an ordinary fresh question — see host.js's own
+   *            checkRetentionCandidate call site. Without it, a retention
+   *            card was visually IDENTICAL to a brand-new question (same
+   *            badge text, same layout), relying entirely on a single small
+   *            caption-sized evidence line to signal "this is something you
+   *            already covered" — easy to miss, and a real UX gap this
+   *            item's own §7 asks to verify against ("recognizable as
+   *            retrieval of previously encountered material... does not
+   *            look like an arbitrary new question").
    *            knowledgeUnitId (step 3) and interventionId (step 5) are documented
    *            here for shape completeness — this component does not compute
    *            either itself; it is response-signals.js's present()/answer() (called
@@ -177,7 +188,7 @@ export function createQuestionCard(deps = {}) {
         <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
       </div>
       <div class="sra-popup-body">
-        <div class="sra-state-badge sra-q-badge">quick check</div>
+        <div class="sra-state-badge sra-q-badge">${esc(context.badge || 'quick check')}</div>
         ${evidence}
         <div class="sra-q-text">${esc(question.q)}</div>
         ${bodyInner}
@@ -407,7 +418,82 @@ export function createQuestionCard(deps = {}) {
     return true;
   }
 
-  return { show, GRADED_LEVELS };
+  /* Learning Intelligence step 24 — explain / repair. A deliberately
+   * DIFFERENT shape of card than show() above: nothing to answer, nothing
+   * graded, so it never touches responseSignals.present/answer/dismiss and
+   * never calls onAnswered/onDismissed. Dismissing an explanation is not
+   * "declining to be tested" — the same reasoning intervention-policy.js's
+   * own dismissal-backoff comment already gives for why a nudge spends no
+   * backoff either ("a nudge is not a test"), extended here to this second
+   * non-test affordance. Reporting that the intervention was SHOWN (step 12
+   * — reportIntervention, same `type: 'ask'`) is host.js's job, same as
+   * handleAsk: this function only renders and returns whether it reached
+   * the screen, exactly like show() does.
+   *
+   * Same generation-then-render ordering as show()/handleAsk, deliberately
+   * NOT a fetch-then-fill-in-place pattern: `text` here is the ALREADY-
+   * GENERATED explanation/repair prose — host.js awaits the right server
+   * call (fetchSummary with mode 'explain_more' or 'repair') before ever
+   * calling this function, exactly as it awaits fetchQuestions() before
+   * calling show(). This keeps all network/generation timing, and the
+   * automaticInterventionGuard that bounds it, entirely in host.js — this
+   * module stays a pure renderer, same division of labour show() already
+   * has with handleAsk.
+   *
+   * kind: 'explain' | 'repair' — decided by the caller (host.js, from
+   * decision.policyAction) and used ONLY to pick the fixed, non-AI-sounding
+   * copy the reader sees; the actual generation difference (which server
+   * mode produced `text`) already happened before this call. Never the same
+   * call for both — see this item's own "do not collapse explain and
+   * repair" requirement.
+   *
+   * context: { evidence[], anchorRect, paragraphKey, knowledgeUnitId,
+   *            interventionId } — same shape as show()'s own context,
+   * minus anything answer-specific.
+   *
+   * Returns true only if the card actually reached the screen — same
+   * contract as show(). */
+  function showExplanation(kind, text, context = {}) {
+    if (!text || typeof text !== 'string' || !text.trim()) return false;
+
+    const isRepair = kind === 'repair';
+    const fingerprint = (isRepair ? 'r-' : 'x-') + text.slice(0, 80).trim();
+    // Tagged a kind other than 'question' deliberately — ui-controller.js's
+    // hasVisibleQuestionCard() exists specifically to mean "a retrieval
+    // question the reader must answer is on screen" (see show()'s own
+    // comment on this same call); an explain/repair card is neither, so it
+    // must not count toward that gate.
+    const root = ui.reservePopup(fingerprint, isRepair ? 'repair' : 'explain');
+    if (!root) return false;
+
+    const badgeText = isRepair ? "let's clear this up" : 'a closer look';
+    const evidenceHtml = context.evidence && context.evidence.length
+      ? `<div class="sra-q-evidence">${esc(context.evidence[0])}.</div>`
+      : '';
+
+    root.innerHTML = `
+      <div class="sra-controls">
+        <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
+      </div>
+      <div class="sra-popup-body">
+        <div class="sra-state-badge sra-explain-badge">${esc(badgeText)}</div>
+        ${evidenceHtml}
+        <div class="sra-q-explain sra-explain-text">${renderHighlightedExplanation(text, esc)}</div>
+      </div>
+      <div class="sra-popup-divider"></div>
+      <div class="sra-actions">
+        <button class="sra-btn sra-btn-secondary sra-q-skip">Close</button>
+      </div>`;
+
+    const dismiss = () => ui.closePopup(root, fingerprint);
+    root.querySelector('.sra-close-btn').onclick = dismiss;
+    root.querySelector('.sra-q-skip').onclick = dismiss;
+
+    ui.showPopup(root, context.anchorRect || null);
+    return true;
+  }
+
+  return { show, showExplanation, GRADED_LEVELS };
 }
 
 /* Mark the options and show the sentence the answer came from. The span is
