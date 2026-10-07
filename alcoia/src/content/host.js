@@ -203,42 +203,104 @@ export async function createHost(deps) {
   }
 
   // ── Retention due-list (intelligence-architecture audit, step 7 built,
-  // step 10 context-scoped) ────────────────────────────────────────────
+  // step 10 context-scoped, step 27 refreshed) ───────────────────────────
   // Same account-only gate as every reporting manager above -- there is no
   // "account session without an assignment" path in this extension today,
   // so this reuses that exact boundary rather than inventing a new one.
-  // Fetched ONCE here, never re-fetched mid-session -- retention.js's own
-  // header has the full reasoning for that. Keyed by knowledgeUnitId so
-  // checkRetentionCandidate (below, near handleAsk) can do a cheap Map
-  // lookup per paragraph read, rather than a linear scan.
+  // Keyed by knowledgeUnitId so checkRetentionCandidate (below, near
+  // handleAsk) can do a cheap Map lookup per paragraph read, rather than a
+  // linear scan.
   //
-  // STEP 10: dueUrl is now built per-assignment, the same way
+  // STEP 10: dueUrl is built per-assignment, the same way
   // interventionsUrl/explanationEventsUrl already are above, not a flat
-  // config constant -- Knowledge State (and its due-list route) is now
-  // scoped by (account, assignment, knowledge unit), so a due candidate
-  // fetched here is only ever due WITHIN this one assignmentId, never
-  // blended with any other assignment the same account may have used the
-  // same content in.
+  // config constant -- Knowledge State (and its due-list route) is scoped
+  // by (account, assignment, knowledge unit), so a due candidate fetched
+  // here is only ever due WITHIN this one assignmentId, never blended with
+  // any other assignment the same account may have used the same content
+  // in.
+  //
+  // STEP 27: a genuine mid-session staleness gap, found by investigation,
+  // not assumed. retention.js's own header (pre-step-27) disclosed this due
+  // list was "fetched ONCE... never re-fetched mid-session... a knowledge
+  // unit that becomes due after this call simply isn't picked up until the
+  // next session." That is real staleness, not a hypothetical: retention
+  // intervals are measured in whole DAYS (RETENTION_INTERVAL_DAYS,
+  // alcoiaServer), but a single reading session on one long document (a
+  // multi-page PDF through reading-bridge.js, or a long SPA-style article)
+  // can itself run long enough for a knowledge unit to cross from "not yet
+  // due" to "due" purely from wall-clock time passing, with no outcome of
+  // this session's own causing it. Fixed with the smallest additive
+  // change: refreshRetentionDue() below is the exact same fetch this block
+  // already made once, now also run on a periodic timer. No second
+  // retention store, no second scheduler, no change to the server contract
+  // or to evaluateRetentionCandidate() itself -- a refresh only ever
+  // updates this Map's data; the only place that ever turns a due entry
+  // into an actual interruption is still checkRetentionCandidate(), via
+  // the same policy gate as before.
+  //
+  // presentedRetentionUnits guards the one real race a periodic refresh
+  // introduces: advanceRetentionSchedule() only runs once the LEARNER'S
+  // OUTCOME for a presented retention item is submitted and graded
+  // server-side, which can be well after checkRetentionCandidate() already
+  // presented it (the reader is still looking at the card, or hasn't
+  // answered yet) -- until that outcome lands, the server's own
+  // next_retrieval_at for that knowledge unit is still in the past, so a
+  // refresh in that window would see it as "still due" and would otherwise
+  // resurrect it into dueKnowledgeUnits, undoing checkRetentionCandidate's
+  // own belt-and-suspenders delete (below) and risking a second retention
+  // ask for the same knowledge unit at a different paragraph position
+  // while the first is still pending. This Set, not the Map, is what
+  // actually has to survive a refresh for that guarantee to hold.
+  const RETENTION_DUE_REFRESH_MS = 600_000; // 10 minutes -- see comment above: ample resolution against a day-scale schedule, not "continuous polling".
   const dueKnowledgeUnits = new Map();
+  const presentedRetentionUnits = new Set();
+  let retentionManager = null;
+  // Deliberately NO assistantEnabled check in here -- this function is also
+  // the original one-time construction-time fetch (unchanged from before
+  // this item), which has never gated on assistantEnabled: a reader who
+  // starts a session with the assistant off but switches it on mid-session
+  // (settings are read live, s() above) should find dueKnowledgeUnits
+  // already populated the moment checkRetentionCandidate starts being
+  // reachable, not empty until some later refresh tick happens to run. The
+  // periodic timer below applies its own assistantEnabled check instead,
+  // purely to skip a pointless network call per tick while disabled.
+  async function refreshRetentionDue() {
+    if (!retentionManager) return;
+    try {
+      const result = await retentionManager.getDue();
+      if (!result.ok) return;
+      for (const c of result.candidates) {
+        if (!c || typeof c.knowledgeUnitId !== 'string' || !c.knowledgeUnitId) continue;
+        if (presentedRetentionUnits.has(c.knowledgeUnitId)) continue; // see presentedRetentionUnits comment above
+        dueKnowledgeUnits.set(c.knowledgeUnitId, { retentionStage: c.retentionStage, nextRetrievalAt: c.nextRetrievalAt });
+      }
+    } catch (e) {}
+  }
+  let retentionRefreshTimer = null;
   if (assignmentId && getSession) {
     // Same routing reason as submitOutcome above.
     const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
     const retentionModule = await loadModule('src/shared/retention.js');
-    const retentionManager = retentionModule.createRetentionManager({
+    retentionManager = retentionModule.createRetentionManager({
       getSession,
       dueUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/knowledge-state/due`,
       fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
-    try {
-      const result = await retentionManager.getDue();
-      if (result.ok) {
-        for (const c of result.candidates) {
-          if (c && typeof c.knowledgeUnitId === 'string' && c.knowledgeUnitId) {
-            dueKnowledgeUnits.set(c.knowledgeUnitId, { retentionStage: c.retentionStage, nextRetrievalAt: c.nextRetrievalAt });
-          }
-        }
-      }
-    } catch (e) {}
+    await refreshRetentionDue(); // the original, one-time fetch this block always made, unconditional as before
+    // Step 27: the periodic half. Not covered by installListeners()'s own
+    // AbortSignal (orchestrator.js's own idleTimer isn't either, for the
+    // identical reason stated there: "the content script lives as long as
+    // the page") -- stopRetentionRefresh is exposed below regardless, same
+    // "owned here, so the ability to stop it belongs here too, even though
+    // nothing calls it today" precedent orchestrator.js's own stop() sets.
+    retentionRefreshTimer = setInterval(() => {
+      if (!s().assistantEnabled) return; // mirrors checkRetentionCandidate's own first real check -- skip this tick's call, not the construction-time one above.
+      refreshRetentionDue();
+    }, RETENTION_DUE_REFRESH_MS);
+  }
+  function stopRetentionRefresh() {
+    if (retentionRefreshTimer) clearInterval(retentionRefreshTimer);
+    retentionRefreshTimer = null;
   }
 
   // ── Teaching focus (instructor Teaching Intent, ASSIGNED readings only) ──
@@ -968,6 +1030,84 @@ export async function createHost(deps) {
     }
   }
 
+  /* Learning Intelligence step 24 — explain / repair generation.
+   *
+   * Reached from the exact same onIntervention() 'ask' branch handleAsk is
+   * (Step 23 kept decision.action === 'ask' for every policyAction that
+   * renders through the question-card shell — see intervention-policy.js's
+   * own POLICY_ACTIONS header, "several policyActions share one rendering
+   * on purpose"); onIntervention below picks THIS function over handleAsk
+   * specifically when decision.policyAction is 'explain' or 'repair'.
+   *
+   * kind: 'explain' | 'repair', passed straight through from the caller.
+   * Chooses the generation mode here — the one place the two intents'
+   * actual server-side DIFFERENCE is decided on this client: 'explain' asks
+   * for mode 'explain_more' (the SAME generator a wrong retrieval answer
+   * already offers — explain is genuinely that same kind of help, offered
+   * proactively rather than only after a miss); 'repair' asks for the new
+   * 'repair' mode (src/ai/summary-prompts.js, alcoiaServer step 24),
+   * addressing a specific prior insufficient attempt rather than a first
+   * encounter. Both are constrained mode strings validated server-side
+   * against SUPPORTED_MODE_SET (step 24 §6/§7) — never a free-text prompt
+   * built or sent by this client.
+   *
+   * Bounded-content discipline (step 24 §8): `text` is the SAME single
+   * paragraph extraction handleAsk already uses — no new content source,
+   * no whole-page or document transmission, no new Content Intelligence
+   * fetch (step 24 §16) — fetchSummary() below sends exactly that text,
+   * the identical bounded call every other summarize mode already makes.
+   *
+   * Shares handleAsk's own automaticInterventionGuard: this is the second
+   * of the two automatic, AI-generation-triggering paths in this file (see
+   * automatic-intervention-guard.js's own header) — the guard is held for
+   * the full duration of the generation call, released only in `finally`,
+   * so a concurrent retrieval/explain/repair/retention generation can never
+   * overlap this one. */
+  async function handleExplainOrRepair(kind, decision, state, target, paragraphIndex) {
+    const el = target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
+    const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
+    if (!text) return false;
+
+    if (!automaticInterventionGuard.tryAcquire()) return false;
+    try {
+      const identity = computeIdentity(text);
+      const mode = kind === 'repair' ? 'repair' : 'explain_more';
+      const generated = await fetchSummary(text, mode);
+      if (!generated) return false;
+
+      let anchorRect = null;
+      try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
+      if (el) highlightElement(el, 4000);
+
+      // Step 5: same reuse pattern as handleAsk — this decision's own
+      // interventionId, minted by intervention-policy.js at the moment the
+      // explain/repair decision was made, never regenerated here.
+      const interventionId = decision.interventionId;
+      const shown = questionCard.showExplanation(kind, generated, {
+        evidence: decision.evidence,
+        anchorRect,
+        paragraphKey: identity.paragraphKey,
+        knowledgeUnitId: identity.knowledgeUnitId,
+        interventionId,
+      });
+      if (shown) {
+        // Step 12: same intervention-evidence contract as handleAsk, same
+        // wire-level type 'ask' — interventions.type's own CHECK constraint
+        // (alcoiaServer) has no separate 'explain'/'repair' value, and this
+        // item's own §12 is explicit that reporting stays additive-or-
+        // reused rather than inventing a new type. The retrieve/explain/
+        // repair distinction lives in which generation mode produced the
+        // content the reader actually saw, not in a new reporting field.
+        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text);
+      } else {
+        diagLog.log('questions', `generated_not_presented action=${decision.action} policyAction=${decision.policyAction} reason=${decision.reason}`);
+      }
+      return shown;
+    } finally {
+      automaticInterventionGuard.release();
+    }
+  }
+
   /* Intelligence-architecture audit, step 7 -- a due retention item becomes
    * an actual interruption only if it matches a paragraph the reader is
    * ALREADY reading (never reconstructed from the hash -- see retention.js's
@@ -1029,6 +1169,13 @@ export async function createHost(deps) {
         knowledgeUnitId: identity.knowledgeUnitId,
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
         interventionId: decision.interventionId,
+        // Step 29: the one badge-level cue that distinguishes "you've seen
+        // this before" from an ordinary fresh question — see question-
+        // card.js's own context doc comment for why the evidence line
+        // alone wasn't a reliable enough signal on its own. Plain,
+        // non-jargon wording — never "retention"/"knowledge state"/
+        // "spaced repetition", none of which a reader should ever see.
+        badge: 'from earlier',
       });
       // "Budget spent only on yes" — the same rule orchestrator.js's own
       // comment states for handleAsk's path, applied here directly since
@@ -1044,6 +1191,12 @@ export async function createHost(deps) {
         // knowledgeUnitId (duplicate content at a different position).
         dueKnowledgeUnits.delete(identity.knowledgeUnitId);
         focusKnowledgeUnits.delete(identity.knowledgeUnitId);
+        // Step 27: also remembered past this single delete, since
+        // refreshRetentionDue() can otherwise resurrect this exact entry
+        // from a still-stale server response before this presentation's own
+        // outcome has had a chance to advance/regress it -- see that
+        // function's own comment above for the full race.
+        presentedRetentionUnits.add(identity.knowledgeUnitId);
       } else {
         // Step 12A: same "generated but not presented" diagnostic as
         // handleAsk — see that function's own comment for the exact
@@ -1143,6 +1296,17 @@ export async function createHost(deps) {
         return true;
       }
       if (decision.action === 'ask') {
+        // Learning Intelligence step 24: decision.action stays 'ask' for
+        // every policyAction that renders through the question-card shell
+        // (Step 23's own design — see intervention-policy.js's POLICY_ACTIONS
+        // header), so policyAction is what actually picks the generation
+        // path here. 'explain'/'repair' are genuinely different generation
+        // behavior (see handleExplainOrRepair's own header); anything else
+        // ('retrieve', or an older/unset policyAction for backward
+        // compatibility) keeps the existing retrieval-question path.
+        if (decision.policyAction === 'explain' || decision.policyAction === 'repair') {
+          return await handleExplainOrRepair(decision.policyAction, decision, state, target, paragraphIndex);
+        }
         return await handleAsk(decision, state, target, paragraphIndex);
       }
       return false;
@@ -1167,6 +1331,12 @@ export async function createHost(deps) {
     // Item DC-2 follow-up — same top-level exposure, same "always safe to
     // call unconditionally" reason as submitKinematics just above.
     reportExplanationEvent,
+    // Step 27 — owned here (the timer is created here), so the ability to
+    // stop it belongs here too, the same "unreachable otherwise" reasoning
+    // orchestrator.js's own stop() already states for its idleTimer. Not
+    // called anywhere today — the content script lives as long as the
+    // page, same as that one.
+    stopRetentionRefresh,
     fetchSummary,
     fetchQuestions,
     fetchGrading,
