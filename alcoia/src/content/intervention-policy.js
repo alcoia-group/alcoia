@@ -482,11 +482,15 @@ export function createInterventionPolicy(config = {}) {
       return deny('already interrupted on this paragraph');
     }
 
+    // ctx.kind === 'focus': an instructor-marked important paragraph of an assigned reading. Same
+    // budget and gates as a due item; only the label differs. The evidence line is generic on
+    // purpose: the student is told a focus was set, never what the instructor wrote.
+    const isFocus = ctx.kind === 'focus';
     return {
       allow: true,
-      action: 'retention',
-      reason: 'retention item due',
-      evidence: ['Time to check whether this has stuck.'],
+      action: isFocus ? 'focus' : 'retention',
+      reason: isFocus ? 'instructor-marked part of this reading' : 'retention item due',
+      evidence: [isFocus ? 'This part of the reading is worth checking.' : 'Time to check whether this has stuck.'],
       paragraphKey: key,
       wasExplorationSample: false,
       interventionId: generateId(now, random),
