@@ -1370,6 +1370,81 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
   });
 });
 
+/* Teaching Intent on inline interventions (assigned readings only). The server sends hashes of
+ * the paragraphs an instructor marked important; the host asks about one only through the same
+ * policy and guard as a due review, as an ordinary 'ask', never while the reader is struggling
+ * or drifting, and never when there is no assignment. */
+describe('teaching focus (instructor Teaching Intent on assigned readings)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const FOCUS_URL = `${ASSIGNMENTS_URL}/assign-42/teaching-focus`;
+  const TEXT = 'An instructor focus paragraph, long enough to clear fetchQuestions\' own 120-character floor for this teaching focus integration test.';
+
+  const deps = (overrides = {}) => baseDeps({
+    assignmentId: 'assign-42',
+    getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+    ...overrides,
+  });
+  beforeEach(() => {
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL });
+    document.body.innerHTML = '';
+  });
+  async function unitId(text) { return (await import('../alcoia/src/content/signals/knowledge-unit.js')).computeKnowledgeUnitId(text); }
+  function stubQuestions() {
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Still there?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'focus span' }] } });
+  }
+  const proxy = (calls, unitIds) => vi.fn((url, options) => {
+    calls.push({ url, options });
+    if (url === FOCUS_URL) return { ok: true, status: 200, data: { unitIds } };
+    return { ok: true, status: 200, data: { candidates: [], recorded: true } };
+  });
+  async function setup(unitIds, overrides) {
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxy(calls, unitIds));
+    const created = await createHost(deps(overrides));
+    const policy = (await import('../alcoia/src/content/intervention-policy.js')).createInterventionPolicy({});
+    created.setOrchestrator({ interventionPolicy: policy });
+    return { ...created, calls };
+  }
+
+  it('asks about a focus paragraph, reported as an ordinary ask with no instructor wording sent', async () => {
+    const id = await unitId(TEXT);
+    const { host, calls } = await setup([id]);
+    host.onParagraphRead(TEXT, 5000, 2);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
+    const body = JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body);
+    expect(body.type).toBe('ask');
+    expect(body.knowledge_unit_id).toBe(id);
+  });
+
+  it('does nothing for a paragraph that is not in the focus list', async () => {
+    const { host, calls } = await setup(['k_other']);
+    host.onParagraphRead(TEXT, 5000, 2);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
+  });
+
+  it.each(['struggling', 'drifting'])('adds no friction: skips the focus while the reader is %s', async (state) => {
+    const id = await unitId(TEXT);
+    const { host } = await setup([id]);
+    host.setCogState(state);
+    host.onParagraphRead(TEXT, 5000, 2);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+  });
+
+  it('never even asks the server without an assignment (ordinary pages)', async () => {
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxy(calls, []));
+    await createHost(baseDeps({ assignmentId: null }));
+    expect(calls.some((c) => c.url.endsWith('/teaching-focus'))).toBe(false);
+  });
+});
+
 /* Intelligence-architecture audit, step 7 — retention scheduling. Same
  * assignmentId+getSession gate as every other reporting manager above,
  * plus KNOWLEDGE_STATE_DUE_URL stubbed into ALCOIA_CONFIG so
@@ -2598,7 +2673,10 @@ describe('reportExplanationEvent (item DC-2 follow-up)', () => {
     const { reportExplanationEvent } = await createHost(assignmentDeps());
     reportExplanationEvent('equation');
 
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    // Session-start GETs (due list, teaching focus) share this fetch; only the POST is under test.
+    const posts = () => fetchImpl.mock.calls.filter((c) => c[1]?.method === 'POST');
+    await vi.waitFor(() => expect(posts()).toHaveLength(1));
+    seenUrl = posts()[0][0]; seenInit = posts()[0][1];
     expect(seenUrl).toBe(EXPLANATION_EVENTS_URL);
     expect(JSON.parse(seenInit.body)).toEqual({ selectionType: 'equation' });
     expect(seenInit.headers.Authorization).toBe('Bearer tok-1');

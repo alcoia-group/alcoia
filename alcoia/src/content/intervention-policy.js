@@ -753,17 +753,19 @@ export function createInterventionPolicy(config = {}) {
       return deny('already interrupted on this paragraph');
     }
 
+    // ctx.kind === 'focus': an instructor-marked important paragraph of an assigned reading. Same
+    // budget and gates as a due item; only the label differs. The evidence line is generic on
+    // purpose: the student is told a focus was set, never what the instructor wrote.
+    const isFocus = ctx.kind === 'focus';
     return {
       allow: true,
-      action: 'retention',
+      action: isFocus ? 'focus' : 'retention',
       // Step 23: this is the DELAYED_RETRIEVE outcome in the new
-      // vocabulary — see POLICY_ACTIONS' own header for why "delayed"
-      // describes only when the underlying knowledge became due, never how
-      // loosely the interruption itself is gated once it is (it is gated
-      // identically to every immediate candidate, above).
+      // vocabulary (see POLICY_ACTIONS' own header). A focus question
+      // spends the same budget and gates, so it maps to the same outcome.
       policyAction: POLICY_ACTIONS.DELAYED_RETRIEVE,
-      reason: 'retention item due',
-      evidence: ['Time to check whether this has stuck.'],
+      reason: isFocus ? 'instructor-marked part of this reading' : 'retention item due',
+      evidence: [isFocus ? 'This part of the reading is worth checking.' : 'Time to check whether this has stuck.'],
       paragraphKey: key,
       wasExplorationSample: false,
       interventionId: generateId(now, random),
