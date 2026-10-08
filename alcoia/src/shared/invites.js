@@ -23,7 +23,7 @@
  *
  * A second gap, same root cause: there is no "list my seats" endpoint
  * either. What this file stores locally (src/popup/join-class.js's own
- * sra_class_membership key) after a successful accept is the ONLY record
+ * sra_class_memberships array) after a successful accept is the ONLY record
  * this extension has of which seat to release later — if that storage is
  * ever cleared without the reader also visiting "Leave this class" first,
  * the account's entitlement stays correctly granted server-side (it is

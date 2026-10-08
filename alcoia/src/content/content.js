@@ -254,7 +254,7 @@ async function boot() {
   });
   const {
     fetchSummary, callBackend,
-    runQuiz, runSessionRecall, startSnooze, snoozeControl, SNOOZE_OPTIONS,
+    runQuiz, runSessionRecall, snoozeControl,
     sessionRecall, responseSignals, sessionTracker,
     comprehensionMonitor, setPdfHandler, setPptxHandler, getCogState,
     getPrevParagraphText, setOrchestrator,
@@ -1452,29 +1452,6 @@ async function boot() {
           sendResponse({ status: 'ok', active: until > Date.now(), until });
         } catch (e) {
           sendResponse({ status: 'ok', active: false, until: 0 });
-        }
-      })();
-      return true;
-    }
-    if (msg.action === 'snoozeReminders') {
-      // From the popup — the card's own snooze control calls startSnooze()
-      // directly in the same page. popup.js sends only an option id, not a
-      // computed duration: the duration math (SNOOZE_OPTIONS, "rest of
-      // today") stays canonical in snooze.js and is resolved here, the same
-      // place question-card.js resolves it, rather than a second copy
-      // running in the popup's own timezone/clock context. No "current
-      // card" to dismiss here, so the dismissal for item 10's backoff is
-      // recorded explicitly instead of riding along on question-card.js's
-      // dismiss() path.
-      (async () => {
-        try {
-          const opt = SNOOZE_OPTIONS.find((o) => o.id === msg.optionId);
-          if (!opt) { sendResponse({ status: 'error' }); return; }
-          const until = await startSnooze(opt.durationMs(Date.now()), opt.label);
-          try { orchestrator.interventionPolicy.recordDismissal(); } catch (e) {}
-          sendResponse({ status: 'ok', until });
-        } catch (e) {
-          sendResponse({ status: 'error' });
         }
       })();
       return true;
