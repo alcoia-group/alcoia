@@ -439,8 +439,11 @@ export async function createHost(deps) {
   const snoozeModule = await loadModule('src/content/snooze.js');
   const snoozeControl = snoozeModule.createSnoozeControl();
 
-  /* Shared by the card's own snooze control and the popup's snoozeReminders
-   * message handler (still in content.js). */
+  /* The card's own snooze control (onSnooze, below). The popup's old
+   * "Pause" button used to reach this too via a snoozeReminders message
+   * handler in content.js — removed along with the button (the master
+   * on/off switch is the popup's own equivalent now), so this is reached
+   * only from in-page UI today. */
   async function startSnooze(durationMs, label) {
     const until = await snoozeControl.snooze(durationMs);
     showStatusToast(`Snoozed${label ? ' for ' + label : ''}. Reminders paused.`);
@@ -1319,12 +1322,12 @@ export async function createHost(deps) {
     // to submit one without the standalone card (none does today).
     showSelfReportCard,
     reportSelfState,
-    startSnooze,
+    // startSnooze/SNOOZE_OPTIONS used to also be exposed here for the
+    // popup's old "Pause" button (a remote snoozeReminders message) —
+    // removed along with that button; the card's own snooze control
+    // (onSnooze, above) reaches startSnooze directly via closure, with no
+    // need to export it.
     snoozeControl,
-    // Popup-triggered snooze (msg.action === 'snoozeReminders') sends only an
-    // option id — the duration math stays canonical in snooze.js, resolved
-    // from this same list rather than a second copy in content.js.
-    SNOOZE_OPTIONS: snoozeModule.SNOOZE_OPTIONS,
     sessionRecall,
     // The receipt (content.js's own manual, Alt+I feature) reads
     // responseSignals.stats()/.history() directly — not part of the

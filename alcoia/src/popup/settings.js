@@ -62,7 +62,7 @@ const DEFAULTS = {
   sra_pin_default: false, sra_debug: false, sra_enabled: true,
   sra_comprehension: true,
   sra_dyslexia: false, sra_dyslexia_color: 'rgba(255,243,180,0.12)',
-  sra_dark_mode: false, sra_active_persona: '',
+  sra_dark_mode: false,
   sra_pdf_takeover: true,
   sra_web_pdf_takeover: false,
 };
@@ -88,11 +88,6 @@ function paint(res) {
   debugToggle.checked         = !!res.sra_debug;
   pdfTakeoverToggle.checked   = res.sra_pdf_takeover !== false;
   webPdfTakeoverToggle.checked = !!res.sra_web_pdf_takeover;
-
-  if (res.sra_active_persona) {
-    document.querySelectorAll('.mode-btn').forEach((b) =>
-      b.classList.toggle('active', b.dataset.persona === res.sra_active_persona));
-  }
 }
 
 chrome.storage.local.get(DEFAULTS, paint);
@@ -218,37 +213,6 @@ highlightPersistToggle.addEventListener('change', () => {
 [autohideTimeout, dyslexiaColorSelect]
   .forEach((el) => el.addEventListener('change', saveAndBroadcast));
 
-// ── Reading mode presets — ported from popup.js's MODES/applyMode() ───────
-const MODES = {
-  research: { sra_selection: true,  sra_highlight_para: true,  sra_comprehension: true,  sra_autohide: false, sra_pin_default: true },
-  study:    { sra_selection: true,  sra_highlight_para: true,  sra_comprehension: true,  sra_autohide: true,  sra_autohide_timeout: 10, sra_pin_default: false },
-  casual:   { sra_selection: true,  sra_highlight_para: false, sra_comprehension: false, sra_autohide: true,  sra_autohide_timeout: 6,  sra_pin_default: false },
-  speed:    { sra_selection: false, sra_highlight_para: false, sra_comprehension: false, sra_autohide: true,  sra_autohide_timeout: 4,  sra_pin_default: false },
-};
-
-function applyMode(key) {
-  const p = MODES[key];
-  if (!p) return;
-  chrome.storage.local.set({ ...p, sra_active_persona: key });
-
-  selToggle.checked           = !!p.sra_selection;
-  highlightToggle.checked     = !!p.sra_highlight_para;
-  comprehensionToggle.checked = !!p.sra_comprehension;
-  autohideToggle.checked      = !!p.sra_autohide;
-  pinDefaultToggle.checked    = !!p.sra_pin_default;
-  if (p.sra_autohide_timeout) autohideTimeout.value = p.sra_autohide_timeout;
-  timeoutRow.style.display = p.sra_autohide ? 'flex' : 'none';
-  syncPinAutohideExclusivity();
-
-  document.querySelectorAll('.mode-btn').forEach((b) =>
-    b.classList.toggle('active', b.dataset.persona === key));
-
-  saveAndBroadcast();
-}
-
-document.querySelectorAll('.mode-btn').forEach((btn) =>
-  btn.addEventListener('click', () => applyMode(btn.dataset.persona)));
-
 // ── Account (item S3 pattern, reused not reimplemented) ───────────────────
 const session = createSessionManager();
 
@@ -283,4 +247,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // ── Diagnostics link ────────────────────────────────────────────────────
 $('diagnosticsBtn').addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/diagnostics.html') });
+});
+
+// ── Export link — moved here from the popup's own home-screen row ──────
+$('exportBtn').addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/export.html') });
 });

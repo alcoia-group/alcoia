@@ -131,3 +131,57 @@ describe('popup.js\'s Account section renders the real email end to end', () => 
     expect(chrome._store.sra_session).toBeUndefined();
   });
 });
+
+describe('the upgrade banner only ever appears once signed in (popup declutter)', () => {
+  const ENTITLEMENTS_URL = 'https://api.alcoia.invalid/api/entitlements';
+
+  it('signed out: the banner stays hidden regardless of entitlement — there is no entitlement to speak of yet', async () => {
+    loadPopupBody();
+    vi.stubGlobal('chrome', fakeChrome({})); // no sra_session
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize', ENTITLEMENTS_URL });
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+
+    await importFreshPopupJs();
+    await vi.waitFor(() => expect(document.getElementById('accountSignedOut').hidden).toBe(false));
+
+    expect(document.getElementById('upgradeBanner').hidden).toBe(true);
+    // Never even asked the server — there is no account to resolve an
+    // entitlement for.
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('signed in, free: the banner shows', async () => {
+    loadPopupBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_session: { token: 't', email: 'reader@example.com', expiresAt: Date.now() + 999_999 },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize', ENTITLEMENTS_URL });
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (url.includes(ENTITLEMENTS_URL)) return { ok: true, json: async () => ({ tier: 'free', features: [], expires: null }) };
+      throw new Error('unexpected fetch to ' + url);
+    }));
+
+    await importFreshPopupJs();
+    await vi.waitFor(() => expect(document.getElementById('accountSignedIn').hidden).toBe(false));
+    await vi.waitFor(() => expect(document.getElementById('upgradeBanner').hidden).toBe(false));
+  });
+
+  it('signed in, already entitled: the banner stays hidden', async () => {
+    loadPopupBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_session: { token: 't', email: 'reader@example.com', expiresAt: Date.now() + 999_999 },
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.alcoia.invalid/api/summarize', ENTITLEMENTS_URL });
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (url.includes(ENTITLEMENTS_URL)) return { ok: true, json: async () => ({ tier: 'reader', features: ['own_documents'], expires: null }) };
+      throw new Error('unexpected fetch to ' + url);
+    }));
+
+    await importFreshPopupJs();
+    await vi.waitFor(() => expect(document.getElementById('accountSignedIn').hidden).toBe(false));
+    // Give the entitlement fetch a tick to resolve, then confirm it stayed hidden.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(document.getElementById('upgradeBanner').hidden).toBe(true);
+  });
+});

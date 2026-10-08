@@ -18,7 +18,13 @@
  * the "Focus ruler" -> "Reading guide" rename this item originally pinned,
  * and "Read aloud" in the unchanged-labels list below, were removed along
  * with the feature itself rather than left asserting labels that no
- * longer exist. */
+ * longer exist.
+ *
+ * Popup declutter: the Reading mode presets (MODES/applyMode()) were
+ * removed from settings.js entirely, not merely reorganized — the "mode
+ * presets re-sync exclusivity" test this file used to carry was removed
+ * along with them rather than left asserting a function that no longer
+ * exists. */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -90,15 +96,5 @@ describe('the pin/auto-dismiss contradiction cannot be entered (item 34)', () =>
     expect(settingsJs).toMatch(/chrome\.storage\.local\.get\(DEFAULTS,\s*paint\)/);
     const paintBlock = settingsJs.slice(settingsJs.indexOf('function paint('), settingsJs.indexOf('\nchrome.storage.local.get(DEFAULTS'));
     expect(paintBlock).toMatch(/syncPinAutohideExclusivity\(\)/);
-  });
-
-  it('mode presets re-sync exclusivity too, and no preset already contradicts itself', () => {
-    expect(settingsJs).toMatch(/function applyMode[\s\S]{0,800}syncPinAutohideExclusivity\(\)/);
-    const modesBlock = settingsJs.match(/const MODES = \{[\s\S]*?\n  \};/)?.[0] || '';
-    for (const line of modesBlock.split('\n').filter((l) => l.includes('sra_pin_default'))) {
-      const pinOn      = /sra_pin_default:\s*true/.test(line);
-      const autohideOn = /sra_autohide:\s*true/.test(line);
-      expect(pinOn && autohideOn, `a mode preset should not set both: ${line.trim()}`).toBe(false);
-    }
   });
 });

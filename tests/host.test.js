@@ -2931,7 +2931,7 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
       // src/ai/summary-prompts.js TASKS keys) without importing across the
       // repo boundary — this repo has no dependency on alcoiaServer's
       // source tree.
-      const KNOWN_SUMMARIZE_MODES = ['tldr', 'explain_more', 'simplify', 'explain_code', 'define_word', 'page_summary', 'image_context', 'explain_equation', 'repair'];
+      const KNOWN_SUMMARIZE_MODES = ['tldr', 'explain_more', 'simplify', 'explain_code', 'define_word', 'image_context', 'explain_equation', 'repair'];
       expect(KNOWN_SUMMARIZE_MODES).toContain(explainMore);
       expect(KNOWN_SUMMARIZE_MODES).toContain(repair);
     });

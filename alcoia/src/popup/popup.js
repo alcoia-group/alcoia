@@ -129,20 +129,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function wireReadingActions(tab) {
-    // Pause: reuses the existing persistent snooze mechanism (snooze.js /
-    // content.js's snoozeReminders), relabeled. Not a true in-memory
-    // session-only pause — that concept does not exist in this codebase
-    // today, and building one meant a new content.js message handler,
-    // which this pass does not touch. Flagged in the task report.
-    const pauseBtn = $('pauseBtn');
-    pauseBtn?.addEventListener('click', () => {
-      pauseBtn.disabled = true;
-      sendToTab(tab.id, { action: 'snoozeReminders', optionId: '15m' }, () => {
-        pauseBtn.disabled = false;
-        window.close();
-      });
-    });
-
     // Self-report: the on-page button (ui-controller.js's
     // ensureSelfReportTrigger) is the real affordance; content.js exposes no
     // chrome.runtime.onMessage handler to fire the card remotely (only the
@@ -201,6 +187,11 @@ document.addEventListener('DOMContentLoaded', () => {
   async function refreshUpgradeBanner() {
     const banner = $('upgradeBanner');
     if (!banner) return;
+    // Upgrade only ever makes sense once signed in — a signed-out visitor
+    // has nothing to upgrade yet (no account to attach a plan to), so the
+    // banner stays hidden for them regardless of entitlement state.
+    const current = await session.getSession();
+    if (!current) { banner.hidden = true; return; }
     // Reuses entitlements.js's hasFeature() — never a bare tier read
     // (CLAUDE.md: "the client never decides entitlement"; entitlements.js's
     // own header: "everything goes through hasFeature()"). 'own_documents'
@@ -212,8 +203,6 @@ document.addEventListener('DOMContentLoaded', () => {
   openPage('assignmentsBtn',   'src/popup/assignments.html');
   openPage('notesBtn',         'src/popup/notes.html');
   openPage('sessionReportBtn', 'src/popup/session-report.html');
-  openPage('exportBtn',        'src/popup/export.html');
-  openPage('joinClassBtn',     'src/popup/join-class.html');
   openPage('upgradeBtn',       'src/popup/upgrade.html');
 
   // Quiz (restored — see this file's git history / the 15a-1 report for

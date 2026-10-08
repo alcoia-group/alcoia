@@ -64,7 +64,7 @@
        codebase (no real usage-count data source), so nothing is drawn
        here rather than inventing one. */
     .reading-actions {
-      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
       margin: 18px 0 0;
       padding: 10px 12px;
       border-top: 1px solid var(--border);
@@ -180,7 +180,6 @@
     </div>
 
     <div class="reading-actions">
-      <button class="btn btn-ghost" id="pauseBtn" title="Pause reminders for 15 minutes. Reading detection keeps running.">Pause</button>
       <button class="btn btn-ghost" id="selfReportBtn" title="Bring you back to the page — the self-report button there (or Alt+C) is always available.">Self-report</button>
       <button class="btn btn-ghost" id="settingsBtnReading">⚙ Settings</button>
     </div>
@@ -236,12 +235,14 @@
          dropped. (The whole-page summarization feature this comment used
          to also list here — a `pageSummary` runtime message with no
          sender anywhere in this codebase — was dead code and has been
-         removed; see CLAUDE.md.) -->
+         removed; see CLAUDE.md. Export moved into Settings, and "Join a
+         class" moved into the Assignments page itself — see CLAUDE.md's
+         popup-declutter entry — so this row is Session report alone now,
+         not removed outright since its own eventual home, a Workspace
+         concept, is still an open question.) -->
     <div class="home-links">
       <div class="btn-row">
         <button class="btn btn-ghost" id="sessionReportBtn">Session report</button>
-        <button class="btn btn-ghost" id="exportBtn">Export</button>
-        <button class="btn btn-ghost" id="joinClassBtn">Join a class</button>
       </div>
     </div>
 
