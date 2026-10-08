@@ -8,7 +8,6 @@
    - Forces left-alignment (justified text creates irregular word gaps that
      are harder for dyslexic readers to track)
    - Optional colour overlay (some readers benefit from a warm tint over white)
-   - Bionic reading: bolds the first ~45% of each word so the eye anchors quickly
 
    Classifier threshold note: dyslexic readers naturally have higher regression
    rates and longer fixation times. content.js scales regression_rate tolerance
@@ -17,7 +16,6 @@
 
 const CSS_ID     = 'sra-dyslexia-css';
 const OVERLAY_ID = 'sra-dyslexia-overlay';
-const BIONIC_ATTR = 'data-sra-bionic';
 
 // ── CSS injection ─────────────────────────────────────────────────────────────
 export function applyDyslexiaCSS(overlayColor = '') {
@@ -63,60 +61,6 @@ export function removeDyslexiaCSS() {
 
 function removeDyslexiaOverlay() {
   document.getElementById(OVERLAY_ID)?.remove();
-}
-
-// ── Bionic reading ────────────────────────────────────────────────────────────
-// Bolds the first 45% of each word. Applied to a specific element, not the
-// whole page (too disruptive on navigation/UI elements).
-export function applyBionicReading(el) {
-  if (!el || el.dataset[BIONIC_ATTR]) return;
-
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => {
-      // Skip script/style/already-bionic nodes
-      const tag = n.parentElement?.tagName?.toLowerCase();
-      if (tag === 'script' || tag === 'style' || tag === 'code' || tag === 'pre') {
-        return NodeFilter.FILTER_REJECT;
-      }
-      return n.textContent.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
-    },
-  });
-
-  const nodes = [];
-  let node;
-  while ((node = walker.nextNode())) nodes.push(node);
-
-  nodes.forEach(textNode => {
-    const parts = textNode.textContent.split(/(\s+)/);
-    const frag  = document.createDocumentFragment();
-    parts.forEach(chunk => {
-      if (!chunk.trim()) {
-        frag.appendChild(document.createTextNode(chunk));
-        return;
-      }
-      const boldLen = Math.max(1, Math.ceil(chunk.length * 0.45));
-      const b = document.createElement('b');
-      b.textContent = chunk.slice(0, boldLen);
-      b.style.fontWeight = '800';
-      frag.appendChild(b);
-      frag.appendChild(document.createTextNode(chunk.slice(boldLen)));
-    });
-    const wrapper = document.createElement('span');
-    wrapper.dataset.sraBionicWrapped = '1';
-    wrapper.appendChild(frag);
-    textNode.parentNode.replaceChild(wrapper, textNode);
-  });
-
-  el.dataset[BIONIC_ATTR] = '1';
-}
-
-export function removeBionicReading(el) {
-  if (!el) return;
-  // Unwrap all bionic spans, restoring plain text
-  el.querySelectorAll('[data-sra-bionic-wrapped]').forEach(span => {
-    span.replaceWith(document.createTextNode(span.textContent));
-  });
-  delete el.dataset[BIONIC_ATTR];
 }
 
 // ── Classifier threshold patch ────────────────────────────────────────────────

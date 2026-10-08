@@ -9,10 +9,16 @@
  * enter the contradictory state in the first place.
  *
  * Item 15a-1: every toggle these tests cover (comprehension, pin/autohide,
- * focus ruler, highlight summarise) moved from popup.html/popup.js to the
- * new settings.html/settings.js — the popup itself now only shows the
- * master on/off switch. Re-pointed at the new files; every assertion below
- * is unchanged from what it checked in popup.html/popup.js. */
+ * highlight summarise) moved from popup.html/popup.js to the new
+ * settings.html/settings.js — the popup itself now only shows the master
+ * on/off switch. Re-pointed at the new files; every assertion below is
+ * unchanged from what it checked in popup.html/popup.js.
+ *
+ * TTS/focus ruler/bionic reading removed from the roadmap (see CLAUDE.md) —
+ * the "Focus ruler" -> "Reading guide" rename this item originally pinned,
+ * and "Read aloud" in the unchanged-labels list below, were removed along
+ * with the feature itself rather than left asserting labels that no
+ * longer exist. */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,7 +33,6 @@ const RENAMES = [
   ['Show the passage', 'Outline the paragraph'],
   ['Pin by default', 'Keep cards until I close them'],
   ['Auto-dismiss', 'Clear cards automatically'],
-  ['Focus ruler', 'Reading guide'],
   ['Summarise on highlight', 'Save an explanation with each highlight'],
 ];
 
@@ -50,14 +55,14 @@ describe('popup label renames (item 34)', () => {
   it('does not change any storage key', () => {
     for (const key of [
       'sra_comprehension', 'sra_selection', 'sra_highlight_para',
-      'sra_pin_default', 'sra_autohide', 'sra_focus_ruler', 'sra_highlight_summarize',
+      'sra_pin_default', 'sra_autohide', 'sra_highlight_summarize',
     ]) {
       expect(settingsHtml + read('alcoia/src/popup/settings.js'), `${key} should still be referenced`).toContain(key);
     }
   });
 
   it('unchanged labels stay unchanged', () => {
-    for (const label of ['Highlight colour', 'Read aloud', 'Dark mode']) {
+    for (const label of ['Highlight colour', 'Dark mode']) {
       expect(settingsHtml).toContain(label);
     }
   });

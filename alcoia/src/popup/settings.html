@@ -240,25 +240,12 @@
   </div>
 
   <!-- ════════════════════ Reading aids ════════════════════
-       Also not a task-suggested group — flagged: TTS, focus ruler,
-       dyslexia support, and dark mode had no suggested home either. -->
+       Also not a task-suggested group — flagged: dyslexia support and
+       dark mode had no suggested home either. TTS/focus ruler/bionic
+       reading removed from the roadmap; see CLAUDE.md. -->
   <div class="settings-card">
     <div class="settings-group-title">Reading aids</div>
     <div class="toggle-grid">
-      <label class="toggle-cell" for="ttsToggle">
-        <div class="toggle-cell-top">
-          <span class="toggle-cell-name">Read aloud</span>
-          <label class="pill"><input type="checkbox" id="ttsToggle"><span class="pill-track"></span></label>
-        </div>
-        <span class="toggle-cell-desc">Speak the passage · Alt+T</span>
-      </label>
-      <label class="toggle-cell" for="focusRulerToggle">
-        <div class="toggle-cell-top">
-          <span class="toggle-cell-name">Reading guide</span>
-          <label class="pill"><input type="checkbox" id="focusRulerToggle"><span class="pill-track"></span></label>
-        </div>
-        <span class="toggle-cell-desc">Dim everything but the current line · Alt+F</span>
-      </label>
       <label class="toggle-cell" for="darkModeToggle">
         <div class="toggle-cell-top">
           <span class="toggle-cell-name">Dark mode</span>
@@ -278,13 +265,6 @@
       <label class="pill"><input type="checkbox" id="dyslexiaToggle"><span class="pill-track"></span></label>
     </label>
     <div id="dyslexiaOptions">
-      <label class="toggle-row" for="bionicToggle">
-        <div class="toggle-info">
-          <span class="toggle-name">Bionic reading</span>
-          <span class="toggle-desc">Bold the first half of each word to lead the eye</span>
-        </div>
-        <label class="pill"><input type="checkbox" id="bionicToggle"><span class="pill-track"></span></label>
-      </label>
       <div class="field-row" style="padding:6px 2px 2px">
         <span class="field-label">Colour overlay</span>
         <select id="dyslexiaColorSelect" class="field-input">
@@ -307,11 +287,11 @@
     <div class="mode-grid">
       <button class="mode-btn" data-persona="research">
         <span class="m-name">Research</span>
-        <span class="m-desc">Cards stay pinned · focus ruler</span>
+        <span class="m-desc">Cards stay pinned</span>
       </button>
       <button class="mode-btn" data-persona="study">
         <span class="m-name">Study</span>
-        <span class="m-desc">Read aloud · cards clear after 10s</span>
+        <span class="m-desc">Cards clear after 10s</span>
       </button>
       <button class="mode-btn" data-persona="casual">
         <span class="m-name">Casual</span>
@@ -319,7 +299,7 @@
       </button>
       <button class="mode-btn" data-persona="speed">
         <span class="m-name">Speed</span>
-        <span class="m-desc">Focus ruler · cards clear after 4s</span>
+        <span class="m-desc">Cards clear after 4s</span>
       </button>
     </div>
   </div>
@@ -466,8 +446,6 @@
     <div class="kbd-card">
       <div class="kbd-grid">
         <kbd>Alt+S</kbd><span class="kbd-desc">Explain the paragraph you are on</span>
-        <kbd>Alt+T</kbd><span class="kbd-desc">Read aloud</span>
-        <kbd>Alt+F</kbd><span class="kbd-desc">Focus ruler — dims all but the reading line</span>
         <kbd>Alt+M</kbd><span class="kbd-desc">Reading map sidebar</span>
         <kbd>Alt+R</kbd><span class="kbd-desc">Test my recall</span>
         <kbd>Alt+I</kbd><span class="kbd-desc">Reading receipt</span>

@@ -178,9 +178,6 @@ export async function createOrchestrator(deps) {
     host.setCogState(state.label);
     try { chrome.storage.local.set({ sra_current_state: state.label }); } catch (e) {}
     try { host.sessionTracker.recordState(state.label); } catch (e) {}
-    if (s().focusRulerEnabled) {
-      try { host.focusRuler.adaptToState(state.label); } catch (e) {}
-    }
 
     const currentParagraph = host.getCurrentParagraph();
     const currentEl = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
