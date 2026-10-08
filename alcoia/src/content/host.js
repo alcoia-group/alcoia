@@ -1,9 +1,9 @@
 /* host.js — the orchestrator's host, extracted from content.js (item 30a)
  *
- * orchestrator.js depends on a `host` object with 12 callbacks
+ * orchestrator.js depends on a `host` object with callbacks
  * (onIntervention, onParagraphRead, onQuizOfferEligible, onStruggle,
  * setCogState, setCurrentParagraph, setPrevParagraphText, getCurrentParagraph,
- * findParagraphAt, focusRuler, sessionTracker, log) plus a separate
+ * findParagraphAt, sessionTracker, log) plus a separate
  * `comprehensionMonitor` constructor argument. Those used to live inline in
  * content.js — a content script, which Chrome never injects into a
  * chrome-extension:// page, so the PDF/PPTX viewers (item 30c) could not
@@ -353,12 +353,10 @@ export async function createHost(deps) {
   }
 
   async function fetchSummary(text, mode = 'tldr', context = '') {
-    if (mode !== 'page_summary') {
-      const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
-      if (_summaryCache.has(cacheKey)) {
-        log(`Cache hit: ${mode}`);
-        return _summaryCache.get(cacheKey);
-      }
+    const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
+    if (_summaryCache.has(cacheKey)) {
+      log(`Cache hit: ${mode}`);
+      return _summaryCache.get(cacheKey);
     }
     if (!checkAiCallBudget('summarize', mode)) return null;
     try {
@@ -371,8 +369,7 @@ export async function createHost(deps) {
       const j = resp.data;
       if (!j) return null;
       const result = j.summary || j.result || null;
-      if (result && mode !== 'page_summary') {
-        const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
+      if (result) {
         _summaryCache.set(cacheKey, result);
         if (_summaryCache.size > 100) _summaryCache.delete(_summaryCache.keys().next().value);
       }
@@ -425,7 +422,7 @@ export async function createHost(deps) {
     log, warn,
   });
 
-  // ── comprehensionMonitor, sessionTracker, focusRuler ──────────────────
+  // ── comprehensionMonitor, sessionTracker ──────────────────────────────
   const compModule = await loadModule('src/content/comprehension-monitor.js');
   const comprehensionMonitor = compModule.createComprehensionMonitor({
     speedRatio:      0.30,
@@ -437,9 +434,6 @@ export async function createHost(deps) {
 
   const sessionModule = await loadModule('src/content/session-tracker.js');
   const sessionTracker = sessionModule.createSessionTracker();
-
-  const rulerModule = await loadModule('src/content/focus-ruler.js');
-  const focusRuler = rulerModule.createFocusRuler();
 
   // ── Snooze (item 18) ───────────────────────────────────────────────────
   const snoozeModule = await loadModule('src/content/snooze.js');
@@ -1206,10 +1200,9 @@ export async function createHost(deps) {
     return { type: 'dom', data: overlayUtils.getBlockAncestor(el) || el };
   }
 
-  // ── The 12-callback surface orchestrator.js requires ───────────────────
+  // ── The callback surface orchestrator.js requires ───────────────────
   const host = {
     sessionTracker,
-    focusRuler,
     log,
     findParagraphAt,
     getCurrentParagraph: () => currentParagraph,
@@ -1289,12 +1282,11 @@ export async function createHost(deps) {
     host,
     setOrchestrator,
     comprehensionMonitor,
-    // Same instances as host.sessionTracker/host.focusRuler — exposed at
-    // the top level too since content.js's own content-script-only manual
-    // paths (the receipt, Alt+F, the simulate/manual AI-trigger path) need
-    // them directly, not just through orchestrator.js's view of `host`.
+    // Same instance as host.sessionTracker — exposed at the top level too
+    // since content.js's own content-script-only manual paths (the
+    // receipt, the simulate/manual AI-trigger path) need it directly, not
+    // just through orchestrator.js's view of `host`.
     sessionTracker,
-    focusRuler,
     // Item DC-1a — content.js's/viewer.js's own beforeunload handler calls
     // this directly, the same top-level-exposure reason as sessionTracker
     // just above. Always safe to call unconditionally: a no-op unless this
@@ -1336,8 +1328,8 @@ export async function createHost(deps) {
     sessionRecall,
     // The receipt (content.js's own manual, Alt+I feature) reads
     // responseSignals.stats()/.history() directly — not part of the
-    // 12-callback contract, but responseSignals lives here since it feeds
-    // questionCard, which is host-owned.
+    // orchestrator callback contract, but responseSignals lives here since
+    // it feeds questionCard, which is host-owned.
     responseSignals,
     diagLog,
     installToken,
