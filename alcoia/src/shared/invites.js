@@ -6,7 +6,7 @@
  *
  * Every field name is copied from reading alcoiaServer directly, not
  * inferred:
- *   POST /api/invites/accept    { token } -> { classId, seatId, role }
+ *   POST /api/invites/accept    { token, acknowledged: true } -> { classId, seatId, role }
  *     (src/http/routes/invites.js)
  *   POST /api/seats/:id/release -> { released: true }
  *     (src/http/routes/seats.js)
@@ -42,8 +42,8 @@
  * successful ack is what mints one, the same "authenticates with no prior
  * session" shape session.js's own exchangeCode() already has for the
  * magic-link path. The response also has no seatId/role field at all
- * (unlike accept's), so a seat produced this way is stored locally with
- * both null — join-class.js's own "member" display never reads either,
+ * (unlike accept's) on an older server, so a seat produced that way is
+ * stored locally with both null — join-class.js's own "member" display never reads either,
  * only classId; the one thing that degrades is the existing "Leave this
  * class" button, which cannot release a seat it has no id for. That is a
  * real, honest consequence of the confirmed response shape, not
@@ -54,6 +54,7 @@ export function createInvitesManager(opts = {}) {
   const fetchImpl = opts.fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
   const getSession = opts.getSession;
   const acceptUrl = opts.acceptUrl;
+  const previewUrl = opts.previewUrl;
   const seatsUrl = opts.seatsUrl;
   const ltiAckUrl = opts.ltiAckUrl;
 
@@ -80,6 +81,35 @@ export function createInvitesManager(opts = {}) {
     }
   }
 
+  /* POST /api/invites/preview { token } -> { className, reportingMode, domain }.
+   * Public, no session. The join screen needs the class's reporting mode
+   * BEFORE it shows the notice, so the student is told the truth for this
+   * class (anonymous vs identified) rather than a fixed wording. Returns
+   * { ok: true, className, reportingMode } or { ok: false, error }. An
+   * unknown reportingMode is a failure: never guess which promise applies. */
+  async function previewInvite(rawLinkOrCode) {
+    const token = extractToken(rawLinkOrCode);
+    if (!token) return { ok: false, error: 'no_token' };
+    if (!previewUrl || !fetchImpl) return { ok: false, error: 'no_preview_url' };
+    try {
+      const resp = await fetchImpl(previewUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        return { ok: false, error: (data && typeof data.error === 'string' && data.error) || `status_${resp.status}` };
+      }
+      if (!data || (data.reportingMode !== 'anonymous' && data.reportingMode !== 'identified')) {
+        return { ok: false, error: 'malformed_response' };
+      }
+      return { ok: true, className: typeof data.className === 'string' ? data.className : '', reportingMode: data.reportingMode };
+    } catch (e) {
+      return { ok: false, error: 'network_error' };
+    }
+  }
+
   /* Returns { ok: true, classId, seatId, role } or { ok: false, error }.
    * `error` is the server's own code when one came back (invalid_invite,
    * invite_revoked, invite_expired, domain_mismatch, already_a_member,
@@ -100,7 +130,9 @@ export function createInvitesManager(opts = {}) {
       const resp = await fetchImpl(acceptUrl, {
         method: 'POST',
         headers: authHeaders(session.token),
-        body: JSON.stringify({ token }),
+        // The join screen shows the reporting notice before this is ever called
+        // (join-class.js), so the server may count the seat as taken up.
+        body: JSON.stringify({ token, acknowledged: true }),
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok) {
@@ -176,6 +208,8 @@ export function createInvitesManager(opts = {}) {
         ok: true,
         sessionToken: data.sessionToken,
         classId: data.classId,
+        seatId: typeof data.seatId === 'string' && data.seatId ? data.seatId : null,
+        role: typeof data.role === 'string' && data.role ? data.role : null,
         assignmentId: typeof data.assignmentId === 'string' ? data.assignmentId : null,
         redirectTo: typeof data.redirectTo === 'string' ? data.redirectTo : null,
       };
@@ -184,5 +218,5 @@ export function createInvitesManager(opts = {}) {
     }
   }
 
-  return { acceptInvite, releaseSeat, acknowledgeLtiDisclosure };
+  return { acceptInvite, previewInvite, releaseSeat, acknowledgeLtiDisclosure };
 }
