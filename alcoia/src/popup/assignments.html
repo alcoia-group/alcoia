@@ -47,6 +47,13 @@
       color: var(--wrong); font-size: 12px; line-height: 1.5;
     }
 
+    /* Always present, regardless of whether the list above loaded, is
+       empty, or errored (including "not signed in") — joining a class is
+       never gated on already having one, and a signed-out reader reaching
+       for it is routed through sign-in by join-class.html itself, the same
+       way it already handles a direct invite link. */
+    .assign-join-row { margin: 0 0 18px; }
+
     .assign-empty { text-align: center; padding: 24px 4px; color: var(--muted); font-size: 13px; }
     .assign-loading { text-align: center; padding: 24px 4px; color: var(--faint); font-size: 12.5px; }
 
@@ -98,6 +105,10 @@
     <p class="assign-sub">
       Readings your instructor has assigned, across every class you're currently in.
     </p>
+
+    <div class="assign-join-row btn-row">
+      <button class="btn btn-ghost" id="joinClassBtn">+ Join a class</button>
+    </div>
 
     <div class="assign-error" id="pageError" hidden></div>
     <div class="assign-loading" id="loadingState">Loading…</div>
