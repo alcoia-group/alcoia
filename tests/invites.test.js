@@ -27,7 +27,7 @@ describe('acceptInvite', () => {
     expect(result).toEqual({ ok: true, classId: 'class-1', seatId: 'seat-1', role: 'student' });
     expect(seenInit.method).toBe('POST');
     expect(seenInit.headers.Authorization).toBe('Bearer tok-1');
-    expect(JSON.parse(seenInit.body)).toEqual({ token: 'abc123code' });
+    expect(JSON.parse(seenInit.body)).toEqual({ token: 'abc123code', acknowledged: true });
   });
 
   it('a full link with ?token=... has the token extracted before sending', async () => {
@@ -39,7 +39,7 @@ describe('acceptInvite', () => {
     const m = createInvitesManager({ fetchImpl, acceptUrl: ACCEPT_URL, getSession: sessionOf('tok-1') });
 
     await m.acceptInvite('https://alcoia.app/join?token=xyz789&other=1');
-    expect(seenBody).toEqual({ token: 'xyz789' });
+    expect(seenBody).toEqual({ token: 'xyz789', acknowledged: true });
   });
 
   it('a full link with ?code=... (the other common name) also has it extracted', async () => {
@@ -51,7 +51,7 @@ describe('acceptInvite', () => {
     const m = createInvitesManager({ fetchImpl, acceptUrl: ACCEPT_URL, getSession: sessionOf('tok-1') });
 
     await m.acceptInvite('https://alcoia.app/join?code=qed456');
-    expect(seenBody).toEqual({ token: 'qed456' });
+    expect(seenBody).toEqual({ token: 'qed456', acknowledged: true });
   });
 
   it('an empty or whitespace-only input is rejected before any network call', async () => {
@@ -174,14 +174,14 @@ describe('acknowledgeLtiDisclosure', () => {
       seenInit = init;
       return {
         ok: true,
-        json: async () => ({ sessionToken: 'lti-sess-1', kind: 'lti', classId: 'class-1', assignmentId: 'assign-1', redirectTo: 'https://console.alcoia.invalid/read?classId=class-1' }),
+        json: async () => ({ sessionToken: 'lti-sess-1', kind: 'lti', classId: 'class-1', seatId: 'seat-1', role: 'student', assignmentId: 'assign-1', redirectTo: 'https://console.alcoia.invalid/read?classId=class-1' }),
       };
     });
     const m = createInvitesManager({ fetchImpl, ltiAckUrl: LTI_ACK_URL });
 
     const result = await m.acknowledgeLtiDisclosure('ack-code-1');
     expect(result).toEqual({
-      ok: true, sessionToken: 'lti-sess-1', classId: 'class-1', assignmentId: 'assign-1',
+      ok: true, sessionToken: 'lti-sess-1', classId: 'class-1', seatId: 'seat-1', role: 'student', assignmentId: 'assign-1',
       redirectTo: 'https://console.alcoia.invalid/read?classId=class-1',
     });
     expect(seenInit.method).toBe('POST');
@@ -196,7 +196,7 @@ describe('acknowledgeLtiDisclosure', () => {
     }));
     const m = createInvitesManager({ fetchImpl, ltiAckUrl: LTI_ACK_URL });
     expect(await m.acknowledgeLtiDisclosure('a')).toEqual({
-      ok: true, sessionToken: 's', classId: 'c', assignmentId: null, redirectTo: null,
+      ok: true, sessionToken: 's', classId: 'c', seatId: null, role: null, assignmentId: null, redirectTo: null,
     });
   });
 

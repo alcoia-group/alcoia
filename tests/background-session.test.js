@@ -237,14 +237,14 @@ describe('LTI launch handoff (item S6/E4 follow-up) — a second, independently 
 
   it('an already-acknowledged launch (sessionToken present, no disclosureRequired) stores the session and membership directly, opens no tab', async () => {
     const sendResponse = vi.fn();
-    const payload = { sessionToken: 'lti-sess-1', kind: 'lti', classId: 'class-2', assignmentId: 'assign-1', redirectTo: 'https://console.alcoia.invalid/read?classId=class-2' };
+    const payload = { sessionToken: 'lti-sess-1', kind: 'lti', classId: 'class-2', seatId: 'seat-7', role: 'student', assignmentId: 'assign-1', redirectTo: 'https://console.alcoia.invalid/read?classId=class-2' };
 
     capturedListener({ type: 'ltiLaunch', payload }, sender(LTI_READER_ORIGIN), sendResponse);
     await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
 
     expect(sendResponse).toHaveBeenCalledWith({ ok: true, disclosureRequired: false });
     expect(chrome.storage.local._store.sra_session).toEqual({ token: 'lti-sess-1', email: '', expiresAt: expect.any(Number) });
-    expect(chrome.storage.local._store.sra_class_memberships).toEqual([{ classId: 'class-2', seatId: null, role: null, joinedAt: expect.any(Number) }]);
+    expect(chrome.storage.local._store.sra_class_memberships).toEqual([{ classId: 'class-2', seatId: 'seat-7', role: 'student', joinedAt: expect.any(Number) }]);
     expect(chrome._tabsCreated).toEqual([]);
   });
 

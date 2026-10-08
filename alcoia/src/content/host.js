@@ -303,6 +303,26 @@ export async function createHost(deps) {
     retentionRefreshTimer = null;
   }
 
+  // ── Teaching focus (instructor Teaching Intent, ASSIGNED readings only) ──
+  // Hashes of paragraphs the instructor marked important. Fetched once, and only when there is an
+  // assignment, so ordinary web pages never ask. It never creates a new kind of interruption:
+  // checkRetentionCandidate below applies it through the same policy, guard, cooldown and
+  // dismissal backoff as a due item, and skips it while the reader is struggling or drifting.
+  const focusKnowledgeUnits = new Set();
+  if (assignmentId && getSession) {
+    const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
+    const focusModule = await loadModule('src/shared/teaching-focus.js');
+    const focusManager = focusModule.createTeachingFocusManager({
+      getSession,
+      focusUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/teaching-focus`,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
+    });
+    try {
+      const result = await focusManager.getFocus();
+      if (result.ok) for (const id of result.unitIds) focusKnowledgeUnits.add(id);
+    } catch (e) {}
+  }
+
   const {
     reservePopup, showPopup, closePopup, highlightElement,
     showNudge, showSimulateToast, showStatusToast,
@@ -1100,12 +1120,17 @@ export async function createHost(deps) {
    * onIntervention normally answers), so nothing upstream of this function
    * already checked either for it. */
   async function checkRetentionCandidate(text, paragraphIndex) {
-    if (!dueKnowledgeUnits.size || !text) return;
+    if ((!dueKnowledgeUnits.size && !focusKnowledgeUnits.size) || !text) return;
     if (!s().assistantEnabled) return;
     if (!orchestratorRef?.interventionPolicy) return;
 
     const identity = computeIdentity(text);
-    if (!identity.knowledgeUnitId || !dueKnowledgeUnits.has(identity.knowledgeUnitId)) return;
+    if (!identity.knowledgeUnitId) return;
+    const isDue = dueKnowledgeUnits.has(identity.knowledgeUnitId);
+    // A due review comes first. An instructor focus is only a preference among moments the policy
+    // already allows, and never while the reader is struggling or drifting: it must not add friction.
+    const isFocus = !isDue && focusKnowledgeUnits.has(identity.knowledgeUnitId) && lastCogState !== 'struggling' && lastCogState !== 'drifting';
+    if (!isDue && !isFocus) return;
 
     if (await snoozeControl.isActive()) return;
 
@@ -1117,6 +1142,7 @@ export async function createHost(deps) {
     const decision = orchestratorRef.interventionPolicy.evaluateRetentionCandidate({
       paragraphKey: identity.paragraphKey,
       questionCardVisible: ui.hasVisibleQuestionCard(),
+      kind: isFocus ? 'focus' : 'retention',
     });
     if (!decision.allow) return;
 
@@ -1153,13 +1179,15 @@ export async function createHost(deps) {
       // this path has no orchestrator call site to do it for us.
       if (shown) {
         orchestratorRef.interventionPolicy.record(decision);
-        reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'retention', text);
+        // A focus question is an ordinary 'ask': only a 'retention' answer moves a review schedule.
+        reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, isFocus ? 'ask' : 'retention', text);
         // Belt-and-suspenders alongside the policy's own paragraph-key dedup:
         // this specific knowledge unit has now been presented this session,
         // so it should not be attempted again even if a later paragraph
         // happens to produce a different paragraphKey for the same
         // knowledgeUnitId (duplicate content at a different position).
         dueKnowledgeUnits.delete(identity.knowledgeUnitId);
+        focusKnowledgeUnits.delete(identity.knowledgeUnitId);
         // Step 27: also remembered past this single delete, since
         // refreshRetentionDue() can otherwise resurrect this exact entry
         // from a still-stale server response before this presentation's own
