@@ -45,8 +45,6 @@ const SETTINGS_FIELDS = [
   ['sra_comprehension', "Notice when I'm struggling", (v) => (v !== false ? 'On' : 'Off')],
   ['sra_selection', 'Explain text I select', (v) => (v !== false ? 'On' : 'Off')],
   ['sra_highlight_para', 'Outline the paragraph', (v) => (v !== false ? 'On' : 'Off')],
-  ['sra_tts', 'Read aloud', (v) => (v ? 'On' : 'Off')],
-  ['sra_focus_ruler', 'Reading guide', (v) => (v ? 'On' : 'Off')],
   ['sra_dyslexia', 'Dyslexia mode', (v) => (v ? 'On' : 'Off')],
   ['sra_autohide', 'Clear cards automatically', (v) => (v ? 'On' : 'Off')],
   ['sra_pin_default', 'Keep cards until I close them', (v) => (v ? 'On' : 'Off')],
