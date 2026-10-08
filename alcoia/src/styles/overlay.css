@@ -563,43 +563,6 @@
   color: #9a9d97;
 }
 
-/* ── Page-summary panel ──────────────────────────────────────────────────── */
-.sra-page-summary-overlay {
-  position: fixed; inset: 0;
-  background: rgba(16,20,18,0.44);
-  backdrop-filter: blur(3px);
-  z-index: 2147483644;
-  display: flex; align-items: center; justify-content: center;
-  padding: 24px;
-}
-.sra-page-summary-panel {
-  box-sizing: border-box;
-  background: var(--alc-paper);
-  color: var(--alc-text);
-  border-radius: 16px;
-  padding: 28px 32px;
-  max-width: 600px; width: 92vw; max-height: 80vh;
-  overflow-y: auto;
-  box-shadow: 0 18px 56px rgba(16,20,18,0.28);
-  font-family: var(--alc-serif);
-  font-size: 14px;
-  line-height: 1.75;
-  position: relative;
-}
-.sra-page-summary-panel h2 {
-  font-size: 17px; font-weight: 700; margin: 0 0 14px; color: var(--alc-accent-2);
-}
-.sra-page-summary-panel .sra-ps-close {
-  position: absolute; top: 14px; right: 16px;
-  background: none; border: none;
-  font-family: var(--alc-ui); font-size: 16px; line-height: 1;
-  color: var(--alc-faint); cursor: pointer;
-}
-.sra-page-summary-panel .sra-ps-close:hover { color: var(--alc-text); }
-.sra-page-summary-body strong { color: var(--alc-accent-2); }
-.sra-page-summary-body ul,
-.sra-page-summary-body ol { margin: 6px 0 10px 20px; }
-
 /* ── Reading receipt (P4) ────────────────────────────────────────────────── */
 .sra-receipt-backdrop {
   position: fixed; inset: 0;
@@ -818,13 +781,11 @@
 }
 
 @media (max-width: 560px) {
-  .sra-receipt,
-  .sra-page-summary-panel { padding: 20px 18px; border-radius: 14px; max-height: 88vh; }
+  .sra-receipt { padding: 20px 18px; border-radius: 14px; max-height: 88vh; }
   .sra-receipt h2 { font-size: 17px; }
   .sra-r-actions { flex-wrap: wrap; }
   .sra-r-actions .sra-btn { flex: 1 1 44%; }
-  .sra-receipt-backdrop,
-  .sra-page-summary-overlay { padding: 12px; align-items: flex-end; }
+  .sra-receipt-backdrop { padding: 12px; align-items: flex-end; }
   .sra-cal-panel { width: 100%; max-width: 420px; }
   /* No hover, so the word bubble is unreachable; nothing should reserve
      space for it. */

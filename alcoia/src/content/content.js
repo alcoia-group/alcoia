@@ -110,12 +110,9 @@ async function boot() {
   let comprehensionCheckEnabled = true;
 
   // ── New feature flags ──────────────────────────────────────────────────
-  let ttsEnabled          = false;
-  let focusRulerEnabled   = false;
   let darkModeEnabled     = false;
   let dyslexiaEnabled     = false;
   let dyslexiaColor       = 'rgba(255,243,180,0.12)';
-  let bionicEnabled       = false;
 
   // ── Highlight persistence ──────────────────────────────────────────────
   function saveHighlight(text, summary, state) {
@@ -186,7 +183,6 @@ async function boot() {
   const overlayUtils = await loadModule('src/content/overlay-utils.js');
   const readCalModule = await loadModule('src/content/reading-calibration.js');
   const { runSelfPacedCalibration } = readCalModule;
-  const ttsModule      = await loadModule('src/content/tts-handler.js');
   const dyslexiaModule  = await loadModule('src/content/dyslexia-utils.js');
   const segmentation     = await loadModule('src/content/signals/segmentation.js');
   const mapModule       = await loadModule('src/content/reading-map.js');
@@ -202,7 +198,6 @@ async function boot() {
   const shadowHostModule = await loadModule('src/content/shadow-host.js');
   const sharedStyles = await shadowHostModule.loadSharedStyles();
 
-  const ttsHandler    = ttsModule.createTTSHandler();
   const dyslexiaUtils = dyslexiaModule;
   const readingMap    = mapModule.createReadingMap({ sharedStyles });
   const highlightsSidebar = hlSidebarModule.createHighlightsSidebar({ sharedStyles, signal });
@@ -237,12 +232,12 @@ async function boot() {
   } = ui;
 
   // ── Host (item 30a) ─────────────────────────────────────────────────────
-  // Everything orchestrator.js's 12-callback host contract needs — the
-  // AI-fetch pipeline (and item 38's rate limiting on it), the question
-  // card, quiz generation, session recall/tracking, the focus ruler and
-  // snooze — now lives in host.js, importable from a content script or an
-  // extension page alike. See CLAUDE.md's "Extracting the host from
-  // content.js (item 30a)" section for the full inventory and reasoning.
+  // Everything orchestrator.js's host contract needs — the AI-fetch
+  // pipeline (and item 38's rate limiting on it), the question card, quiz
+  // generation, session recall/tracking and snooze — now lives in host.js,
+  // importable from a content script or an extension page alike. See
+  // CLAUDE.md's "Extracting the host from content.js (item 30a)" section
+  // for the full inventory and reasoning.
   const hostModule = await loadModule('src/content/host.js');
   hostApi = await hostModule.createHost({
     loadModule,
@@ -260,7 +255,7 @@ async function boot() {
   const {
     fetchSummary, callBackend,
     runQuiz, runSessionRecall, startSnooze, snoozeControl, SNOOZE_OPTIONS,
-    sessionRecall, responseSignals, sessionTracker, focusRuler,
+    sessionRecall, responseSignals, sessionTracker,
     comprehensionMonitor, setPdfHandler, setPptxHandler, getCogState,
     getPrevParagraphText, setOrchestrator,
     showSelfReportCard, // item 13a — affordance 1 (Alt+C, below)
@@ -321,7 +316,7 @@ async function boot() {
     // reads a different, wider subset.
     settings: () => ({
       assistantEnabled,
-      comprehensionCheckEnabled, focusRulerEnabled,
+      comprehensionCheckEnabled,
       debugEnabled,
     }),
     host: hostCallbacks,
@@ -343,8 +338,8 @@ async function boot() {
     sra_backend_url: BACKEND_DEFAULT, sra_selection: true,
     sra_highlight_para: true, sra_autohide: false, sra_autohide_timeout: 12,
     sra_pin_default: false, sra_debug: false, sra_comprehension: true,
-    sra_tts: false, sra_focus_ruler: false, sra_dyslexia: false,
-    sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
+    sra_dyslexia: false,
+    sra_dyslexia_color: 'rgba(255,243,180,0.12)',
     sra_baseline_wpm: null, sra_dark_mode: false,
     sra_highlight_color: true, sra_highlight_summarize: false,
     sra_highlight_persist: true,
@@ -361,14 +356,10 @@ async function boot() {
     pinDefault         = !!res.sra_pin_default;
     debugEnabled              = !!res.sra_debug;
     comprehensionCheckEnabled = res.sra_comprehension !== false;
-    ttsEnabled        = !!res.sra_tts;
-    focusRulerEnabled = !!res.sra_focus_ruler;
     dyslexiaEnabled   = !!res.sra_dyslexia;
     dyslexiaColor     = res.sra_dyslexia_color || 'rgba(255,243,180,0.12)';
-    bionicEnabled     = !!res.sra_bionic;
     if (res.sra_baseline_wpm) comprehensionMonitor.seedWpmFromCalibration(res.sra_baseline_wpm);
     if (dyslexiaEnabled) dyslexiaUtils.applyDyslexiaCSS(dyslexiaColor);
-    if (focusRulerEnabled) focusRuler.enable();
     darkModeEnabled = !!res.sra_dark_mode;
     if (darkModeEnabled) applyDarkMode(true);
     settingsLoaded();
@@ -440,25 +431,6 @@ async function boot() {
         e.preventDefault();
         const para = await hostCallbacks.findParagraphAt(window.innerWidth / 2, window.innerHeight / 2);
         if (para) { hostCallbacks.setCurrentParagraph(para); lastActionAt = 0; await triggerAIForParagraph(para, 'manual'); }
-        return;
-      }
-
-      // Alt+T: toggle TTS read-aloud
-      if (e.key === 't' || e.key === 'T') {
-        e.preventDefault();
-        ttsEnabled = !ttsEnabled;
-        chrome.storage.local.set({ sra_tts: ttsEnabled });
-        showSimulateToast(ttsEnabled ? '🔊 Read Aloud on  (Alt+T)' : '🔇 Read Aloud off (Alt+T)');
-        return;
-      }
-
-      // Alt+F: toggle focus ruler
-      if (e.key === 'f' || e.key === 'F') {
-        e.preventDefault();
-        focusRulerEnabled = !focusRulerEnabled;
-        focusRulerEnabled ? focusRuler.enable() : focusRuler.disable();
-        chrome.storage.local.set({ sra_focus_ruler: focusRulerEnabled });
-        showSimulateToast(focusRulerEnabled ? '👁 Focus Ruler on  (Alt+F)' : '👁 Focus Ruler off (Alt+F)');
         return;
       }
 
@@ -1303,12 +1275,9 @@ async function boot() {
 
     if (el) {
       highlightElement(el, 6000);
-      if (bionicEnabled) dyslexiaUtils.applyBionicReading(el);
     }
     let anchorRect = null;
     try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
-
-    if (ttsEnabled) ttsHandler.speak(text, { el: el || null });
 
     try {
       const summary = await fetchSummary(text, mode, getPrevParagraphText());
@@ -1381,11 +1350,6 @@ async function boot() {
       if (msg.comprehension !== undefined) comprehensionCheckEnabled = !!msg.comprehension;
       if (msg.backendUrl)                  backendUrl         = msg.backendUrl;
       // New feature flags
-      if (msg.tts           !== undefined) ttsEnabled         = !!msg.tts;
-      if (msg.focusRuler    !== undefined) {
-        focusRulerEnabled = !!msg.focusRuler;
-        focusRulerEnabled ? focusRuler.enable() : focusRuler.disable();
-      }
       if (msg.dyslexia      !== undefined || msg.dyslexiaColor !== undefined) {
         if (msg.dyslexia !== undefined) dyslexiaEnabled = !!msg.dyslexia;
         if (msg.dyslexiaColor) dyslexiaColor = msg.dyslexiaColor;
@@ -1393,7 +1357,6 @@ async function boot() {
           ? dyslexiaUtils.applyDyslexiaCSS(dyslexiaColor)
           : dyslexiaUtils.removeDyslexiaCSS();
       }
-      if (msg.bionic        !== undefined) bionicEnabled = !!msg.bionic;
       if (msg.darkMode      !== undefined) { darkModeEnabled = !!msg.darkMode; applyDarkMode(darkModeEnabled); }
       sendResponse({ status: 'ok' }); return;
     }
@@ -1536,72 +1499,8 @@ async function boot() {
       return;
     }
 
-    if (msg.type === 'pageSummary') {
-      (async () => {
-        try {
-          const text = extractPageText();
-          if (!text) { sendResponse({ status: 'error', error: 'No readable text found.' }); return; }
-          const summary = await fetchSummary(text, 'page_summary');
-          if (summary) showPageSummaryPanel(summary);
-          sendResponse({ status: summary ? 'ok' : 'error' });
-        } catch (e) { sendResponse({ status: 'error', error: String(e) }); }
-      })();
-      return true;
-    }
   };
   chrome.runtime.onMessage.addListener(onRuntimeMessage);
-
-  function extractPageText() {
-    const skip = new Set(['SCRIPT','STYLE','NOSCRIPT','NAV','FOOTER','HEADER']);
-    const els  = document.querySelectorAll('h1,h2,h3,h4,p,li,blockquote,td,th');
-    const parts = [];
-    let total = 0;
-    for (const el of els) {
-      if ([...el.closest ? [el] : []].some(n => {
-        let p = n; while (p) { if (skip.has(p.tagName) || p.classList?.contains('sra-popup') || p.classList?.contains('sra-sidebar')) return true; p = p.parentElement; } return false;
-      })) continue;
-      const t = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
-      if (!t || t.length < 10) continue;
-      const prefix = /^H[1-4]$/.test(el.tagName) ? '#'.repeat(+el.tagName[1]) + ' ' : '';
-      parts.push(prefix + t);
-      total += t.length;
-      if (total > 6000) break;
-    }
-    return parts.join('\n\n').slice(0, 6000);
-  }
-
-  let pageSummaryHost = null;
-  function showPageSummaryPanel(markdownText) {
-    try { pageSummaryHost?.remove(); } catch (e) {}
-
-    const { host, shadow } = shadowHostModule.createShadowHost(sharedStyles, 2147483644);
-    pageSummaryHost = host;
-    const closeSummary = () => { try { host.remove(); } catch (e) {} if (pageSummaryHost === host) pageSummaryHost = null; };
-
-    const overlay = document.createElement('div');
-    overlay.className = 'sra-page-summary-overlay';
-
-    const panel = document.createElement('div');
-    panel.className = 'sra-page-summary-panel';
-
-    // Convert **bold** and bullet • to simple HTML
-    const html = esc(markdownText)
-      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      .replace(/^• /gm, '&bull; ')
-      .replace(/\n\n/g, '<br><br>')
-      .replace(/\n/g, '<br>');
-
-    panel.innerHTML = `
-      <button class="sra-ps-close" title="Close">×</button>
-      <h2>Page Overview</h2>
-      <div class="sra-page-summary-body">${html}</div>`;
-
-    panel.querySelector('.sra-ps-close').onclick = closeSummary;
-    overlay.addEventListener('click', e => { if (e.target === overlay) closeSummary(); }, { signal });
-
-    overlay.appendChild(panel);
-    shadow.appendChild(overlay);
-  }
 
   // ── SPA navigation: close unpinned popups, badge pinned ones as stale ────
   // Item 27: two independent channels can call this — the pushState/
@@ -1809,8 +1708,6 @@ async function boot() {
     try { orchestrator.stop(); } catch (e) {}
     try { hidePopup(true); } catch (e) { /* nothing open */ }
     try { ui.clearHighlight(); } catch (e) { /* nothing highlighted */ }
-    try { focusRuler.disable(); } catch (e) { /* never enabled */ }
-    try { ttsHandler.stop(); } catch (e) { /* not speaking */ }
     try { readingMap.destroy(); } catch (e) {}
     try { ui.removeSelfReportTrigger(); } catch (e) {}
     try { chrome.runtime.onMessage.removeListener(onRuntimeMessage); } catch (e) {}

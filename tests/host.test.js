@@ -875,13 +875,13 @@ describe('onIntervention — the 12-callback surface, branching', () => {
   });
 });
 
-describe('the 12-callback host surface, structurally', () => {
+describe('the host surface, structurally', () => {
   it('exposes exactly what orchestrator.js destructures', async () => {
     const { host } = await createHost(baseDeps());
     const required = [
       'onIntervention', 'onParagraphRead', 'onQuizOfferEligible', 'onStruggle',
       'setCogState', 'setCurrentParagraph', 'setPrevParagraphText', 'getCurrentParagraph',
-      'findParagraphAt', 'focusRuler', 'sessionTracker', 'log',
+      'findParagraphAt', 'sessionTracker', 'log',
     ];
     for (const key of required) expect(host).toHaveProperty(key);
   });
