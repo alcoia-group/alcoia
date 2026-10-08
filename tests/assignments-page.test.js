@@ -120,6 +120,26 @@ describe('a student with an active assignment sees it listed; one without sees n
     await vi.waitFor(() => expect(document.getElementById('pageError').hidden).toBe(false));
     expect(document.getElementById('pageError').textContent).toMatch(/sign in/i);
     expect(fetchImpl).not.toHaveBeenCalled();
+    // "Join a class" is never gated on already seeing a loaded list —
+    // reachable here too, so a signed-out reader can still get to
+    // join-class.html, which is itself what requires sign-in before a
+    // join completes (see tests/join-class.test.js).
+    expect(document.getElementById('joinClassBtn')).not.toBeNull();
+  });
+});
+
+describe('"Join a class" is a persistent affordance in this popup, not gated on the assignment list', () => {
+  it('clicking it opens join-class.html as its own tab', async () => {
+    loadAssignmentsBody();
+    const chrome = fakeChrome({ sra_session: VALID_SESSION });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', routedFetch([[MINE_URL, async () => ({ ok: true, json: async () => ({ assignments: [] }) })]]));
+
+    await importFreshAssignmentsJs();
+    document.getElementById('joinClassBtn').click();
+
+    expect(chrome._tabsCreated).toEqual([{ url: 'chrome-extension://test/src/popup/join-class.html' }]);
   });
 });
 

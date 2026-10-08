@@ -28,6 +28,7 @@ function fakeChromeForImport() {
           cb(result);
         },
         set(obj, cb) { Object.assign(this._store, obj); if (cb) cb(); },
+        remove(key, cb) { delete this._store[key]; if (cb) cb(); },
       },
     },
     runtime: {
@@ -230,20 +231,35 @@ describe('LTI launch handoff (item S6/E4 follow-up) — a second, independently 
     // join has NOT completed, only a pending record that join-class.js's
     // own disclosure-gated completeJoin() can turn into one.
     expect(chrome.storage.local._store.sra_session).toBeUndefined();
-    expect(chrome.storage.local._store.sra_class_membership).toBeUndefined();
+    expect(chrome.storage.local._store.sra_class_memberships).toBeUndefined();
     expect(chrome._tabsCreated).toEqual([{ url: 'chrome-extension://test/src/popup/join-class.html' }]);
   });
 
-  it('an already-acknowledged launch (sessionToken present, no disclosureRequired) stores the session and membership directly, opens no tab', () => {
+  it('an already-acknowledged launch (sessionToken present, no disclosureRequired) stores the session and membership directly, opens no tab', async () => {
     const sendResponse = vi.fn();
     const payload = { sessionToken: 'lti-sess-1', kind: 'lti', classId: 'class-2', assignmentId: 'assign-1', redirectTo: 'https://console.alcoia.invalid/read?classId=class-2' };
 
     capturedListener({ type: 'ltiLaunch', payload }, sender(LTI_READER_ORIGIN), sendResponse);
+    await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
 
     expect(sendResponse).toHaveBeenCalledWith({ ok: true, disclosureRequired: false });
     expect(chrome.storage.local._store.sra_session).toEqual({ token: 'lti-sess-1', email: '', expiresAt: expect.any(Number) });
-    expect(chrome.storage.local._store.sra_class_membership).toEqual({ classId: 'class-2', seatId: null, role: null, joinedAt: expect.any(Number) });
+    expect(chrome.storage.local._store.sra_class_memberships).toEqual([{ classId: 'class-2', seatId: null, role: null, joinedAt: expect.any(Number) }]);
     expect(chrome._tabsCreated).toEqual([]);
+  });
+
+  it('an already-acknowledged launch for a second class appends to, rather than overwrites, an existing membership', async () => {
+    const sendResponse = vi.fn();
+    chrome.storage.local._store.sra_class_memberships = [{ classId: 'class-native-1', seatId: 's-native', role: 'student', joinedAt: 111 }];
+    const payload = { sessionToken: 'lti-sess-9', kind: 'lti', classId: 'class-lti-9' };
+
+    capturedListener({ type: 'ltiLaunch', payload }, sender(LTI_READER_ORIGIN), sendResponse);
+    await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
+
+    expect(chrome.storage.local._store.sra_class_memberships).toEqual([
+      { classId: 'class-native-1', seatId: 's-native', role: 'student', joinedAt: 111 },
+      { classId: 'class-lti-9', seatId: null, role: null, joinedAt: expect.any(Number) },
+    ]);
   });
 
   it('rejects an LTI-shaped message from any origin other than LTI_READER_ORIGIN — including the magic-link origin', () => {

@@ -68,17 +68,16 @@
     .disclosure p:last-child { margin-bottom: 0; }
     .disclosure-class-name { font-weight: 600; }
 
-    .join-state { text-align: center; padding: 8px 4px 4px; }
-    .join-state-title {
-      font-family: var(--alc-serif); font-size: 16px; font-weight: 600;
-      margin: 0 0 8px;
+    /* ── Your classes — a list, not a single dead-end screen. A student can
+       hold more than one seat at once (item: "even if a student has joined
+       a class already, they can join more"), so this is never a gate that
+       blocks a second join; it's a plain roster with a "+ Join another
+       class" action always present at the bottom. */
+    .membership-list { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+    .membership-row {
+      text-align: left; padding: 13px 14px;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
     }
-    .join-state-sub { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0; }
-    .join-check {
-      display: inline-block; margin-bottom: 6px;
-      font-size: 20px; color: var(--sage-2);
-    }
-
     .member-class-id {
       font-family: var(--alc-serif); font-size: 15px; font-weight: 600;
       margin: 0 0 4px;
@@ -93,7 +92,7 @@
 
     .leave-consequence {
       text-align: left; font-size: 12px; color: var(--muted); line-height: 1.6;
-      margin: 16px 0 0; padding: 12px 13px;
+      margin: 10px 0 10px; padding: 12px 13px;
       border: 1px solid var(--border); border-radius: var(--radius-sm);
     }
 
@@ -164,24 +163,21 @@
       </div>
     </div>
 
-    <!-- ── Joined — already a member, or just joined ── -->
-    <div id="memberState" class="join-state" hidden>
-      <span class="join-check" aria-hidden="true">&#10003;</span>
-      <p class="join-state-title">You're in</p>
-      <p class="member-class-id" id="memberClassId"></p>
-      <p class="member-gap-note">
-        (alcoia can't show the class's name here yet — only its id. See this build's own notes.)
+    <!-- ── Your classes — a roster, never a dead end. Joining another
+         class is always one click away from here, whether this is the
+         first class or the fourth. ── -->
+    <div id="memberState" hidden>
+      <h1 class="join-title">Your classes</h1>
+      <p class="join-sub">
+        You can join another class any time — joining doesn't require leaving one you're already in.
       </p>
 
-      <div class="leave-consequence">
-        Leaving releases your seat immediately and reverts you to the free plan. Your highlights,
-        notes and quizzes stay on this device either way — leaving never deletes anything local.
-      </div>
+      <ul class="membership-list" id="membershipList"></ul>
 
       <div class="join-error" id="leaveError" hidden></div>
 
-      <div class="btn-row" style="margin-top:16px">
-        <button class="btn btn-ghost" id="leaveBtn">Leave this class</button>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="joinAnotherBtn" style="width:100%">+ Join another class</button>
       </div>
     </div>
 

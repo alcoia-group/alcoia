@@ -75,19 +75,6 @@
     #dyslexiaOptions { padding: 2px 0 8px 4px; }
     .divider { height: 1px; background: var(--border); margin: 4px 0; }
 
-    .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 4px 0 14px; }
-    .mode-btn {
-      text-align: left; padding: 9px 11px 10px; border-radius: var(--radius-sm);
-      border: 1px solid var(--border); background: var(--surface); color: var(--text);
-      font-family: var(--alc-ui); cursor: pointer;
-      transition: border-color 0.15s, background 0.15s, color 0.15s;
-    }
-    .mode-btn:hover { border-color: var(--border-2); background: var(--accent-sf); }
-    .mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .mode-btn .m-name { display: block; font-size: 12px; font-weight: 700; }
-    .mode-btn .m-desc { display: block; font-size: 10.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
-    .mode-btn.active .m-desc { color: rgba(255,255,255,0.85); }
-
     .section-note { font-size: 11px; color: var(--muted); line-height: 1.55; margin: 6px 0 12px; }
 
     /* ── Shortcuts ── ported from popup.html's old "Shortcuts" section
@@ -106,7 +93,7 @@
     @media (max-width: 480px) {
       .header, .wrap { padding-left: 16px; padding-right: 16px; }
       .logo-sub { display: none; }
-      .toggle-grid, .mode-grid { grid-template-columns: 1fr; }
+      .toggle-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -266,32 +253,6 @@
     </div>
   </div>
 
-  <!-- ════════════════════ Reading mode presets ════════════════════
-       Not an individual switch, but the bulk-apply mechanism popup.html
-       used to host — moved here since it writes several of the switches
-       above at once. -->
-  <div class="settings-card">
-    <div class="settings-group-title">Reading mode presets</div>
-    <div class="mode-grid">
-      <button class="mode-btn" data-persona="research">
-        <span class="m-name">Research</span>
-        <span class="m-desc">Cards stay pinned</span>
-      </button>
-      <button class="mode-btn" data-persona="study">
-        <span class="m-name">Study</span>
-        <span class="m-desc">Cards clear after 10s</span>
-      </button>
-      <button class="mode-btn" data-persona="casual">
-        <span class="m-name">Casual</span>
-        <span class="m-desc">Only when you select text</span>
-      </button>
-      <button class="mode-btn" data-persona="speed">
-        <span class="m-name">Speed</span>
-        <span class="m-desc">Cards clear after 4s</span>
-      </button>
-    </div>
-  </div>
-
   <!-- ════════════════════ Documents ════════════════════ -->
   <div class="settings-card">
     <div class="settings-group-title">Documents</div>
@@ -309,6 +270,17 @@
       </div>
       <label class="pill"><input type="checkbox" id="webPdfTakeoverToggle"><span class="pill-track"></span></label>
     </label>
+  </div>
+
+  <!-- ════════════════════ Data ════════════════════
+       Moved from the popup's own home-screen row (item: popup declutter) —
+       exporting notes/highlights is an occasional action, not something
+       that belonged next to Assignments/Notes/Highlights/Quiz every time
+       the popup opens. -->
+  <div class="settings-card">
+    <div class="settings-group-title">Data</div>
+    <p class="settings-group-note">Export your saved notes and highlights as a Markdown file.</p>
+    <div class="btn-row"><button class="btn btn-ghost" id="exportBtn">Export annotations</button></div>
   </div>
 
   <!-- ════════════════════ Account ════════════════════ -->

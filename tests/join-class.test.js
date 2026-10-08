@@ -122,7 +122,10 @@ describe('a join cannot complete without the disclosure screen having been rende
 
     await vi.waitFor(() => expect(acceptFetch).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(document.getElementById('memberState').hidden).toBe(false));
-    expect(document.getElementById('memberClassId').textContent).toContain('c1');
+    expect(document.getElementById('membershipList').textContent).toContain('c1');
+    // Never a dead end — the way to join another class is right there on
+    // the same screen the join just landed on.
+    expect(document.getElementById('joinAnotherBtn')).not.toBeNull();
   });
 
   it('"Back" returns to the input step and clears the disclosure-rendered guard — a second submit is required before Join is reachable again', async () => {
@@ -225,7 +228,7 @@ describe('leaving a class reverts entitlement to free and the extension reflects
     loadJoinBody();
     vi.stubGlobal('chrome', fakeChrome({
       sra_session: VALID_SESSION,
-      sra_class_membership: { classId: 'c1', seatId: 's1', role: 'student', joinedAt: Date.now() },
+      sra_class_memberships: [{ classId: 'c1', seatId: 's1', role: 'student', joinedAt: Date.now() }],
     }));
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     let entitled = true;
@@ -239,10 +242,13 @@ describe('leaving a class reverts entitlement to free and the extension reflects
     await vi.waitFor(() => expect(document.getElementById('memberState').hidden).toBe(false));
 
     entitled = false; // the server-side effect of releasing the seat
-    document.getElementById('leaveBtn').click();
+    document.querySelector('.leave-btn').click();
 
     await vi.waitFor(() => expect(releaseFetch).toHaveBeenCalledTimes(1));
     expect(releaseFetch.mock.calls[0][0]).toBe(`${SEATS_URL}/s1/release`);
+    // The last (only) membership was released — this is the "join another
+    // class" default state, not a permanent gate, so it falls back to the
+    // input form rather than an empty roster.
     await vi.waitFor(() => expect(document.getElementById('inputState').hidden).toBe(false));
     expect(document.getElementById('memberState').hidden).toBe(true);
 
@@ -256,14 +262,47 @@ describe('leaving a class reverts entitlement to free and the extension reflects
       fetchImpl: routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => FREE_RESPONSE })]]),
     });
     expect(await check.hasFeature('own_documents')).toBe(false);
-    expect(chrome._store.sra_class_membership).toBeUndefined();
+    expect(chrome._store.sra_class_memberships).toEqual([]);
+  });
+
+  it('leaving one of several classes removes only that one — the rest stay, the roster stays shown', async () => {
+    loadJoinBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_session: VALID_SESSION,
+      sra_class_memberships: [
+        { classId: 'c1', seatId: 's1', role: 'student', joinedAt: 1 },
+        { classId: 'c2', seatId: 's2', role: 'student', joinedAt: 2 },
+      ],
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    const releaseFetch = vi.fn(async () => ({ ok: true, json: async () => ({ released: true }) }));
+    vi.stubGlobal('fetch', routedFetch([
+      [SEATS_URL, releaseFetch],
+      [ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })],
+    ]));
+
+    await importFreshJoinClassJs();
+    await vi.waitFor(() => expect(document.getElementById('memberState').hidden).toBe(false));
+    expect(document.getElementById('membershipList').textContent).toContain('c1');
+    expect(document.getElementById('membershipList').textContent).toContain('c2');
+
+    document.querySelector('.leave-btn[data-seat-id="s1"]').click();
+    await vi.waitFor(() => expect(releaseFetch).toHaveBeenCalledTimes(1));
+    expect(releaseFetch.mock.calls[0][0]).toBe(`${SEATS_URL}/s1/release`);
+
+    // Still on the roster screen, not bounced to the input form — one
+    // membership remains.
+    await vi.waitFor(() => expect(chrome._store.sra_class_memberships).toEqual([{ classId: 'c2', seatId: 's2', role: 'student', joinedAt: 2 }]));
+    expect(document.getElementById('memberState').hidden).toBe(false);
+    expect(document.getElementById('membershipList').textContent).not.toContain('c1');
+    expect(document.getElementById('membershipList').textContent).toContain('c2');
   });
 
   it('a failed release (e.g. seat already gone) shows an honest message and does not clear local membership', async () => {
     loadJoinBody();
     vi.stubGlobal('chrome', fakeChrome({
       sra_session: VALID_SESSION,
-      sra_class_membership: { classId: 'c1', seatId: 's1', role: 'student', joinedAt: Date.now() },
+      sra_class_memberships: [{ classId: 'c1', seatId: 's1', role: 'student', joinedAt: Date.now() }],
     }));
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     vi.stubGlobal('fetch', routedFetch([
@@ -274,27 +313,95 @@ describe('leaving a class reverts entitlement to free and the extension reflects
     await importFreshJoinClassJs();
     await vi.waitFor(() => expect(document.getElementById('memberState').hidden).toBe(false));
 
-    document.getElementById('leaveBtn').click();
+    document.querySelector('.leave-btn').click();
     await vi.waitFor(() => expect(document.getElementById('leaveError').hidden).toBe(false));
     expect(document.getElementById('memberState').hidden).toBe(false);
   });
 });
 
-describe('landing directly on an already-active membership', () => {
-  it('shows the member state immediately, skipping input/disclosure entirely', async () => {
+describe('joining another class from the roster is always reachable, never gated on an existing membership', () => {
+  it('the roster always shows a "+ Join another class" action, and clicking it reaches the input form', async () => {
     loadJoinBody();
     vi.stubGlobal('chrome', fakeChrome({
       sra_session: VALID_SESSION,
-      sra_class_membership: { classId: 'c9', seatId: 's9', role: 'student', joinedAt: Date.now() },
+      sra_class_memberships: [{ classId: 'c1', seatId: 's1', role: 'student', joinedAt: Date.now() }],
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', vi.fn());
+
+    await importFreshJoinClassJs();
+    await vi.waitFor(() => expect(document.getElementById('memberState').hidden).toBe(false));
+
+    document.getElementById('joinAnotherBtn').click();
+    expect(document.getElementById('inputState').hidden).toBe(false);
+    expect(document.getElementById('memberState').hidden).toBe(true);
+  });
+
+  it('joining a second class appends to the roster rather than replacing the first', async () => {
+    loadJoinBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_session: VALID_SESSION,
+      sra_class_memberships: [{ classId: 'c1', seatId: 's1', role: 'student', joinedAt: 1 }],
+    }));
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    const acceptFetch = vi.fn(async () => ({ ok: true, json: async () => ({ classId: 'c2', seatId: 's2', role: 'student' }) }));
+    vi.stubGlobal('fetch', routedFetch([[ACCEPT_URL, acceptFetch], [ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
+
+    await importFreshJoinClassJs();
+    await vi.waitFor(() => expect(document.getElementById('memberState').hidden).toBe(false));
+
+    document.getElementById('joinAnotherBtn').click();
+    document.getElementById('inviteInput').value = 'second-class-code';
+    document.getElementById('inputFormEl').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(document.getElementById('disclosureState').hidden).toBe(false));
+
+    document.getElementById('confirmJoinBtn').click();
+    await vi.waitFor(() => expect(acceptFetch).toHaveBeenCalledTimes(1));
+
+    await vi.waitFor(() => expect(chrome._store.sra_class_memberships).toEqual([
+      { classId: 'c1', seatId: 's1', role: 'student', joinedAt: 1 },
+      { classId: 'c2', seatId: 's2', role: 'student', joinedAt: expect.any(Number) },
+    ]));
+    expect(document.getElementById('membershipList').textContent).toContain('c1');
+    expect(document.getElementById('membershipList').textContent).toContain('c2');
+  });
+});
+
+describe('landing directly on an already-active membership', () => {
+  it('shows the roster immediately, skipping input/disclosure entirely — but never as a dead end', async () => {
+    loadJoinBody();
+    vi.stubGlobal('chrome', fakeChrome({
+      sra_session: VALID_SESSION,
+      sra_class_memberships: [{ classId: 'c9', seatId: 's9', role: 'student', joinedAt: Date.now() }],
     }));
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     vi.stubGlobal('fetch', vi.fn());
 
     await importFreshJoinClassJs();
     expect(document.getElementById('memberState').hidden).toBe(false);
-    expect(document.getElementById('memberClassId').textContent).toContain('c9');
+    expect(document.getElementById('membershipList').textContent).toContain('c9');
     expect(document.getElementById('inputState').hidden).toBe(true);
     expect(document.getElementById('disclosureState').hidden).toBe(true);
+    // The whole point: this is never a gate. A fresh join is still one
+    // click away from the exact screen an existing membership lands on.
+    expect(document.getElementById('joinAnotherBtn')).not.toBeNull();
+  });
+
+  it('migrates a pre-existing single-record membership (the old key shape) into the new array, transparently', async () => {
+    loadJoinBody();
+    const chrome = fakeChrome({
+      sra_session: VALID_SESSION,
+      sra_class_membership: { classId: 'legacy-class', seatId: 'legacy-seat', role: 'student', joinedAt: 42 },
+    });
+    vi.stubGlobal('chrome', chrome);
+    vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
+    vi.stubGlobal('fetch', vi.fn());
+
+    await importFreshJoinClassJs();
+    expect(document.getElementById('memberState').hidden).toBe(false);
+    expect(document.getElementById('membershipList').textContent).toContain('legacy-class');
+    expect(chrome._store.sra_class_memberships).toEqual([{ classId: 'legacy-class', seatId: 'legacy-seat', role: 'student', joinedAt: 42 }]);
+    expect(chrome._store.sra_class_membership).toBeUndefined();
   });
 });
 
@@ -351,12 +458,12 @@ describe('an LTI launch cannot complete without the disclosure having been rende
 
     await vi.waitFor(() => expect(ackFetch).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(document.getElementById('memberState').hidden).toBe(false));
-    expect(document.getElementById('memberClassId').textContent).toContain('lti-class-2');
+    expect(document.getElementById('membershipList').textContent).toContain('lti-class-2');
 
     // The join genuinely completed — a real session now exists, minted
     // entirely by this confirm action (there was none before it).
     expect(chrome._store.sra_session).toEqual({ token: 'lti-sess-2', email: '', expiresAt: expect.any(Number) });
-    expect(chrome._store.sra_class_membership).toEqual({ classId: 'lti-class-2', seatId: null, role: null, joinedAt: expect.any(Number) });
+    expect(chrome._store.sra_class_memberships).toEqual([{ classId: 'lti-class-2', seatId: null, role: null, joinedAt: expect.any(Number) }]);
   });
 
   it('an expired ack code (401 code_expired) fails cleanly — no session, no membership, honest message, retry still possible', async () => {
@@ -374,7 +481,7 @@ describe('an LTI launch cannot complete without the disclosure having been rende
     expect(document.getElementById('disclosureError').textContent).toMatch(/expired/i);
     expect(document.getElementById('memberState').hidden).toBe(true);
     expect(chrome._store.sra_session).toBeUndefined();
-    expect(chrome._store.sra_class_membership).toBeUndefined();
+    expect(chrome._store.sra_class_memberships).toBeUndefined();
     expect(document.getElementById('confirmJoinBtn').disabled).toBe(false);
   });
 
@@ -395,7 +502,7 @@ describe('an LTI launch cannot complete without the disclosure having been rende
     loadJoinBody();
     vi.stubGlobal('chrome', fakeChrome({
       sra_session: VALID_SESSION,
-      sra_class_membership: { classId: 'old-native-class', seatId: 's-old', role: 'student', joinedAt: Date.now() },
+      sra_class_memberships: [{ classId: 'old-native-class', seatId: 's-old', role: 'student', joinedAt: Date.now() }],
       sra_pending_lti_launch: { ackCode: 'ack-5', classId: 'lti-class-5', reportingMode: 'aggregate', at: Date.now() },
     }));
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
@@ -466,6 +573,6 @@ describe('the invite-link disclosure flow is unaffected by the LTI entry path (r
     // The invite path's own session was ALREADY there (VALID_SESSION) —
     // unlike LTI, this flow never mints or overwrites sra_session itself.
     expect(chrome._store.sra_session).toEqual(VALID_SESSION);
-    expect(chrome._store.sra_class_membership).toEqual({ classId: 'c1', seatId: 's1', role: 'student', joinedAt: expect.any(Number) });
+    expect(chrome._store.sra_class_memberships).toEqual([{ classId: 'c1', seatId: 's1', role: 'student', joinedAt: expect.any(Number) }]);
   });
 });
