@@ -202,10 +202,10 @@ async function handleLtiLaunchMessage(payload, sendResponse) {
     // Appended to the same array join-class.js owns (sra_class_memberships,
     // not the old singular key) — a student can hold more than one class
     // seat at once, so an already-acknowledged LTI launch must never
-    // overwrite an unrelated native-invite membership already stored.
-    // seatId/role are genuinely absent from this response (see invites.js's
-    // own header on the one real consequence: "Leave this class" cannot
-    // release a seat it has no id for).
+    // overwrite an unrelated native-invite membership already stored. The
+    // server now returns seatId/role with the launch (null only against an
+    // older server), so "Leave this class" can release this seat too, not
+    // just a native-invite one.
     const stored = await new Promise((resolve) => chrome.storage.local.get(
       { sra_class_memberships: null, sra_class_membership: null }, resolve,
     ));
@@ -214,7 +214,12 @@ async function handleLtiLaunchMessage(payload, sendResponse) {
       : (stored.sra_class_membership && typeof stored.sra_class_membership.classId === 'string'
         ? [stored.sra_class_membership] : []);
     const memberships = existing.filter((m) => m.classId !== payload.classId);
-    memberships.push({ classId: payload.classId, seatId: null, role: null, joinedAt: Date.now() });
+    memberships.push({
+      classId: payload.classId,
+      seatId: typeof payload.seatId === 'string' && payload.seatId ? payload.seatId : null,
+      role: typeof payload.role === 'string' && payload.role ? payload.role : null,
+      joinedAt: Date.now(),
+    });
 
     await new Promise((resolve) => chrome.storage.local.set({
       [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: session,

@@ -90,6 +90,18 @@
     .kbd-grid kbd { justify-self: start; }
     .kbd-desc { color: var(--muted); }
 
+    .lm-details summary { cursor: pointer; font-size: 12px; margin: 4px 0; }
+    .lm-state { display: flex; align-items: baseline; gap: 10px; margin: 10px 0 4px; }
+    .lm-state-label { font-weight: 600; font-size: 13px; border: 1px solid var(--border); border-radius: 999px; padding: 1px 10px; }
+    .lm-actions { display: grid; gap: 4px; margin-top: 6px; }
+    .lm-panel { border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); padding: 10px 12px; margin: 8px 0; }
+    .lm-panel-danger { border-style: dashed; }
+    .btn-danger { background: var(--wrong); color: #FFFFFF; }
+    .lm-panel-title { font-weight: 600; font-size: 12.5px; }
+    .lm-message[data-kind="error"] { color: var(--wrong); }
+    .lm-panel ul { padding-left: 18px; margin: 6px 0 10px; }
+    .lm-panel[hidden], #learningMemory [hidden] { display: none; }
+
     @media (max-width: 480px) {
       .header, .wrap { padding-left: 16px; padding-right: 16px; }
       .logo-sub { display: none; }
@@ -294,6 +306,86 @@
       <p class="section-note">Signed in as <strong id="accountEmail"></strong></p>
       <div class="btn-row"><button class="btn btn-ghost" id="signOutBtn">Sign out</button></div>
     </div>
+  </div>
+
+  <!-- ════════════════════ Account-based learning ════════════════════ -->
+  <div class="settings-card" id="learningMemory" hidden>
+    <div class="settings-group-title" id="lmTitle">Account-based learning</div>
+    <p class="section-note">
+      Let Alcoia remember what you've learned across documents and over time, so reviews and learning
+      activities can fit you better. It is on by default for your account. You can turn it off, export it or delete it here at any time.
+    </p>
+    <p class="section-note">
+      This memory exists for your own Alcoia learning experience. It is not used by Alcoia for advertising,
+      sold to third parties, or used to build profiles about you for unrelated purposes.
+    </p>
+    <details class="lm-details">
+      <summary>What is remembered, and who can see it</summary>
+      <p class="section-note"><strong>Remembered:</strong> which ideas you have been asked about, how those
+        questions went, when a review is due, and related learning information needed to provide the feature.</p>
+      <p class="section-note"><strong>Not remembered here:</strong> the pages you visit, web addresses, what you
+        type, how you scroll, or a record of everything you read. It remembers learning state, not a
+        surveillance history of your reading.</p>
+      <p class="section-note"><strong>Who can see it:</strong> you can see it, export it and delete it. Other
+        learners cannot see it, and instructors cannot see it as your private learning memory. It is separate
+        from class-level results, which are kept anonymously for each assignment, and some class features may
+        use aggregated learning information under their own privacy rules. Service providers process it on
+        Alcoia's behalf to run the service.</p>
+      <p class="section-note">Your notes, highlights and quizzes stay on this device and are separate from this.</p>
+    </details>
+
+    <div id="lmControls" data-lm="controls" hidden>
+      <div class="lm-state" aria-live="polite">
+        <span class="lm-state-label" data-lm="state-label"></span>
+        <span class="lm-state-detail section-note" data-lm="state-detail"></span>
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-ghost" role="switch" aria-checked="false"
+                aria-labelledby="lmTitle" data-lm="toggle">Turn on</button>
+      </div>
+
+      <div class="lm-panel" data-lm="enable-panel" role="group" aria-labelledby="lmEnableTitle" hidden>
+        <div class="lm-panel-title" id="lmEnableTitle">Turn account-based learning back on?</div>
+        <ul class="section-note">
+          <li>It is on by default. You can turn it off whenever you like, and Alcoia still works without it.</li>
+          <li>Alcoia will keep a private learning memory in your account across documents and over time: which
+            ideas you were asked about, how they went, and when a review is due.</li>
+          <li>It is kept for your own learning experience, not for advertising, sale or unrelated profiling.</li>
+          <li>It is not a record of the pages you read, and your notes and highlights stay on this device.</li>
+          <li>Turning it off keeps what is stored. You can delete it separately.</li>
+        </ul>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" data-lm="enable-confirm" data-lm-action>Turn on</button>
+          <button type="button" class="btn btn-ghost" data-lm="enable-cancel" data-lm-action>Cancel</button>
+        </div>
+      </div>
+
+      <p class="section-note" data-lm="off-note">Turning this off stops Alcoia from using or adding to your
+        account-based learning memory. It does not delete memory you have already stored.</p>
+
+      <div class="lm-actions">
+        <div class="lm-action">
+          <button type="button" class="btn btn-ghost" data-lm="export" data-lm-action>Export learning memory</button>
+          <p class="section-note">Download a copy of the private learning memory Alcoia currently stores for you.</p>
+        </div>
+        <div class="lm-action">
+          <button type="button" class="btn btn-ghost" data-lm="delete-open" data-lm-action>Delete learning memory</button>
+          <p class="section-note">Permanently remove the learning memory stored for your account.</p>
+        </div>
+      </div>
+
+      <div class="lm-panel lm-panel-danger" data-lm="delete-panel" role="group" aria-labelledby="lmDeleteTitle" hidden>
+        <div class="lm-panel-title" id="lmDeleteTitle">Delete learning memory?</div>
+        <p class="section-note">This permanently deletes the learning memory Alcoia has stored for your account.
+          It does not delete your Alcoia account, class membership, billing information, or data stored on this
+          device. This cannot be undone. It does not turn account-based learning off.</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-ghost" data-lm="delete-cancel" data-lm-action>Keep it</button>
+          <button type="button" class="btn btn-danger" data-lm="delete-confirm" data-lm-action>Delete permanently</button>
+        </div>
+      </div>
+    </div>
+    <p class="lm-message section-note" data-lm="message" hidden></p>
   </div>
 
   <!-- ════════════════════ Developer ════════════════════ -->
