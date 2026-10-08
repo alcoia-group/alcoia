@@ -72,7 +72,15 @@
     // POST invites/accept with { token } -> { classId, seatId, role };
     // POST seats/:id/release -> { released: true }. SEATS_URL is a base —
     // invites.js appends "/:id/release" itself.
+    // Account-based learning (private learner memory): GET the state, POST
+    // {base}/enable ({ confirm: true, scopeVersion } where scopeVersion is
+    // echoed from the server's own GET answer) and {base}/disable, GET
+    // {base}/export, DELETE the base to delete the stored memory. The server
+    // is the only authority on consent; src/shared/learning-memory.js keeps
+    // no consent state of its own.
+    LEARNING_MEMORY_URL: BACKEND_ORIGIN + '/api/account/learning-memory',
     INVITE_ACCEPT_URL: BACKEND_ORIGIN + '/api/invites/accept',
+    INVITE_PREVIEW_URL: BACKEND_ORIGIN + '/api/invites/preview',
     SEATS_URL: BACKEND_ORIGIN + '/api/seats',
     // LTI launch (item S6/E4 follow-up) — src/shared/invites.js's
     // acknowledgeLtiDisclosure(). Confirmed by reading alcoiaServer's
@@ -82,17 +90,13 @@
     // is no session yet at this point in the flow; a successful ack is
     // what MINTS one.
     LTI_DISCLOSURE_ACK_URL: BACKEND_ORIGIN + '/api/lti/disclosure/ack',
-    // The web page a Canvas launch actually lands the student's browser
-    // on (whatever receives /api/lti/launch's JSON and hands it to this
-    // extension) does not exist in any repo available here yet — same gap
-    // WEB_APP_ORIGIN above already accepted for item S3 ("alcoia.app does
-    // not resolve yet; this whole roadmap is designed to work without
-    // it"). This value is NOT invented: it is copied verbatim from
-    // alcoiaServer's own default parameter for ltiReaderBaseUrl in
-    // src/http/routes/lti.js (createLtiRouter's own `.invalid`
-    // placeholder), so background.js's origin check matches what the
-    // server itself already assumes that page's origin will be.
-    LTI_READER_ORIGIN: 'https://console.alcoia.invalid',
+    // The page that receives the launch exchange and messages this
+    // extension is the marketing site's /lti/launch (alcoiaWeb), so the
+    // sender origin to trust is that site's, the same origin as
+    // WEB_APP_ORIGIN. (It used to be a `.invalid` placeholder, which no real
+    // launch page could ever match.) Chrome's own externally_connectable
+    // list in manifest.json still decides who may message at all.
+    LTI_READER_ORIGIN: WEB_APP_ORIGIN,
     // Assignments entry point (S6/E4 follow-up) — src/shared/assignments.js
     // and src/content/host.js's outcome reporting. Both confirmed by
     // reading alcoiaServer's src/http/routes/assignments.js, documents.js
@@ -110,6 +114,13 @@
     // "/:id/outcomes" itself.
     ASSIGNMENTS_MINE_URL: BACKEND_ORIGIN + '/api/assignments/mine',
     ASSIGNMENTS_URL: BACKEND_ORIGIN + '/api/assignments',
+    // The workspace app (workspace.alcoia.app, repo alcoiaAssignments). The
+    // popup asks the server for a one-time handoff code
+    // (POST ASSIGNMENTS_URL/:id/reader-handoff -> { code, expiresAt }) and
+    // opens READER_ORIGIN/a/<id>#c=<code>. The code travels in the URL
+    // FRAGMENT so it never reaches a server log or a Referer header. The
+    // content script also uses this origin to recognise a reader page.
+    READER_ORIGIN: 'https://workspace.alcoia.app',
     DOCUMENTS_URL: BACKEND_ORIGIN + '/api/documents',
     // Item DC-1a — src/shared/kinematics.js and host.js's submitKinematics.
     // Confirmed by reading alcoiaServer's src/http/routes/scroll-sessions.js

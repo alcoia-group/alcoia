@@ -23,6 +23,8 @@
  * shows a stale checked state.
  */
 import { createSessionManager } from '../shared/session.js';
+import { createLearningMemoryManager } from '../shared/learning-memory.js';
+import { mountLearningMemory } from './learning-memory-ui.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -216,11 +218,34 @@ highlightPersistToggle.addEventListener('change', () => {
 // ── Account (item S3 pattern, reused not reimplemented) ───────────────────
 const session = createSessionManager();
 
+const learningMemory = mountLearningMemory({
+  root: $('learningMemory'),
+  manager: createLearningMemoryManager({
+    getSession: session.getSession,
+    url: self.ALCOIA_CONFIG.LEARNING_MEMORY_URL,
+  }),
+  // The JSON is saved exactly as the server sent it.
+  saveFile(filename, text) {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+});
+
 async function refreshAccountStatus() {
   const current = await session.getSession();
   $('accountSignedOut').hidden = !!current;
   $('accountSignedIn').hidden  = !current;
   if (current) $('accountEmail').textContent = current.email || '';
+  // Account-based learning is an account setting: shown only while signed in,
+  // always read from the server (no consent state is kept in extension storage).
+  $('learningMemory').hidden = !current;
+  if (current) learningMemory.refresh();
 }
 refreshAccountStatus();
 

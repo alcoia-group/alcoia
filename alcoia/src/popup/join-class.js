@@ -76,6 +76,7 @@ const entitlements = createEntitlementsManager({
 const invites = createInvitesManager({
   getSession: session.getSession,
   acceptUrl: self.ALCOIA_CONFIG.INVITE_ACCEPT_URL,
+  previewUrl: self.ALCOIA_CONFIG.INVITE_PREVIEW_URL,
   seatsUrl: self.ALCOIA_CONFIG.SEATS_URL,
   ltiAckUrl: self.ALCOIA_CONFIG.LTI_DISCLOSURE_ACK_URL,
 });
@@ -111,14 +112,25 @@ function showInput(prefill) {
   if (typeof prefill === 'string') $('inviteInput').value = prefill;
 }
 
-// Takes no argument — callers set pendingInviteText OR pendingLtiAckCode
+// Takes the class's reporting mode (from the invite preview, or the LTI
+// launch's own reportingMode) — callers set pendingInviteText OR pendingLtiAckCode
 // (never both) immediately before calling this, so the SAME disclosure
 // render (this function, this DOM) serves both entry paths without
 // knowing or caring which one led here. The explicit half of the join-
 // cannot-complete-without-disclosure guard — see this file's own header —
 // is this same disclosureRendered flag either path sets, right after the
 // disclosure block is actually in the visible DOM.
-function showDisclosure() {
+function showDisclosure(mode, className) {
+  // Only the notice for this class's actual reporting mode is ever shown.
+  // An unknown mode must never fall back to the anonymous wording.
+  if (mode !== 'anonymous' && mode !== 'identified') {
+    throw new Error('join-class.js: showDisclosure() needs a known reporting mode');
+  }
+  $('disclosureAnonymous').hidden = mode !== 'anonymous';
+  $('disclosureIdentified').hidden = mode !== 'identified';
+  const nameEl = $('disclosureClassName');
+  nameEl.textContent = className || '';
+  nameEl.hidden = !className;
   inputState.hidden = true;
   disclosureState.hidden = false;
   memberState.hidden = true;
@@ -230,16 +242,25 @@ async function completeJoin() {
     await new Promise((resolve) => chrome.storage.local.set({
       [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: { token: result.sessionToken, email: '', expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1000 },
     }, resolve));
+    // Open the assignment signed in (the redirect carries a one-use reader
+    // code), but only on the reader's own origin: never follow an
+    // arbitrary URL from a response.
+    try {
+      const readerOrigin = self.ALCOIA_CONFIG.READER_ORIGIN;
+      if (result.redirectTo && readerOrigin && new URL(result.redirectTo).origin === readerOrigin) {
+        chrome.tabs.create({ url: result.redirectTo });
+      }
+    } catch (e) { /* a malformed redirect is ignored; the join itself is done */ }
   }
 
   // Appended, never overwritten — a join never erases an earlier one.
   // Re-joining the same classId (shouldn't happen; the server itself
   // rejects that with already_a_member) still dedupes defensively rather
-  // than listing the same class twice.
-  const seatId = pendingLtiAckCode ? null : result.seatId;
-  const role = pendingLtiAckCode ? null : result.role;
+  // than listing the same class twice. The ack response now carries real
+  // seatId/role for the LTI path too (null only against an older server),
+  // so neither branch has to force either field to null anymore.
   const memberships = (await loadMemberships()).filter((m) => m.classId !== result.classId);
-  memberships.push({ classId: result.classId, seatId, role, joinedAt: Date.now() });
+  memberships.push({ classId: result.classId, seatId: result.seatId || null, role: result.role || null, joinedAt: Date.now() });
   await saveMemberships(memberships);
 
   // "Holding a seat grants Reader entitlements automatically" — refresh
@@ -268,8 +289,14 @@ $('inputFormEl').addEventListener('submit', async (e) => {
     return;
   }
 
+  const preview = await invites.previewInvite(raw);
+  if (!preview.ok) {
+    inputError.textContent = joinErrorMessage(preview.error);
+    inputError.hidden = false;
+    return;
+  }
   pendingInviteText = raw;
-  showDisclosure();
+  showDisclosure(preview.reportingMode, preview.className);
 });
 
 $('confirmJoinBtn').addEventListener('click', () => { completeJoin(); });
@@ -326,9 +353,11 @@ async function boot() {
     await new Promise((resolve) => chrome.storage.local.remove(PENDING_LTI_LAUNCH_KEY, resolve));
     const fresh = typeof ltiPending.at === 'number' && Date.now() - ltiPending.at < PENDING_LTI_LAUNCH_MAX_AGE_MS;
     if (fresh && typeof ltiPending.ackCode === 'string' && ltiPending.ackCode) {
-      pendingLtiAckCode = ltiPending.ackCode;
-      showDisclosure();
-      return;
+      if (ltiPending.reportingMode === 'anonymous' || ltiPending.reportingMode === 'identified') {
+        pendingLtiAckCode = ltiPending.ackCode;
+        showDisclosure(ltiPending.reportingMode, '');
+        return;
+      }
     }
     // Stale or malformed — the ackCode is single-use and short-lived
     // server-side regardless, so showing it now would just fail cleanly
@@ -351,8 +380,15 @@ async function boot() {
     const fresh = typeof pending.at === 'number' && Date.now() - pending.at < PENDING_INVITE_MAX_AGE_MS;
     const current = await session.getSession();
     if (fresh && typeof pending.invite === 'string' && current) {
-      pendingInviteText = pending.invite;
-      showDisclosure();
+      const preview = await invites.previewInvite(pending.invite);
+      if (preview.ok) {
+        pendingInviteText = pending.invite;
+        showDisclosure(preview.reportingMode, preview.className);
+        return;
+      }
+      showInput(pending.invite);
+      inputError.textContent = joinErrorMessage(preview.error);
+      inputError.hidden = false;
       return;
     }
   }

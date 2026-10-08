@@ -26,6 +26,7 @@ export function createAssignmentsManager(opts = {}) {
   const getSession = opts.getSession;
   const mineUrl = opts.mineUrl;
   const documentsUrl = opts.documentsUrl;
+  const assignmentsUrl = opts.assignmentsUrl;
 
   function authHeaders(token) {
     return { Authorization: `Bearer ${token}` };
@@ -106,5 +107,39 @@ export function createAssignmentsManager(opts = {}) {
     }
   }
 
-  return { listMine, getDownloadUrl };
+  /* Returns { ok: true, code } or { ok: false, error }. Asks the server for a
+   * single-use, ~60 s code the workspace trades for its own session, so the
+   * student lands on the assignment with no sign-in step. The code is never
+   * stored or logged here; the caller puts it in a URL fragment. A 404 means
+   * the server has no such assignment for this student (or is not deployed
+   * yet) and is reported as `not_available`. */
+  async function requestReaderHandoff(assignmentId) {
+    const id = String(assignmentId || '').trim();
+    if (!id) return { ok: false, error: 'no_assignment_id' };
+    const session = await getSession();
+    if (!session || typeof session.token !== 'string' || !session.token) {
+      return { ok: false, error: 'no_session' };
+    }
+    if (!assignmentsUrl || !fetchImpl) return { ok: false, error: 'no_assignments_url' };
+
+    try {
+      const resp = await fetchImpl(`${assignmentsUrl}/${encodeURIComponent(id)}/reader-handoff`, {
+        method: 'POST',
+        headers: authHeaders(session.token),
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        if (resp.status === 404) return { ok: false, error: 'not_available' };
+        return { ok: false, error: (data && typeof data.error === 'string' && data.error) || `status_${resp.status}` };
+      }
+      if (!data || typeof data.code !== 'string' || !data.code) {
+        return { ok: false, error: 'malformed_response' };
+      }
+      return { ok: true, code: data.code };
+    } catch (e) {
+      return { ok: false, error: 'network_error' };
+    }
+  }
+
+  return { listMine, getDownloadUrl, requestReaderHandoff };
 }
