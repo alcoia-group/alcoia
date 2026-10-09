@@ -25,6 +25,7 @@
 import { createSessionManager } from '../shared/session.js';
 import { createLearningMemoryManager } from '../shared/learning-memory.js';
 import { mountLearningMemory } from './learning-memory-ui.js';
+import * as popupHistory from '../shared/popup-history.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -324,3 +325,32 @@ chrome.storage.onChanged.addListener((changes, area) => {
 $('diagnosticsBtn').addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/diagnostics.html') });
 });
+
+// ── Popup history (local only) ────────────────────────────────────────────
+async function renderPopupHistory() {
+  const on = await popupHistory.isEnabled();
+  $('popupHistoryToggle').checked = on;
+  $('popupHistoryBody').hidden = !on;
+  const ul = $('popupHistoryList');
+  ul.textContent = '';
+  const items = on ? await popupHistory.list() : [];
+  if (on && items.length === 0) {
+    const li = document.createElement('li');
+    li.textContent = 'Nothing yet.';
+    ul.appendChild(li);
+  }
+  for (const e of items) {
+    const li = document.createElement('li');
+    li.textContent = `${new Date(e.t).toLocaleString()}${e.host ? ` · ${e.host}` : ''}: ${e.text}`;
+    ul.appendChild(li);
+  }
+}
+$('popupHistoryToggle').addEventListener('change', async (ev) => {
+  await popupHistory.setEnabled(ev.target.checked);
+  renderPopupHistory();
+});
+$('popupHistoryClear').addEventListener('click', async () => {
+  await popupHistory.clear();
+  renderPopupHistory();
+});
+renderPopupHistory();
