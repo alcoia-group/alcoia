@@ -196,9 +196,9 @@ export async function createHost(deps) {
     // site below — never re-fetched, never more than the one paragraph
     // already in hand. Optional, the same as every parameter above it —
     // see interventions.js's own header for the full reasoning.
-    reportIntervention = (interventionId, knowledgeUnitId, paragraphIndex, type, text) => {
+    reportIntervention = (interventionId, knowledgeUnitId, paragraphIndex, type, text, policyAction) => {
       if (!interventionId) return;
-      interventionsManager.submit({ interventionId, knowledgeUnitId, paragraphIndex, type, text }).catch(() => {});
+      interventionsManager.submit({ interventionId, knowledgeUnitId, paragraphIndex, type, text, policyAction }).catch(() => {});
     };
   }
 
@@ -1011,7 +1011,7 @@ export async function createHost(deps) {
         interventionId,
       });
       if (shown) {
-        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text);
+        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text, 'retrieve');
       } else {
         // Step 12A: generation succeeded (a real, usable question came
         // back) but presentation did not — diagnostic-only, never a budget
@@ -1098,7 +1098,7 @@ export async function createHost(deps) {
         // reused rather than inventing a new type. The retrieve/explain/
         // repair distinction lives in which generation mode produced the
         // content the reader actually saw, not in a new reporting field.
-        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text);
+        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text, decision.policyAction === 'repair' ? 'repair' : 'explain');
       } else {
         diagLog.log('questions', `generated_not_presented action=${decision.action} policyAction=${decision.policyAction} reason=${decision.reason}`);
       }
