@@ -66,9 +66,11 @@ export function createUIController(deps = {}) {
   const margin = deps.popupMargin ?? POPUP_MARGIN;
   const maxPopups = deps.maxPopups ?? MAX_POPUPS;
   const sharedStyles = deps.sharedStyles || '';
+  const onPopupShown = deps.onPopupShown || null; // optional local history hook
 
   /* fingerprint -> { el }. The single record of what is on screen. */
   const openPopups = new Map();
+  const shownBefore = new WeakSet();
   let lastHighlighted = null;
 
   // ── Paragraph highlight ──────────────────────────────────────────────────
@@ -311,6 +313,10 @@ export function createUIController(deps = {}) {
       .map((e) => e.el.getBoundingClientRect());
 
     placePopup(root, anchorRect, avoidRects);
+    if (onPopupShown && !shownBefore.has(root)) {
+      shownBefore.add(root);
+      try { onPopupShown(root); } catch { /* never break the popup */ }
+    }
     requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('show')));
     resetAutohide(root);
   }
