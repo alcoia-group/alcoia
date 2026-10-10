@@ -998,7 +998,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     // always derived — 'k5a20958613' is computeKnowledgeUnitId('some
     // paragraph text'), confirmed directly rather than hardcoded blind.
     expect(body).toEqual({
-      paragraph_index: 3, struggled: true, source: 'inline', knowledge_unit_id: 'k5a20958613',
+      paragraph_index: 3, struggled: true, source: 'inline', knowledge_unit_id: 'k5a20958613', explanation_preceded_attempt: false,
     });
     expect(body).not.toHaveProperty('pseudonym');
     expect(body).not.toHaveProperty('substate');
@@ -1020,7 +1020,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenBody).toEqual({
       paragraph_index: 3, struggled: true, source: 'inline',
-      substate: 'confusion', self_reported: true, knowledge_unit_id: 'k5a20958613',
+      substate: 'confusion', self_reported: true, knowledge_unit_id: 'k5a20958613', explanation_preceded_attempt: false,
     });
   });
 
@@ -1038,7 +1038,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenBody).toEqual({
       paragraph_index: 3, struggled: true, source: 'inline',
-      substate: 'overload', self_reported: false, knowledge_unit_id: 'k5a20958613',
+      substate: 'overload', self_reported: false, knowledge_unit_id: 'k5a20958613', explanation_preceded_attempt: false,
     });
   });
 
@@ -1055,7 +1055,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenBody).toEqual({
-      paragraph_index: 3, struggled: true, source: 'inline', substate: null, knowledge_unit_id: 'k5a20958613',
+      paragraph_index: 3, struggled: true, source: 'inline', substate: null, knowledge_unit_id: 'k5a20958613', explanation_preceded_attempt: false,
     });
     expect(seenBody).not.toHaveProperty('self_reported');
   });
@@ -1386,7 +1386,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     // here since this test is about handleAsk's own wiring, not
     // re-exercising intervention-policy.js's decision logic (already
     // covered by tests/intervention-policy.test.js).
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_1700000000000_abc123' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_1700000000000_abc123' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 7);
     expect(shown).toBe(true);
 
@@ -1698,7 +1698,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${askText}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_first' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_first' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     interventionPolicy.record(decision);
@@ -2021,7 +2021,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_race' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_race' };
     const askPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
 
     // Retention's own async chain (snoozeControl check, policy evaluation,
@@ -2061,7 +2061,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     expect(deferred.pendingCount()).toBe(1); // retention's own request is the one in flight
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_race_2' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_race_2' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
 
     // Ask never entered generation at all.
@@ -2086,7 +2086,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_fail' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_fail' };
     const askPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
     // pickLevel() awaits a chrome.storage read before fetchQuestions() is
     // ever reached, so the request does not land on the same synchronous
@@ -2125,7 +2125,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_malformed', reason: 'struggling at 0.90' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_malformed', reason: 'struggling at 0.90' };
     const shownPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
     await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1));
 
@@ -2161,7 +2161,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_budget' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_budget' };
     const shownPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
     await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1));
     // Malformed -> questionCard.show() returns false, same as above.
@@ -2227,7 +2227,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_diag', reason: 'struggling at 0.87' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_diag', reason: 'struggling at 0.87' };
     const shownPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
     await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1));
     deferred.resolveNext({ questions: [{ q: 'Q?', options: ['a', 'b'], answerIndex: 0, explanation: 'e', span: 'a real span' }] });
@@ -2254,7 +2254,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     const { host, sessionRecall, runSessionRecall } = await createHost(baseDeps());
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_vs_recall' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_vs_recall' };
     const askPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
     await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1)); // ask's own generation is held open, guard held
 
@@ -2349,7 +2349,7 @@ describe('active intervention awareness (step 9A)', () => {
     expect(host.isQuestionCardVisible()).toBe(false);
 
     document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_1' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_1' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     expect(host.isQuestionCardVisible()).toBe(true);
@@ -2368,7 +2368,7 @@ describe('active intervention awareness (step 9A)', () => {
   it('host.isQuestionCardVisible() flips back to false on a plain dismissal too (no answer at all)', async () => {
     const { host } = await createHost(baseDeps());
     document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_2' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_2' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     expect(host.isQuestionCardVisible()).toBe(true);
@@ -2394,7 +2394,7 @@ describe('active intervention awareness (step 9A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
-    const decision = { allow: true, action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_open' };
+    const decision = { allow: true, action: 'ask', evidence: ['because'], interventionId: 'iv_ask_open' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     interventionPolicy.record(decision);
@@ -2423,7 +2423,7 @@ describe('active intervention awareness (step 9A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
-    const decision = { allow: true, action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_to_close' };
+    const decision = { allow: true, action: 'ask', evidence: ['because'], interventionId: 'iv_ask_to_close' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     interventionPolicy.record(decision);
@@ -2470,8 +2470,8 @@ describe('active intervention awareness (step 9A)', () => {
     const { host } = await createHost(baseDeps());
 
     document.body.innerHTML = `<p id="a">${LONG_P_A}</p><p id="b">${LONG_P_B}</p>`;
-    const decisionA = { action: 'ask', evidence: ['a'], wasExplorationSample: false, interventionId: 'iv_A' };
-    const decisionB = { action: 'ask', evidence: ['b'], wasExplorationSample: false, interventionId: 'iv_B' };
+    const decisionA = { action: 'ask', evidence: ['a'], interventionId: 'iv_A' };
+    const decisionB = { action: 'ask', evidence: ['b'], interventionId: 'iv_B' };
 
     const shownA = await host.onIntervention(decisionA, {}, document.getElementById('a'), 0);
     const shownB = await host.onIntervention(decisionB, {}, document.getElementById('b'), 1);
@@ -2516,7 +2516,7 @@ describe('active intervention awareness (step 9A)', () => {
     expect(host.isQuestionCardVisible()).toBe(false);
 
     document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_anon' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_anon' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     expect(host.isQuestionCardVisible()).toBe(true);
@@ -2662,7 +2662,7 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
     expect(seenBody.explanation_preceded_attempt).toBe(false);
   });
 
-  it('stays fully absent (not a fabricated false) for a caller that never wires wasParagraphExplained at all — every pre-DC-2 test in this file, unchanged', async () => {
+  it('sends explicit false for an unaided answer when no external tracker is wired: host.js tracks assistance itself', async () => {
     let seenBody = null;
     const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
     mockProxyFetch(fetchImpl);
@@ -2671,7 +2671,97 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
     host.onStruggle('some paragraph text', 3);
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
-    expect(seenBody).not.toHaveProperty('explanation_preceded_attempt');
+    expect(seenBody.explanation_preceded_attempt).toBe(false);
+  });
+
+  describe('provenance is derived from what the reader was actually shown', () => {
+    const PARA = 'A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it, for the provenance tests specifically.';
+    function wire() {
+      const bodies = [];
+      const fetchImpl = vi.fn((url, options) => {
+        if (String(url).endsWith('/outcomes')) bodies.push(JSON.parse(options.body));
+        return { ok: true, status: 200, data: { recorded: true } };
+      });
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      globalThis.__sendMessageImpl = (msg, cb) => {
+        if (msg.url?.includes('/api/summarize')) return cb({ ok: true, data: { summary: 'An explanation.' } });
+        return cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
+      };
+      mockProxyFetch(fetchImpl);
+      return { bodies, fetchImpl };
+    }
+    async function answerOnce(host) {
+      document.body.innerHTML = `<p id="t">${PARA}</p>`;
+      await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 7);
+      queryAlcoia('.sra-q-option[data-index="0"]').click();
+      queryAlcoia('.sra-q-conf-skip').click();
+    }
+
+    it('an unaided answered question sends explicit false', async () => {
+      const { bodies, fetchImpl } = wire();
+      const { host } = await createHost(assignmentDeps());
+      await answerOnce(host);
+      await vi.waitFor(() => expect(bodies.length).toBe(1));
+      expect(bodies[0].explanation_preceded_attempt).toBe(false);
+      expect(fetchImpl).toHaveBeenCalled();
+    });
+
+    it('an answer after an explanation of that paragraph (fetchSummary, cached or fresh) sends explicit true', async () => {
+      const { bodies } = wire();
+      const { host, fetchSummary } = await createHost(assignmentDeps());
+      document.body.innerHTML = `<p id="t">${PARA}</p>`;
+      host.setCurrentParagraph({ type: 'dom', data: document.getElementById('t') });
+      expect(await fetchSummary(PARA, 'explain_more')).toBeTruthy();
+      await answerOnce(host);
+      await vi.waitFor(() => expect(bodies.length).toBe(1));
+      expect(bodies[0].explanation_preceded_attempt).toBe(true);
+    });
+
+    it('a summary of a selection inside the current paragraph counts for that paragraph', async () => {
+      const { bodies } = wire();
+      const { host, fetchSummary } = await createHost(assignmentDeps());
+      document.body.innerHTML = `<p id="t">${PARA}</p>`;
+      host.setCurrentParagraph({ type: 'dom', data: document.getElementById('t') });
+      await fetchSummary('length floor fetchQuestions', 'define_word');
+      await answerOnce(host);
+      await vi.waitFor(() => expect(bodies.length).toBe(1));
+      expect(bodies[0].explanation_preceded_attempt).toBe(true);
+    });
+
+    it('assistance that cannot be attributed to a paragraph makes later outcomes UNKNOWN (absent), never false', async () => {
+      const { bodies } = wire();
+      const { host, fetchSummary } = await createHost(assignmentDeps());
+      document.body.innerHTML = `<p id="t">${PARA}</p><p id="other">Some entirely different words elsewhere on the page.</p>`;
+      host.setCurrentParagraph({ type: 'dom', data: document.getElementById('other') });
+      await fetchSummary('words that are in neither paragraph', 'tldr');
+      await answerOnce(host);
+      await vi.waitFor(() => expect(bodies.length).toBe(1));
+      expect(bodies[0]).not.toHaveProperty('explanation_preceded_attempt');
+    });
+
+    it('an answer after an explain card on that paragraph sends explicit true', async () => {
+      const { bodies } = wire();
+      const { host } = await createHost(assignmentDeps());
+      document.body.innerHTML = `<p id="t">${PARA}</p>`;
+      const el = document.getElementById('t');
+      await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_x' }, {}, el, 7);
+      await answerOnce(host);
+      await vi.waitFor(() => expect(bodies.length).toBe(1));
+      expect(bodies[0].explanation_preceded_attempt).toBe(true);
+    });
+
+    it('a later answer cannot clear recorded assistance: a second question on the explained paragraph is still true', async () => {
+      const { bodies } = wire();
+      const { host, fetchSummary } = await createHost(assignmentDeps());
+      document.body.innerHTML = `<p id="t">${PARA}</p>`;
+      host.setCurrentParagraph({ type: 'dom', data: document.getElementById('t') });
+      await fetchSummary(PARA, 'explain_more');
+      await answerOnce(host);
+      await vi.waitFor(() => expect(bodies.length).toBe(1));
+      host.onStruggle(PARA, 7);
+      await vi.waitFor(() => expect(bodies.length).toBe(2));
+      expect(bodies.map((b) => b.explanation_preceded_attempt)).toEqual([true, true]);
+    });
   });
 
   it('a real answered question also carries the flag, keyed by the SAME paragraphKey the question card itself used', async () => {
