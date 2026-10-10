@@ -72,7 +72,10 @@ export async function createHost(deps) {
     // the same three-way shape `correct`/`substate` already use, so an
     // existing outcome body is byte-for-byte unchanged until a real
     // tracker (content.js's selection-explain.js) is actually wired in.
-    wasParagraphExplained = () => undefined,
+    // Optional extra tracker (content.js's selection-explain). host.js now tracks assistance itself at its
+    // own fetchSummary chokepoint (see assistedKeys below), so the absence of this dependency no longer means
+    // "unknown": every explanation surface in this host goes through that chokepoint.
+    wasParagraphExplained = () => false,
   } = deps;
 
   const s = () => settings() || {};
@@ -372,11 +375,42 @@ export async function createHost(deps) {
     return true;
   }
 
-  async function fetchSummary(text, mode = 'tldr', context = '') {
+  // Answer provenance (what the server reads as explanation_preceded_attempt). `false` is a positive claim:
+  // "this client established that no explanation was shown for this paragraph before this attempt". Every
+  // explanation or summary the reader is shown is generated through fetchSummary below (the selection
+  // tooltip, the explain/repair card, the card's "explain more", simplify, define, ...), cached results
+  // included, so noting assistance there covers them all. A summary of a selection is attributed to the
+  // paragraph being read when the selection lies inside it; when it cannot be attributed to any known
+  // paragraph, assistance is `unmappedAssistance` and later outcomes report UNKNOWN (undefined, never
+  // false) rather than claiming no assistance. A retry or later write cannot clear either record.
+  const assistedKeys = new Set();
+  let unmappedAssistance = false;
+  const keyOf = (t) => (t || '').slice(0, 80).trim();
+  function noteAssistance(text, paragraphKey) {
+    if (paragraphKey) { assistedKeys.add(paragraphKey); return; }
+    const own = keyOf(text);
+    if (own) assistedKeys.add(own);
+    let current = '';
+    try {
+      current = currentParagraph?.type === 'dom' && currentParagraph.data
+        ? (currentParagraph.data.innerText || currentParagraph.data.textContent || '') : '';
+    } catch (e) { current = ''; }
+    if (current && text && current.includes(text)) assistedKeys.add(keyOf(current));
+    else if (!current || !text || keyOf(current) !== own) unmappedAssistance = true;
+  }
+  function explanationPreceded(paragraphKey) {
+    if (!paragraphKey) return undefined;
+    if (assistedKeys.has(paragraphKey) || wasParagraphExplained(paragraphKey) === true) return true;
+    return unmappedAssistance ? undefined : false;
+  }
+
+  async function fetchSummary(text, mode = 'tldr', context = '', opts = {}) {
     const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
     if (_summaryCache.has(cacheKey)) {
       log(`Cache hit: ${mode}`);
-      return _summaryCache.get(cacheKey);
+      const cached = _summaryCache.get(cacheKey);
+      if (cached) noteAssistance(text, opts.paragraphKey);
+      return cached;
     }
     if (!checkAiCallBudget('summarize', mode)) return null;
     try {
@@ -390,6 +424,7 @@ export async function createHost(deps) {
       if (!j) return null;
       const result = j.summary || j.result || null;
       if (result) {
+        noteAssistance(text, opts.paragraphKey);
         _summaryCache.set(cacheKey, result);
         if (_summaryCache.size > 100) _summaryCache.delete(_summaryCache.keys().next().value);
       }
@@ -708,7 +743,7 @@ export async function createHost(deps) {
         // null for those rather than fabricating an option id.
         selectedAnswer: typeof record.chosenIndex === 'number' ? record.chosenIndex : null,
         // Item DC-2 — same paragraph-key lookup as onStruggle above.
-        explanationPrecededAttempt: wasParagraphExplained(record.paragraphKey),
+        explanationPrecededAttempt: explanationPreceded(record.paragraphKey),
         // Knowledge-unit identity (step 3): additive, sent whenever the
         // record has one (null whenever there was no computable text to
         // hash at present()-time — outcomes.js's own guard treats that the
@@ -1084,7 +1119,7 @@ export async function createHost(deps) {
     try {
       const identity = computeIdentity(text);
       const mode = kind === 'repair' ? 'repair' : 'explain_more';
-      const generated = await fetchSummary(text, mode);
+      const generated = await fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey });
       if (!generated) return false;
 
       let anchorRect = null;
@@ -1287,7 +1322,7 @@ export async function createHost(deps) {
       // own paragraphKey, intervention-policy.js's paragraphKey()) — so a
       // key produced by selection-explain.js's markParagraphExplained() is
       // directly comparable here with no second convention to keep in sync.
-      const explanationPrecededAttempt = wasParagraphExplained(text.slice(0, 80).trim());
+      const explanationPrecededAttempt = explanationPreceded(text.slice(0, 80).trim());
       // Knowledge-unit identity (step 3): computed straight from the same
       // text, not via computeIdentity() — this call site never needed a
       // paragraphKey of its own (wasParagraphExplained above still uses the
