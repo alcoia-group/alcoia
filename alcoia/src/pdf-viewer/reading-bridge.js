@@ -152,7 +152,6 @@ export async function attachReadingBridge({ sourceUrl, assignmentId, debug } = {
     comprehensionMonitor: hostApi.comprehensionMonitor,
     settings: () => ({
       assistantEnabled, comprehensionCheckEnabled,
-      focusRulerEnabled: false, // no DOM reading-line surface on a canvas+text-layer page; not attempted here
       debugEnabled,
     }),
     host: hostApi.host,

@@ -25,6 +25,7 @@
 import { createSessionManager } from '../shared/session.js';
 import { createLearningMemoryManager } from '../shared/learning-memory.js';
 import { mountLearningMemory } from './learning-memory-ui.js';
+import * as popupHistory from '../shared/popup-history.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,8 +44,6 @@ const highlightToggle          = $('highlightToggle');
 const highlightColorToggle     = $('highlightColorToggle');
 const highlightPersistToggle   = $('highlightPersistToggle');
 const highlightSummarizeToggle = $('highlightSummarizeToggle');
-const ttsToggle                = $('ttsToggle');
-const focusRulerToggle         = $('focusRulerToggle');
 const autohideToggle           = $('autohideToggle');
 const autohideTimeout          = $('autohideTimeout');
 const timeoutRow               = $('timeoutRow');
@@ -52,7 +51,6 @@ const pinDefaultToggle         = $('pinDefaultToggle');
 const darkModeToggle           = $('darkModeToggle');
 const dyslexiaToggle           = $('dyslexiaToggle');
 const dyslexiaOptions          = $('dyslexiaOptions');
-const bionicToggle             = $('bionicToggle');
 const dyslexiaColorSelect      = $('dyslexiaColorSelect');
 const debugToggle              = $('debugToggle');
 const pdfTakeoverToggle        = $('pdfTakeoverToggle');
@@ -66,8 +64,7 @@ const DEFAULTS = {
   sra_autohide: false, sra_autohide_timeout: 12,
   sra_pin_default: false, sra_debug: false, sra_enabled: true,
   sra_comprehension: true,
-  sra_tts: false, sra_focus_ruler: false,
-  sra_dyslexia: false, sra_dyslexia_color: 'rgba(255,243,180,0.12)', sra_bionic: false,
+  sra_dyslexia: false, sra_dyslexia_color: 'rgba(255,243,180,0.12)',
   sra_dark_mode: false, sra_active_persona: '',
   sra_pdf_takeover: true,
   sra_web_pdf_takeover: false,
@@ -81,8 +78,6 @@ function paint(res) {
   highlightColorToggle.checked     = res.sra_highlight_color !== false;
   highlightPersistToggle.checked   = res.sra_highlight_persist !== false;
   highlightSummarizeToggle.checked = !!res.sra_highlight_summarize;
-  ttsToggle.checked           = !!res.sra_tts;
-  focusRulerToggle.checked    = !!res.sra_focus_ruler;
   autohideToggle.checked      = !!res.sra_autohide;
   autohideTimeout.value       = res.sra_autohide_timeout;
   timeoutRow.style.display    = res.sra_autohide ? 'flex' : 'none';
@@ -92,7 +87,6 @@ function paint(res) {
   document.body.classList.toggle('dark-mode', !!res.sra_dark_mode);
   dyslexiaToggle.checked      = !!res.sra_dyslexia;
   dyslexiaOptions.style.display = res.sra_dyslexia ? 'block' : 'none';
-  bionicToggle.checked        = !!res.sra_bionic;
   dyslexiaColorSelect.value   = res.sra_dyslexia_color || '';
   debugToggle.checked         = !!res.sra_debug;
   pdfTakeoverToggle.checked   = res.sra_pdf_takeover !== false;
@@ -129,11 +123,8 @@ function saveAndBroadcast() {
     sra_pin_default:      pinDefaultToggle.checked,
     sra_debug:            debugToggle.checked,
     sra_comprehension:    comprehensionToggle.checked,
-    sra_tts:              ttsToggle.checked,
-    sra_focus_ruler:      focusRulerToggle.checked,
     sra_dyslexia:         dyslexiaToggle.checked,
     sra_dyslexia_color:   dyslexiaColorSelect.value,
-    sra_bionic:           bionicToggle.checked,
     sra_dark_mode:        darkModeToggle.checked,
   };
   chrome.storage.local.set(s);
@@ -163,9 +154,7 @@ function saveAndBroadcast() {
         autohide: s.sra_autohide, autohideTimeout: s.sra_autohide_timeout,
         pinDefault: s.sra_pin_default, debug: s.sra_debug,
         comprehension: s.sra_comprehension,
-        tts: s.sra_tts, focusRuler: s.sra_focus_ruler,
         dyslexia: s.sra_dyslexia, dyslexiaColor: s.sra_dyslexia_color,
-        bionic: s.sra_bionic,
         darkMode: s.sra_dark_mode,
       }, () => { if (chrome.runtime.lastError) { /* no content script here */ } });
       chrome.tabs.sendMessage(tabs[0].id, { type: 'debugToggle', enabled: s.sra_debug },
@@ -227,18 +216,17 @@ highlightPersistToggle.addEventListener('change', () => {
   });
 });
 [selToggle, highlightToggle, highlightColorToggle, highlightSummarizeToggle,
- debugToggle, comprehensionToggle, ttsToggle, focusRulerToggle,
- bionicToggle, darkModeToggle]
+ debugToggle, comprehensionToggle, darkModeToggle]
   .forEach((el) => el.addEventListener('change', saveAndBroadcast));
 [autohideTimeout, dyslexiaColorSelect]
   .forEach((el) => el.addEventListener('change', saveAndBroadcast));
 
 // ── Reading mode presets — ported from popup.js's MODES/applyMode() ───────
 const MODES = {
-  research: { sra_selection: true,  sra_highlight_para: true,  sra_comprehension: true,  sra_focus_ruler: true,  sra_autohide: false, sra_pin_default: true,  sra_tts: false },
-  study:    { sra_selection: true,  sra_highlight_para: true,  sra_comprehension: true,  sra_focus_ruler: false, sra_autohide: true,  sra_autohide_timeout: 10, sra_pin_default: false, sra_tts: true },
-  casual:   { sra_selection: true,  sra_highlight_para: false, sra_comprehension: false, sra_focus_ruler: false, sra_autohide: true,  sra_autohide_timeout: 6,  sra_pin_default: false, sra_tts: false },
-  speed:    { sra_selection: false, sra_highlight_para: false, sra_comprehension: false, sra_focus_ruler: true,  sra_autohide: true,  sra_autohide_timeout: 4,  sra_pin_default: false, sra_tts: false },
+  research: { sra_selection: true,  sra_highlight_para: true,  sra_comprehension: true,  sra_autohide: false, sra_pin_default: true },
+  study:    { sra_selection: true,  sra_highlight_para: true,  sra_comprehension: true,  sra_autohide: true,  sra_autohide_timeout: 10, sra_pin_default: false },
+  casual:   { sra_selection: true,  sra_highlight_para: false, sra_comprehension: false, sra_autohide: true,  sra_autohide_timeout: 6,  sra_pin_default: false },
+  speed:    { sra_selection: false, sra_highlight_para: false, sra_comprehension: false, sra_autohide: true,  sra_autohide_timeout: 4,  sra_pin_default: false },
 };
 
 function applyMode(key) {
@@ -249,10 +237,8 @@ function applyMode(key) {
   selToggle.checked           = !!p.sra_selection;
   highlightToggle.checked     = !!p.sra_highlight_para;
   comprehensionToggle.checked = !!p.sra_comprehension;
-  focusRulerToggle.checked    = !!p.sra_focus_ruler;
   autohideToggle.checked      = !!p.sra_autohide;
   pinDefaultToggle.checked    = !!p.sra_pin_default;
-  ttsToggle.checked           = !!p.sra_tts;
   if (p.sra_autohide_timeout) autohideTimeout.value = p.sra_autohide_timeout;
   timeoutRow.style.display = p.sra_autohide ? 'flex' : 'none';
   syncPinAutohideExclusivity();
@@ -324,3 +310,32 @@ chrome.storage.onChanged.addListener((changes, area) => {
 $('diagnosticsBtn').addEventListener('click', () => {
   chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/diagnostics.html') });
 });
+
+// ── Popup history (local only) ────────────────────────────────────────────
+async function renderPopupHistory() {
+  const on = await popupHistory.isEnabled();
+  $('popupHistoryToggle').checked = on;
+  $('popupHistoryBody').hidden = !on;
+  const ul = $('popupHistoryList');
+  ul.textContent = '';
+  const items = on ? await popupHistory.list() : [];
+  if (on && items.length === 0) {
+    const li = document.createElement('li');
+    li.textContent = 'Nothing yet.';
+    ul.appendChild(li);
+  }
+  for (const e of items) {
+    const li = document.createElement('li');
+    li.textContent = `${new Date(e.t).toLocaleString()}${e.host ? ` · ${e.host}` : ''}: ${e.text}`;
+    ul.appendChild(li);
+  }
+}
+$('popupHistoryToggle').addEventListener('change', async (ev) => {
+  await popupHistory.setEnabled(ev.target.checked);
+  renderPopupHistory();
+});
+$('popupHistoryClear').addEventListener('click', async () => {
+  await popupHistory.clear();
+  renderPopupHistory();
+});
+renderPopupHistory();
