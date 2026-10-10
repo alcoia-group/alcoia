@@ -114,6 +114,10 @@
     // "/:id/outcomes" itself.
     ASSIGNMENTS_MINE_URL: BACKEND_ORIGIN + '/api/assignments/mine',
     ASSIGNMENTS_URL: BACKEND_ORIGIN + '/api/assignments',
+    // Question levels the server can deliver. The ladder above 'recognition' needs a level-aware
+    // /api/questions and a /api/grade route that alcoiaServer does not have; until it does, the
+    // extension only requests (and only claims to deliver) recognition questions.
+    QUESTION_LEVELS_SUPPORTED: ['recognition'],
     // The workspace app (workspace.alcoia.app, repo alcoiaAssignments). The
     // popup asks the server for a one-time handoff code
     // (POST ASSIGNMENTS_URL/:id/reader-handoff -> { code, expiresAt }) and
