@@ -147,7 +147,7 @@ export const STATE_ACTIONS = Object.freeze({
  *                      SKIMMING candidate whose evidence is strong enough on
  *                      its own (repeated regression, or any non-regression
  *                      STRUGGLING signal that already cleared confidence/
- *                      backoff), or an exploration sample.
+ *                      backoff).
  *                      Renders as: `action: 'ask'`.
  *
  *   repair            A retrieval was already attempted recently and failed
@@ -320,26 +320,6 @@ export const DEFAULT_BUDGET = Object.freeze({
   },
 });
 
-/* Every label collected so far comes from a paragraph the state machine
- * already flagged, so a model trained on it can only learn to reproduce
- * today's thresholds — including their errors. Asking anyway on a slice of
- * paragraphs the detector would have left alone is the only way to collect
- * labels that are not conditioned on the detector's own decision, and data
- * collected before this exists is permanently unusable for that purpose.
- *
- * STATUS (Stage A audit, accurate as of this note): the sample IS taken and DOES add an extra
- * interruption for a reader the detector judged on pace, but nothing records that it was a sample.
- * wasExplorationSample lives only in this session's in-memory response history; the outcome and
- * intervention reports sent to the server do not carry it, the paragraphs that were eligible but not
- * sampled are not counted, and no consumer of these labels exists. As built it cannot produce the
- * unconditioned labels described above. Whether to remove it, record it properly, or replace it is an
- * open product decision (see alcoiaServer CLAUDE.md, "Stage A"); the rate is unchanged here.
- *
- * 10-15%: high enough that a session produces a usable number of exploration
- * labels, low enough that it doesn't turn the product into a quiz app for
- * readers who are doing fine. 0.125 is the midpoint of that band. */
-export const EXPLORATION_SAMPLE_RATE = 0.125;
-
 function paragraphKey(state, fallbackEl) {
   const el = (state.signal && state.signal.el) || fallbackEl || null;
   const text = (state.signal && state.signal.text) ||
@@ -399,7 +379,6 @@ export function createInterventionPolicy(config = {}) {
   const now            = config.now || (() => Date.now());
   // Injectable so the sampling rate is assertable under a deterministic RNG.
   const random         = config.random || Math.random;
-  const explorationRate = config.explorationRate ?? EXPLORATION_SAMPLE_RATE;
   // Intelligence-architecture audit, step 5. Injectable for the same
   // testability reason `now`/`random` already are above — a test can
   // assert on the exact id a decision carries rather than only its shape.
@@ -431,8 +410,7 @@ export function createInterventionPolicy(config = {}) {
     return Math.min(budget.absoluteCeiling, earned);
   }
 
-  /* Returns { allow, action, reason, evidence, paragraphKey, wasExplorationSample,
-   * interventionId }. `reason` is always populated, including on refusal —
+  /* Returns { allow, action, reason, evidence, paragraphKey,    * interventionId }. `reason` is always populated, including on refusal —
    * it is the only way to debug why an interruption did or didn't happen.
    *
    * interventionId (intelligence-architecture audit, step 5): a fresh,
@@ -450,7 +428,7 @@ export function createInterventionPolicy(config = {}) {
     // header comment above: "no action" has one meaning in this vocabulary,
     // regardless of what a candidate almost became.
     const deny = (reason) =>
-      ({ allow: false, action: 'none', policyAction: POLICY_ACTIONS.NONE, reason, evidence: [], paragraphKey: null, wasExplorationSample: false, interventionId: null });
+      ({ allow: false, action: 'none', policyAction: POLICY_ACTIONS.NONE, reason, evidence: [], paragraphKey: null, interventionId: null });
 
     if (!state || !state.label) return deny('no state');
     if (state.label === STATES.UNKNOWN) return deny('state is unknown');
@@ -462,26 +440,11 @@ export function createInterventionPolicy(config = {}) {
     let policyAction = action === 'ask' ? POLICY_ACTIONS.RETRIEVE
       : action === 'nudge' ? POLICY_ACTIONS.NUDGE
       : POLICY_ACTIONS.NONE;
-    let wasExplorationSample = false;
 
-    if (action === 'none') {
-      /* Exploration bypasses only this test — the state-to-action table —
-       * never the checks below it. A drifting reader is excluded outright:
-       * they are not reading the paragraph in front of them, and invariant 8
-       * forbids testing someone who did not read, regardless of what
-       * exploration wants to learn. (In practice DRIFTING already earns
-       * 'nudge' from STATE_ACTIONS above and never reaches this branch at
-       * all — the check stays as a defensive guard, not a load-bearing one.)
-       * ABSENT used to be excluded here too; removed along with the state. */
-      const explorationEligible = state.label !== STATES.DRIFTING;
-      if (explorationEligible && random() < explorationRate) {
-        action = 'ask';
-        policyAction = POLICY_ACTIONS.RETRIEVE;
-        wasExplorationSample = true;
-      } else {
-        return deny(`no action for ${state.label}`);
-      }
-    }
+    // No state-to-action entry means no action. There is no sampling: a
+    // reader the detector judged on pace is never interrupted for that
+    // reason alone.
+    if (action === 'none') return deny(`no action for ${state.label}`);
 
     if (state.confidence < budget.minConfidence) {
       return deny(`confidence ${state.confidence.toFixed(2)} below ${budget.minConfidence}`);
@@ -626,17 +589,14 @@ export function createInterventionPolicy(config = {}) {
       // Step 23: the new 8-value vocabulary (POLICY_ACTIONS). Additive --
       // every existing consumer of `action` is unaffected; this is new
       // surface for a future renderer/evidence-reporting path to read, same
-      // shape of addition `wasExplorationSample`/`interventionId` already
+      // shape of addition `interventionId` already
       // were before this item.
       policyAction,
-      reason: wasExplorationSample
-        ? `exploration sample on ${state.label}`
-        : `${state.label} at ${state.confidence.toFixed(2)}`,
+      reason: `${state.label} at ${state.confidence.toFixed(2)}`,
       // Evidence goes in front of the reader. An interruption that cannot say
       // what it noticed should not be shown.
       evidence: state.evidence || [],
       paragraphKey: key,
-      wasExplorationSample,
       // See this function's own header comment. Reuses this closure's own
       // injected now()/random() rather than the module-level defaults, so a
       // test constructed with a fixed clock/RNG gets a deterministic id
@@ -684,7 +644,6 @@ export function createInterventionPolicy(config = {}) {
       reason: 'pretest trigger matched',
       evidence: ctx.evidence || [],
       paragraphKey: key,
-      wasExplorationSample: false,
     };
   }
 
@@ -775,7 +734,6 @@ export function createInterventionPolicy(config = {}) {
       reason: isFocus ? 'instructor-marked part of this reading' : 'retention item due',
       evidence: [isFocus ? 'This part of the reading is worth checking.' : 'Time to check whether this has stuck.'],
       paragraphKey: key,
-      wasExplorationSample: false,
       interventionId: generateId(now, random),
     };
   }
