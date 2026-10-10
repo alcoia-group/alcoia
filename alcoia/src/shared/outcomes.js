@@ -15,10 +15,9 @@
  *   POST /api/assignments/:id/outcomes
  *     { paragraph_index, struggled?, question_id?, correct?, confidence?,
  *       reached?, substate?, self_reported?, source?, selected_answer? } -> 201 { recorded: true }
- * `explanation_preceded_attempt` (item DC-2) is NOT in that confirmed list —
- * this module sends it when the caller supplies one, but the real server
- * silently drops it today (confirmed against the same file). See that
- * field's own comment below.
+ * `explanation_preceded_attempt` (item DC-2) is accepted and stored by alcoiaServer
+ * (outcomes.explanation_preceded_attempt, migration 1787900000008; a non-boolean value is stored as NULL).
+ * Nothing reads it back yet. See that field's own comment below.
  * `knowledge_unit_id` (intelligence-architecture audit, step 3) IS
  * genuinely accepted and persisted server-side as of this same item — see
  * this module's own comment on it below for what it is and when it's sent.
@@ -124,15 +123,10 @@ export function createOutcomesManager(opts = {}) {
       body.selected_answer = null;
     }
 
-    // Item DC-2 — passive prerequisite-gap logging. NOT YET STORED
-    // server-side: confirmed by reading alcoiaServer's
-    // src/http/routes/outcomes.js directly, which reads a fixed field
-    // allowlist and does not include this one — a value sent here today is
-    // silently accepted and dropped, never persisted. Sent anyway (rather
-    // than held back client-side) so the client is ready the moment that
-    // route and its DB column exist, matching this item's own framing:
-    // "doesn't change behavior yet." See this item's own report for the
-    // required server-side follow-up.
+    // Item DC-2 — passive prerequisite-gap logging. Stored server-side
+    // (outcomes.explanation_preceded_attempt, migration 1787900000008) but
+    // not yet read by any aggregate or policy; unknown is sent as absent,
+    // never as false.
     if (typeof explanationPrecededAttempt === 'boolean') {
       body.explanation_preceded_attempt = explanationPrecededAttempt;
     }

@@ -400,6 +400,16 @@ export async function createHost(deps) {
     }
   }
 
+  // Levels the connected server can deliver. ALCOIA_CONFIG.QUESTION_LEVELS_SUPPORTED is the single
+  // switch: it ships as ['recognition'] because alcoiaServer has no level-aware /api/questions and no
+  // /api/grade route (its CLAUDE.md section 7 keeps the higher rungs unbuilt until a level-dependent
+  // span validator exists). Add 'free_recall', 'scenario' and 'adversarial' here only together with
+  // that server work.
+  const supportedQuestionLevels = () => {
+    const configured = self.ALCOIA_CONFIG && self.ALCOIA_CONFIG.QUESTION_LEVELS_SUPPORTED;
+    return Array.isArray(configured) && configured.length ? configured : ['recognition'];
+  };
+
   const questionsUrl = () => (s().backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/questions');
 
   async function fetchQuestions(text, opts = {}) {
@@ -414,7 +424,7 @@ export async function createHost(deps) {
     // Item 42/44: one level per call, decided by the caller — omitted
     // entirely rather than defaulted here, so a server that has never heard
     // of levels sees exactly the request shape it always has.
-    if (opts.level) body.level = opts.level;
+    if (opts.level && supportedQuestionLevels().includes(opts.level)) body.level = opts.level;
     const resp = await callBackend('apiPost', questionsUrl(), body);
     if (!resp.ok) {
       log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
@@ -422,6 +432,12 @@ export async function createHost(deps) {
     }
     const j = resp.data;
     if (!j) return [];
+    if (body.level && j.levelHonoured === false) {
+      // The server answered with a different level than requested. Questions keep the level the
+      // server labelled them with (question-card.js and response-signals.js read question.level),
+      // so nothing downstream records a level that was not delivered.
+      diagLog.log('questions', `level_not_honoured requested=${body.level} delivered=${j.deliveredLevel || 'unknown'}`);
+    }
     return Array.isArray(j.questions) ? j.questions : [];
   }
 
@@ -637,7 +653,10 @@ export async function createHost(deps) {
   // that decision, only supplies the merged history to decide it against.
   async function pickLevel(identity) {
     const quizEvidence = await readQuizEvidence(orchestratorRef?.documentKey?.() || null);
-    return engineModule.pickLevelForConcept(identity, [...responseSignals.history(), ...quizEvidence]);
+    const wanted = engineModule.pickLevelForConcept(identity, [...responseSignals.history(), ...quizEvidence]);
+    // Stage A: never ask the server for a level it has not said it can deliver. The ladder's own
+    // decision is unchanged; only the request is clamped (see supportedQuestionLevels()).
+    return supportedQuestionLevels().includes(wanted) ? wanted : 'recognition';
   }
 
   const questionCard = cardModule.createQuestionCard({

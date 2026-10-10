@@ -122,6 +122,9 @@ beforeEach(() => {
   vi.stubGlobal('ALCOIA_CONFIG', {
     SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
     TOKEN_URL: 'https://api.test.invalid/api/token',
+    // These tests model a server that implements the full question ladder; the Stage A tests below
+    // override this to the shipped default (recognition only).
+    QUESTION_LEVELS_SUPPORTED: ['recognition', 'free_recall', 'scenario', 'adversarial'],
   });
   // A real install token, pre-seeded, so tests exercise fetchSummary's own
   // logic rather than re-testing install-token.js's own issuance flow
@@ -386,6 +389,57 @@ describe('the epistemic engine wired into host.js (item 44)', () => {
 
     expect(shown).toBe(true);
     expect(captured.body.level).toBe('free_recall');
+  });
+
+  describe('Stage A: levels the server cannot deliver are never requested', () => {
+    function withConfig(extra) {
+      vi.stubGlobal('ALCOIA_CONFIG', {
+        SUMMARIZE_URL: 'https://api.test.invalid/api/summarize',
+        TOKEN_URL: 'https://api.test.invalid/api/token',
+        ...extra,
+      });
+    }
+
+    it('with the shipped default config a concept answered correctly is still asked at recognition, no level on the wire', async () => {
+      withConfig({});
+      const captured = {};
+      stubQuestionsEndpoint(captured);
+      const { host, responseSignals } = await createHost(baseDeps());
+      responseSignals.present({ q: 'Q1?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: PARAGRAPH_KEY });
+      responseSignals.answer(0, { answerIndex: 0 }, null);
+
+      document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+      expect(await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'))).toBe(true);
+      expect(captured.body.level).toBeUndefined();
+    });
+
+    it('an explicit recognition-only list behaves the same', async () => {
+      withConfig({ QUESTION_LEVELS_SUPPORTED: ['recognition'] });
+      const captured = {};
+      stubQuestionsEndpoint(captured);
+      const { host, responseSignals } = await createHost(baseDeps());
+      responseSignals.present({ q: 'Q1?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: PARAGRAPH_KEY });
+      responseSignals.answer(0, { answerIndex: 0 }, null);
+      document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+      await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
+      expect(captured.body.level).toBeUndefined();
+    });
+
+    it('a recognition question the server delivered after a free_recall request is shown as a recognition card, not rejected', async () => {
+      withConfig({ QUESTION_LEVELS_SUPPORTED: ['recognition', 'free_recall'] });
+      globalThis.__sendMessageImpl = (msg, cb) => {
+        if (msg.url?.includes('/api/questions')) {
+          cb({ ok: true, data: { levelHonoured: false, deliveredLevel: 'recognition', questions: [{ q: 'Q2?', level: 'recognition', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a span for the generated question' }] } });
+        } else cb({ ok: true, data: { summary: 's' } });
+      };
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      const { host, responseSignals } = await createHost(baseDeps());
+      responseSignals.present({ q: 'Q1?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, span: 'x' }, { paragraphKey: PARAGRAPH_KEY });
+      responseSignals.answer(0, { answerIndex: 0 }, null);
+      document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
+      expect(await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'))).toBe(true);
+      // The recognition-shaped card rendered (a free-text card would have been refused for lacking a span role).
+    });
   });
 
   it('a never-before-seen concept is still asked at recognition, with no level field on the request at all', async () => {
