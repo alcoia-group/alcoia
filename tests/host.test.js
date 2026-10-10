@@ -1386,7 +1386,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     // here since this test is about handleAsk's own wiring, not
     // re-exercising intervention-policy.js's decision logic (already
     // covered by tests/intervention-policy.test.js).
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_1700000000000_abc123' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_1700000000000_abc123' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 7);
     expect(shown).toBe(true);
 
@@ -1698,7 +1698,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${askText}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_first' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_first' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     interventionPolicy.record(decision);
@@ -2021,7 +2021,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_race' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_race' };
     const askPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
 
     // Retention's own async chain (snoozeControl check, policy evaluation,
@@ -2061,7 +2061,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     expect(deferred.pendingCount()).toBe(1); // retention's own request is the one in flight
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_race_2' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_race_2' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
 
     // Ask never entered generation at all.
@@ -2086,7 +2086,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_fail' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_fail' };
     const askPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
     // pickLevel() awaits a chrome.storage read before fetchQuestions() is
     // ever reached, so the request does not land on the same synchronous
@@ -2125,7 +2125,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_malformed', reason: 'struggling at 0.90' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_malformed', reason: 'struggling at 0.90' };
     const shownPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
     await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1));
 
@@ -2161,7 +2161,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_budget' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_budget' };
     const shownPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
     await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1));
     // Malformed -> questionCard.show() returns false, same as above.
@@ -2227,7 +2227,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_diag', reason: 'struggling at 0.87' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_diag', reason: 'struggling at 0.87' };
     const shownPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
     await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1));
     deferred.resolveNext({ questions: [{ q: 'Q?', options: ['a', 'b'], answerIndex: 0, explanation: 'e', span: 'a real span' }] });
@@ -2254,7 +2254,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     const { host, sessionRecall, runSessionRecall } = await createHost(baseDeps());
 
     document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_vs_recall' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_ask_vs_recall' };
     const askPromise = host.onIntervention(decision, {}, document.getElementById('t'), 0);
     await vi.waitFor(() => expect(deferred.pendingCount()).toBe(1)); // ask's own generation is held open, guard held
 
@@ -2349,7 +2349,7 @@ describe('active intervention awareness (step 9A)', () => {
     expect(host.isQuestionCardVisible()).toBe(false);
 
     document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_1' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_1' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     expect(host.isQuestionCardVisible()).toBe(true);
@@ -2368,7 +2368,7 @@ describe('active intervention awareness (step 9A)', () => {
   it('host.isQuestionCardVisible() flips back to false on a plain dismissal too (no answer at all)', async () => {
     const { host } = await createHost(baseDeps());
     document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_2' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_2' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     expect(host.isQuestionCardVisible()).toBe(true);
@@ -2394,7 +2394,7 @@ describe('active intervention awareness (step 9A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
-    const decision = { allow: true, action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_open' };
+    const decision = { allow: true, action: 'ask', evidence: ['because'], interventionId: 'iv_ask_open' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     interventionPolicy.record(decision);
@@ -2423,7 +2423,7 @@ describe('active intervention awareness (step 9A)', () => {
     setOrchestrator({ interventionPolicy });
 
     document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
-    const decision = { allow: true, action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_ask_to_close' };
+    const decision = { allow: true, action: 'ask', evidence: ['because'], interventionId: 'iv_ask_to_close' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     interventionPolicy.record(decision);
@@ -2470,8 +2470,8 @@ describe('active intervention awareness (step 9A)', () => {
     const { host } = await createHost(baseDeps());
 
     document.body.innerHTML = `<p id="a">${LONG_P_A}</p><p id="b">${LONG_P_B}</p>`;
-    const decisionA = { action: 'ask', evidence: ['a'], wasExplorationSample: false, interventionId: 'iv_A' };
-    const decisionB = { action: 'ask', evidence: ['b'], wasExplorationSample: false, interventionId: 'iv_B' };
+    const decisionA = { action: 'ask', evidence: ['a'], interventionId: 'iv_A' };
+    const decisionB = { action: 'ask', evidence: ['b'], interventionId: 'iv_B' };
 
     const shownA = await host.onIntervention(decisionA, {}, document.getElementById('a'), 0);
     const shownB = await host.onIntervention(decisionB, {}, document.getElementById('b'), 1);
@@ -2516,7 +2516,7 @@ describe('active intervention awareness (step 9A)', () => {
     expect(host.isQuestionCardVisible()).toBe(false);
 
     document.body.innerHTML = `<p id="t">${LONG_P_A}</p>`;
-    const decision = { action: 'ask', evidence: ['because'], wasExplorationSample: false, interventionId: 'iv_anon' };
+    const decision = { action: 'ask', evidence: ['because'], interventionId: 'iv_anon' };
     const shown = await host.onIntervention(decision, {}, document.getElementById('t'), 0);
     expect(shown).toBe(true);
     expect(host.isQuestionCardVisible()).toBe(true);
