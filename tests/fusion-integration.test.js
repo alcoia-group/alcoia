@@ -20,9 +20,6 @@ function fixedClock(start = 1_000_000) {
 /* Mirrors the subscriber wired into content.js. */
 function buildReader(clock) {
   const engine = createReadingStateEngine({ now: clock.now });
-  // random: () => 1 disables exploration sampling — these tests are about
-  // the base ask/don't-ask decision, which exploration sampling is covered
-  // separately in tests/intervention-policy.test.js.
   const policy = createInterventionPolicy({ now: clock.now, random: () => 1 });
   const interruptions = [];
 

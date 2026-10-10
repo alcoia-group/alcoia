@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInterventionPolicy, STATE_ACTIONS, EXPLORATION_SAMPLE_RATE } from '../alcoia/src/content/intervention-policy.js';
+import { createInterventionPolicy, STATE_ACTIONS } from '../alcoia/src/content/intervention-policy.js';
 import { STATES } from '../alcoia/src/content/state-engine.js';
 
 function fixedClock(start = 1_000_000) {
@@ -31,8 +31,6 @@ describe('what earns an interruption', () => {
   });
 
   it('takes no action on on_pace', () => {
-    // random: () => 1 disables exploration sampling — that mechanism is
-    // covered on its own further down; this test is about the base table.
     // (ABSENT used to be a second case here; STATES.ABSENT no longer
     // exists — see the "removed state" describe block below.)
     const p = createInterventionPolicy({ now: fixedClock().now, random: () => 1 });
@@ -315,91 +313,40 @@ describe('dismissal-aware backoff', () => {
   });
 });
 
-/* Labels collected so far all come from paragraphs the state machine already
- * flagged. Exploration sampling asks anyway on a slice of paragraphs the
- * detector would have left alone, so the resulting labels aren't conditioned
- * on the detector's own decision. See CLAUDE.md. */
-describe('exploration sampling', () => {
-  const onPace = (over = {}) => ({
+/* Exploration sampling was removed: an on-pace reader is never interrupted
+ * just because a random draw came up. These tests pin that, including with a
+ * random source that would have triggered the old sampler on every call. */
+describe('no exploration sampling', () => {
+  const onPace = () => ({
     label: STATES.ON_PACE, confidence: 0.9, evidence: [],
     signal: { text: 'an on-pace paragraph' },
-    ...over,
   });
 
-  it('the rate is a named constant in the 10-15% band', () => {
-    expect(EXPLORATION_SAMPLE_RATE).toBeGreaterThanOrEqual(0.10);
-    expect(EXPLORATION_SAMPLE_RATE).toBeLessThanOrEqual(0.15);
+  it('never interrupts an on-pace reader, whatever the random source returns', () => {
+    for (const r of [0, 0.01, 0.125, 0.5, 0.99, 1]) {
+      const p = createInterventionPolicy({ now: fixedClock().now, random: () => r });
+      const d = p.evaluate(onPace());
+      expect(d.allow).toBe(false);
+      expect(d.action).toBe('none');
+    }
   });
 
-  it('samples when the injected RNG lands under the rate', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => EXPLORATION_SAMPLE_RATE - 0.01 });
-    const d = p.evaluate(onPace());
+  it('ignores a legacy explorationRate config value', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0, explorationRate: 1 });
+    expect(p.evaluate(onPace()).allow).toBe(false);
+  });
+
+  it('decisions carry no exploration tag', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const d = p.evaluate({ label: STATES.STRUGGLING, confidence: 0.9, evidence: ['x'], signal: { text: 'a struggling paragraph' } });
+    expect('wasExplorationSample' in d).toBe(false);
+  });
+
+  it('still asks when other evidence independently justifies it', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 1 });
+    const d = p.evaluate({ label: STATES.STRUGGLING, confidence: 0.9, evidence: ['You re-read this'], signal: { text: 'a struggling paragraph' } });
     expect(d.allow).toBe(true);
     expect(d.action).toBe('ask');
-    expect(d.wasExplorationSample).toBe(true);
-  });
-
-  it('declines to sample when the injected RNG lands over the rate', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => EXPLORATION_SAMPLE_RATE + 0.01 });
-    const d = p.evaluate(onPace());
-    expect(d.allow).toBe(false);
-    expect(d.wasExplorationSample).toBe(false);
-  });
-
-  it('fires on a paragraph whose state is on_pace', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate(onPace());
-    expect(d.allow).toBe(true);
-    expect(d.action).toBe('ask');
-    expect(d.wasExplorationSample).toBe(true);
-  });
-
-  it('never fires on a drifting reader, even when the RNG would sample', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate({ label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting para' } });
-    expect(d.wasExplorationSample).toBe(false);
-    expect(d.action).not.toBe('ask');
-  });
-
-  // The "never fires on an absent reader" case that used to live here is
-  // gone along with STATES.ABSENT itself — see the "removed state" describe
-  // block below for the replacement coverage (ABSENT is no longer a value
-  // this policy, or anything else, can be asked to evaluate).
-
-  it('still respects the confidence floor', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate(onPace({ confidence: 0.3 }));
-    expect(d.allow).toBe(false);
-  });
-
-  it('still respects the 3-minute gap and spends the budget like any interruption', () => {
-    const clock = fixedClock();
-    const p = createInterventionPolicy({ now: clock.now, random: () => 0 });
-
-    const first = take(p, onPace({ signal: { text: 'a' } }));
-    expect(first.allow).toBe(true);
-    expect(p.stats().count).toBe(1);
-
-    clock.advance(60_000);
-    const tooSoon = p.evaluate(onPace({ signal: { text: 'b' } }));
-    expect(tooSoon.allow).toBe(false);
-  });
-
-  it('still never interrupts twice on the same paragraph', () => {
-    const clock = fixedClock();
-    const p = createInterventionPolicy({ now: clock.now, random: () => 0 });
-    const state = onPace({ signal: { text: 'the same on-pace paragraph' } });
-
-    expect(take(p, state).allow).toBe(true);
-    clock.advance(600_000);
-    expect(p.evaluate(state).allow).toBe(false);
-  });
-
-  it('does not tag a normal struggling ask as an exploration sample', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate(struggling());
-    expect(d.allow).toBe(true);
-    expect(d.wasExplorationSample).toBe(false);
   });
 });
 
@@ -688,11 +635,10 @@ describe('scroll-back candidate strength (step 8)', () => {
     expect(d.allow).toBe(true);
   });
 
-  it('a single scroll-back never becomes an intervention purely because the RNG would have sampled it — exploration only applies to states with no assigned action at all', () => {
+  it('a single scroll-back never becomes an intervention purely because the RNG would have sampled it', () => {
     const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
     const d = p.evaluate(regressionStruggling());
     expect(d.allow).toBe(false);
-    expect(d.wasExplorationSample).toBe(false);
   });
 
   it('is not hardcoded to "never on scroll-up" — plainer, non-regression struggle evidence (an incorrect answer) is unaffected and still fires on its own', () => {
@@ -1057,14 +1003,6 @@ describe('Step 23 — policy action vocabulary (decision.policyAction)', () => {
     const d = p.evaluate(struggling());
     expect(d.allow).toBe(true);
     expect(d.action).toBe('ask');
-    expect(d.policyAction).toBe('retrieve');
-  });
-
-  it('retrieve: an exploration sample also carries policyAction "retrieve"', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate({ label: STATES.ON_PACE, confidence: 0.9, evidence: [], signal: { text: 'an on-pace paragraph' } });
-    expect(d.allow).toBe(true);
-    expect(d.wasExplorationSample).toBe(true);
     expect(d.policyAction).toBe('retrieve');
   });
 

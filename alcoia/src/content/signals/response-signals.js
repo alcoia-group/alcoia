@@ -105,10 +105,6 @@ export function createResponseSignals(opts = {}) {
       askedAt: now(),
       revisions: 0,
       scrolledBack: false,
-      // Tags the resulting record only — never transmitted. See CLAUDE.md,
-      // exploration sampling: labels not conditioned on the detector's own
-      // decision are the point, so they must stay identifiable downstream.
-      wasExplorationSample: context.wasExplorationSample === true,
       // Evidence-silo fix (intelligence-architecture audit, step 2): where a
       // record came from. Every existing caller (question-card.js, both from
       // the floating card and session-recall's review flow) is the in-page
@@ -235,7 +231,6 @@ export function createResponseSignals(opts = {}) {
       knowledgeUnitId: target.knowledgeUnitId,
       paragraphIndex: target.paragraphIndex,
       questionId: target.questionId,
-      wasExplorationSample: target.wasExplorationSample,
       source: target.source,
       interventionId: target.interventionId,
     };
@@ -279,7 +274,6 @@ export function createResponseSignals(opts = {}) {
       knowledgeUnitId: target.knowledgeUnitId,
       paragraphIndex: target.paragraphIndex,
       questionId: target.questionId,
-      wasExplorationSample: target.wasExplorationSample,
       source: target.source,
       interventionId: target.interventionId,
     };
@@ -330,7 +324,6 @@ export function createResponseSignals(opts = {}) {
       knowledgeUnitId: target.knowledgeUnitId,
       paragraphIndex: target.paragraphIndex,
       questionId: target.questionId,
-      wasExplorationSample: target.wasExplorationSample,
       source: target.source,
       interventionId: target.interventionId,
     };
@@ -358,7 +351,6 @@ export function createResponseSignals(opts = {}) {
       span: target.span,
       paragraphKey: target.paragraphKey,
       knowledgeUnitId: target.knowledgeUnitId,
-      wasExplorationSample: target.wasExplorationSample,
       source: target.source,
       interventionId: target.interventionId,
     };
