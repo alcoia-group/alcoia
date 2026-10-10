@@ -1407,6 +1407,10 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     expect(outcomeBody.intervention_id).toBe('iv_1700000000000_abc123');
     expect(outcomeBody.paragraph_index).toBe(7);
     expect(outcomeBody.correct).toBe(true);
+    // Stage A: one answer, exactly one outcome POST and one intervention report.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls.filter((c) => c.url.endsWith('/outcomes')).length).toBe(1);
+    expect(calls.filter((c) => c.url.endsWith('/interventions')).length).toBe(1);
   });
 
   it('a "nudge" decision (no interventionId — nothing for an outcome to attribute to) reports no intervention at all', async () => {
