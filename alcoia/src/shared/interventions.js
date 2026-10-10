@@ -53,7 +53,7 @@ export function createInterventionsManager(opts = {}) {
    * caller (host.js/quiz.js) already discards this result, same reasoning
    * as outcomes.submit()'s own comment: returned anyway so this stays
    * testable without a real network call. */
-  async function submit({ interventionId, knowledgeUnitId, paragraphIndex, type, text } = {}) {
+  async function submit({ interventionId, knowledgeUnitId, paragraphIndex, type, text, policyAction } = {}) {
     if (typeof interventionId !== 'string' || !interventionId) {
       return { ok: false, error: 'invalid_intervention_id' };
     }
@@ -79,6 +79,9 @@ export function createInterventionsManager(opts = {}) {
     // empty string) when the caller has none, same coercion shape as
     // every other optional field here.
     if (typeof text === 'string' && text) body.text = text;
+    // Which policy action produced this (retrieve/explain/repair). Describes
+    // the intervention only; the server ignores any other value.
+    if (policyAction === 'retrieve' || policyAction === 'explain' || policyAction === 'repair') body.policy_action = policyAction;
 
     try {
       const resp = await fetchImpl(interventionsUrl, {

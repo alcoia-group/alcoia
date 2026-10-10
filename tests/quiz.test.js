@@ -198,6 +198,11 @@ describe('quiz.js outcome reporting (item 13i)', () => {
       selected_answer: 0,
     });
     expect(body).not.toHaveProperty('pseudonym');
+    // Stage A: one answered interaction produces exactly one outcome POST
+    // (no duplicate from the persistence path), and exactly one intervention report.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls.filter((c) => c.url.endsWith('/outcomes')).length).toBe(1);
+    expect(calls.filter((c) => c.url.endsWith('/interventions')).length).toBe(1);
     expect(outcomeCall.init.headers.Authorization).toBe('Bearer sess-tok-1');
 
     // The intervention itself was also genuinely reported, same assignment,

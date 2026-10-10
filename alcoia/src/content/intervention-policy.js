@@ -327,6 +327,14 @@ export const DEFAULT_BUDGET = Object.freeze({
  * labels that are not conditioned on the detector's own decision, and data
  * collected before this exists is permanently unusable for that purpose.
  *
+ * STATUS (Stage A audit, accurate as of this note): the sample IS taken and DOES add an extra
+ * interruption for a reader the detector judged on pace, but nothing records that it was a sample.
+ * wasExplorationSample lives only in this session's in-memory response history; the outcome and
+ * intervention reports sent to the server do not carry it, the paragraphs that were eligible but not
+ * sampled are not counted, and no consumer of these labels exists. As built it cannot produce the
+ * unconditioned labels described above. Whether to remove it, record it properly, or replace it is an
+ * open product decision (see alcoiaServer CLAUDE.md, "Stage A"); the rate is unchanged here.
+ *
  * 10-15%: high enough that a session produces a usable number of exploration
  * labels, low enough that it doesn't turn the product into a quiz app for
  * readers who are doing fine. 0.125 is the midpoint of that band. */
