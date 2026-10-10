@@ -1019,7 +1019,6 @@ export async function createHost(deps) {
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: identity.knowledgeUnitId,
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
-        wasExplorationSample: decision.wasExplorationSample === true,
         showSelfReport: state.substate === 'unclear',
         interventionId,
       });
