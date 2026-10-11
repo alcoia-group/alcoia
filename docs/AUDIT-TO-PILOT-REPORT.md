@@ -37,3 +37,39 @@ Alcoia's stated purpose is that a reader should need it *less* over time, and th
 - Learner memory and instructor retention statistics are ON by default. The legal basis, treatment of minors, and the public legal wording are not settled and need owner and counsel decisions.
 - A meaningful "apply" intervention (using knowledge in a new situation) does not exist; the loop is Orient, Understand, Retrieve, Repair, Retrieve again later.
 - Several jobs (document cleanup, salt deletion, billing notices) exist as commands but nothing in the repositories schedules them. The host must.
+
+---
+
+# Part 2 (after the first report): clearer help, quick checks for fluent readers, "material" wording
+
+These changes follow the owner's review of the first report. Same branch, 2026-10-11.
+
+Decisions taken with the owner:
+- Explanations must be understandable by anyone, not just a "plain rewrite".
+- A "relationship guide" ("Look at how X and Y are connected") is a real kind of help, not only questions.
+- Readers who are doing fine get a short **quick check** now and then (this reverses the earlier removal of random extra questions, but in a different form: scheduled by amount read, only in assigned readings, only when nothing else is going on, separately labelled so it never distorts the "struggle" figures). A "you read smoothly, no help needed" note was considered and rejected as pointless.
+- Instructor statistics built from students' private learner memory are **off by default for the pilot**.
+- "Assignment" is replaced by **"material"** wherever people read it (routes, file names and the API keep the old word).
+
+## Part 2 commits in this repository (alcoia, the extension)
+
+| Commit | Goal |
+|---|---|
+| `ced959c` | (1) **Relationship guide**: when an explanation is shown for a paragraph built on a cause, dependence, contrast, comparison or part-of relationship, the extension asks for the `relate` explanation and labels the card "how the ideas connect" (`relation-cues.js`, a small transparent check; otherwise the ordinary explanation). (2) **Scheduled quick checks**: in an assigned reading only, after about 500 words read, then after each further 1000 words, a smoothly-reading student is offered one quick check (multiple choice, then fill-in-the-blank alternately). Never while struggling or drifting, never if anything was shown in that stretch, never on a paragraph the server says the student already knows, always through the normal policy limits, never takes the last free slot of the session budget, reported as type `probe`. |
+| `5fe2aaa` | Popup wording: "Materials". |
+
+Verified: 68 test files, 1578 tests passing; lint 0 errors (3 older warnings). Not verified: in a real browser against a live server.
+
+## What Part 2 means for the philosophy
+
+- **Teach, don't only test.** Help now comes in several honest forms (explain, repair, show how ideas connect, ask), chosen from evidence. Questions are not the only tool.
+- **See the whole class, not just the strugglers.** Until now the instructor only learned from students who struggled or answered a question. The quick check gives the other half: evidence from students who read smoothly. It is labelled separately in the data, it never takes the last free slot reserved for real help, and it follows the same limits as every other question.
+- **Private stays private.** Anything built from a student's private learning memory no longer reaches the instructor by default.
+- **Plain words for people who read.** Anyone should understand an explanation, and people reading course material should see the word "material", not homework vocabulary.
+
+## Agreed but not built yet (so nothing is claimed that does not exist)
+- A struggle profile that carries *how* a student struggles across readings, and a concept layer that links ideas between readings.
+- A passive "drifting" signal (private to the policy, never shown to an instructor).
+- "Improvement since last time" for reused material.
+- Scenario or application questions inline (they need a new validity rule that is not a quote).
+- Making the teaching-recommendations switch follow the instructor's account instead of one browser.
