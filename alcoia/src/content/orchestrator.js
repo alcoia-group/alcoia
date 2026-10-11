@@ -219,6 +219,9 @@ export async function createOrchestrator(deps) {
     const decision  = interventionPolicy.evaluate(state, {
       currentEl,
       questionCardVisible: !!host.isQuestionCardVisible?.(),
+      // Stage B: what the learner's own recorded evidence says about THIS paragraph (null when unknown). The
+      // policy may use it to withhold or re-type a question; it can never create an interruption.
+      learnerEstimate: host.learnerEstimateFor?.(currentEl) ?? null,
     });
 
     if (s().debugEnabled) {

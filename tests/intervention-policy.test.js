@@ -1164,3 +1164,67 @@ describe('Step 23 — policy action vocabulary (decision.policyAction)', () => {
     expect(d).not.toHaveProperty('policyAction');
   });
 });
+
+/* STAGE B: a learner estimate can only narrow or re-type an interruption the reading signals already
+ * justified. It never creates one, and it never bypasses a budget, cooldown or per-paragraph dedup. */
+describe('learner estimate in the policy (Stage B)', () => {
+  const abstain = { level: 'established', confidence: 'high', action: 'abstain', kind: 'retrieve', reason: 'established_recently' };
+  const explain = { level: 'needs_help', confidence: 'moderate', action: 'intervene', kind: 'explain', reason: 'repeated_independent_misses' };
+  const repair = { level: 'needs_help', confidence: 'low', action: 'intervene', kind: 'repair', reason: 'independent_miss' };
+  const gather = { level: 'insufficient', confidence: 'none', action: 'gather', kind: 'retrieve', reason: 'no_evidence' };
+
+  it('abstain withholds the question, spends no budget, and the next paragraph without that evidence is still asked', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    const denied = p.evaluate(struggling(), { learnerEstimate: abstain });
+    expect(denied).toMatchObject({ allow: false, action: 'none', interventionId: null });
+    expect(denied.reason).toMatch(/learner estimate: established_recently/);
+    p.record(denied);
+    const next = p.evaluate(struggling({ signal: { text: 'another paragraph' } }), { learnerEstimate: null });
+    expect(next.allow).toBe(true); // nothing was spent by the abstention
+  });
+
+  it('gather and a missing estimate leave the decision exactly as it was', () => {
+    const base = createInterventionPolicy({ now: fixedClock().now, random: () => 0.5 }).evaluate(struggling());
+    for (const est of [undefined, null, gather, {}]) {
+      const d = createInterventionPolicy({ now: fixedClock().now, random: () => 0.5 }).evaluate(struggling(), { learnerEstimate: est });
+      expect(d).toEqual(base);
+    }
+  });
+
+  it('repeated independent misses turn a question into an explanation; one miss turns it into a repair', () => {
+    expect(createInterventionPolicy({ now: fixedClock().now }).evaluate(struggling(), { learnerEstimate: explain })).toMatchObject({ allow: true, action: 'ask', policyAction: 'explain' });
+    expect(createInterventionPolicy({ now: fixedClock().now }).evaluate(struggling(), { learnerEstimate: repair })).toMatchObject({ allow: true, action: 'ask', policyAction: 'repair' });
+  });
+
+  it('an estimate never creates an interruption: an on-pace reader is not interrupted whatever the evidence says', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    expect(p.evaluate({ label: STATES.ON_PACE, confidence: 0.9, evidence: [] }, { learnerEstimate: repair }).allow).toBe(false);
+    expect(p.evaluate({ label: STATES.UNKNOWN, confidence: 0.9, evidence: [] }, { learnerEstimate: explain }).allow).toBe(false);
+  });
+
+  it('cooldown, session budget and per-paragraph dedup still bind an interruption an estimate re-typed', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    const first = take(p, struggling(), { learnerEstimate: explain });
+    expect(first.allow).toBe(true);
+    // same moment, different paragraph: the cooldown holds
+    const tooSoon = p.evaluate(struggling({ signal: { text: 'second paragraph' } }), { learnerEstimate: explain });
+    expect(tooSoon.allow).toBe(false);
+    expect(tooSoon.reason).toMatch(/since the last interruption/);
+    clock.advance(10 * 60_000);
+    // the same paragraph is never interrupted twice, estimate or not
+    const again = p.evaluate(struggling(), { learnerEstimate: explain });
+    expect(again.allow).toBe(false);
+    expect(again.reason).toMatch(/already interrupted on this paragraph/);
+  });
+
+  it('dismissal back-off still applies to an estimate-driven question', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    for (let i = 0; i < 6; i += 1) p.recordDismissal();
+    const d = p.evaluate(struggling(), { learnerEstimate: gather });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/declined|raised bar/);
+  });
+});
