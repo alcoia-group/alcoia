@@ -91,6 +91,15 @@ export async function createHost(deps) {
   // second gate of its own. Fire-and-forget, one POST per discrete signal,
   // no batching — see outcomes.js's own header for the full reasoning on
   // that choice, made explicitly rather than guessed through.
+  // ── Learner estimates (Stage B) ───────────────────────────────────────────
+  // knowledgeUnitId -> { level, confidence, action, kind, reason } as last stated by the server. Read by
+  // learnerEstimateFor() below, which orchestrator.js passes to the intervention policy. Never persisted.
+  const learnerEstimates = new Map();
+  function noteLearnerEstimate(e) {
+    if (!e || typeof e.knowledgeUnitId !== 'string' || !e.knowledgeUnitId) return;
+    if (e.action !== 'abstain' && e.action !== 'gather' && e.action !== 'intervene') return;
+    learnerEstimates.set(e.knowledgeUnitId, { level: e.level, confidence: e.confidence, action: e.action, kind: e.kind, reason: e.reason });
+  }
   let submitOutcome = () => {};
   if (assignmentId && getSession) {
     // Routes through background.js instead of fetching directly — a
@@ -112,7 +121,13 @@ export async function createHost(deps) {
       // guard is what keeps those answers from attempting (and always
       // failing) a submission, rather than special-casing that call site.
       if (!Number.isInteger(fields.paragraphIndex) || fields.paragraphIndex < 0) return;
-      outcomesManager.submit(fields).catch(() => {});
+      // Stage B: new evidence for this unit is on its way, so the copy of its estimate (which was decided
+      // without it) is dropped now; the server's answer, when it carries one, replaces it. A failed or
+      // memory-off submission simply leaves the unit without an estimate, i.e. the normal behaviour.
+      if (fields.knowledgeUnitId && fields.questionId) learnerEstimates.delete(fields.knowledgeUnitId);
+      outcomesManager.submit(fields)
+        .then((r) => { if (r && r.learnerEstimate) noteLearnerEstimate(r.learnerEstimate); })
+        .catch(() => {});
     };
   }
 
@@ -279,6 +294,16 @@ export async function createHost(deps) {
       }
     } catch (e) {}
   }
+  let learnerEstimatesManager = null;
+  async function refreshLearnerEstimates() {
+    if (!learnerEstimatesManager) return;
+    try {
+      const result = await learnerEstimatesManager.getEstimates();
+      if (!result.ok) return; // keep whatever we had; never invent an estimate
+      learnerEstimates.clear();
+      for (const e of result.estimates) noteLearnerEstimate(e);
+    } catch (e) {}
+  }
   let retentionRefreshTimer = null;
   if (assignmentId && getSession) {
     // Same routing reason as submitOutcome above.
@@ -290,6 +315,14 @@ export async function createHost(deps) {
       fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
     await refreshRetentionDue(); // the original, one-time fetch this block always made, unconditional as before
+    // Stage B: the learner's estimates for this assignment, fetched with the same gate and on the same cadence.
+    const estimatesModule = await loadModule('src/shared/learner-estimates.js');
+    learnerEstimatesManager = estimatesModule.createLearnerEstimatesManager({
+      getSession,
+      estimatesUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/knowledge-state/estimates`,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
+    });
+    await refreshLearnerEstimates();
     // Step 27: the periodic half. Not covered by installListeners()'s own
     // AbortSignal (orchestrator.js's own idleTimer isn't either, for the
     // identical reason stated there: "the content script lives as long as
@@ -299,6 +332,7 @@ export async function createHost(deps) {
     retentionRefreshTimer = setInterval(() => {
       if (!s().assistantEnabled) return; // mirrors checkRetentionCandidate's own first real check -- skip this tick's call, not the construction-time one above.
       refreshRetentionDue();
+      refreshLearnerEstimates();
     }, RETENTION_DUE_REFRESH_MS);
   }
   function stopRetentionRefresh() {
@@ -379,29 +413,62 @@ export async function createHost(deps) {
   // "this client established that no explanation was shown for this paragraph before this attempt". Every
   // explanation or summary the reader is shown is generated through fetchSummary below (the selection
   // tooltip, the explain/repair card, the card's "explain more", simplify, define, ...), cached results
-  // included, so noting assistance there covers them all. A summary of a selection is attributed to the
-  // paragraph being read when the selection lies inside it; when it cannot be attributed to any known
-  // paragraph, assistance is `unmappedAssistance` and later outcomes report UNKNOWN (undefined, never
-  // false) rather than claiming no assistance. A retry or later write cannot clear either record.
+  // included, so noting assistance there covers them all.
+  //
+  // Attribution, in order, for assistance that did not arrive with a paragraph key:
+  //   1. MAPPED: the text is inside the paragraph being read, or inside any paragraph-level element of the
+  //      page (found by looking the text up in the document). Those paragraphs are `assistedKeys` (true).
+  //   2. UNMAPPED but locatable: the text is in no page element, but a paragraph is being read. The
+  //      explanation most plausibly belongs to that paragraph and we cannot rule it out, so only THAT
+  //      paragraph becomes `uncertainKeys` (outcomes there report UNKNOWN: undefined, never false). Answers
+  //      about other paragraphs are unaffected, because nothing ties the explanation to them.
+  //   3. UNMAPPED and unlocatable: no paragraph is being read, so nothing narrows where the explanation
+  //      belongs. Only this case still sets the session-wide `unmappedAssistance`, which makes every later
+  //      outcome UNKNOWN (conservative, as before).
+  // A retry or later write cannot clear any of the three records.
   const assistedKeys = new Set();
+  const uncertainKeys = new Set();
   let unmappedAssistance = false;
+  const MAX_SCANNED_BLOCKS = 2000;
   const keyOf = (t) => (t || '').slice(0, 80).trim();
+  const squash = (t) => (t || '').replace(/\s+/g, ' ').trim();
+  function currentParagraphText() {
+    try {
+      return currentParagraph?.type === 'dom' && currentParagraph.data
+        ? (currentParagraph.data.innerText || currentParagraph.data.textContent || '') : '';
+    } catch (e) { return ''; }
+  }
+  // Paragraph-level elements of the page whose text contains `text`, as paragraph keys (same 80-char convention).
+  function paragraphKeysContaining(text) {
+    const needle = squash(text);
+    const keys = [];
+    if (!needle || typeof document === 'undefined') return keys;
+    try {
+      const blocks = document.querySelectorAll('p, li, blockquote, dd, td, h1, h2, h3, h4, h5, h6');
+      const limit = Math.min(blocks.length, MAX_SCANNED_BLOCKS);
+      for (let i = 0; i < limit; i += 1) {
+        const body = squash(blocks[i].innerText || blocks[i].textContent || '');
+        if (body && body.includes(needle)) keys.push(keyOf(blocks[i].innerText || blocks[i].textContent || ''));
+      }
+    } catch (e) { return keys; }
+    return keys;
+  }
   function noteAssistance(text, paragraphKey) {
     if (paragraphKey) { assistedKeys.add(paragraphKey); return; }
     const own = keyOf(text);
     if (own) assistedKeys.add(own);
-    let current = '';
-    try {
-      current = currentParagraph?.type === 'dom' && currentParagraph.data
-        ? (currentParagraph.data.innerText || currentParagraph.data.textContent || '') : '';
-    } catch (e) { current = ''; }
-    if (current && text && current.includes(text)) assistedKeys.add(keyOf(current));
-    else if (!current || !text || keyOf(current) !== own) unmappedAssistance = true;
+    const current = currentParagraphText();
+    if (current && text && squash(current).includes(squash(text))) { assistedKeys.add(keyOf(current)); return; }
+    const found = paragraphKeysContaining(text);
+    if (found.length) { for (const k of found) assistedKeys.add(k); return; }
+    if (current && keyOf(current) !== own) { uncertainKeys.add(keyOf(current)); return; }
+    if (!current || !text) unmappedAssistance = true;
   }
   function explanationPreceded(paragraphKey) {
     if (!paragraphKey) return undefined;
     if (assistedKeys.has(paragraphKey) || wasParagraphExplained(paragraphKey) === true) return true;
-    return unmappedAssistance ? undefined : false;
+    if (unmappedAssistance || uncertainKeys.has(paragraphKey)) return undefined;
+    return false;
   }
 
   async function fetchSummary(text, mode = 'tldr', context = '', opts = {}) {
@@ -1286,6 +1353,16 @@ export async function createHost(deps) {
     sessionTracker,
     log,
     findParagraphAt,
+    // Stage B: the server's estimate for the knowledge unit of this paragraph element, or null when there is
+    // none (no assignment, no account, learner memory off, or simply no evidence yet).
+    learnerEstimateFor: (el) => {
+      if (!learnerEstimates.size) return null;
+      try {
+        const text = el ? (el.innerText || el.textContent || '').trim() : '';
+        const id = text ? knowledgeUnitModule.computeKnowledgeUnitId(text) : null;
+        return (id && learnerEstimates.get(id)) || null;
+      } catch (e) { return null; }
+    },
     getCurrentParagraph: () => currentParagraph,
     setCurrentParagraph: (p) => { currentParagraph = p; },
     setPrevParagraphText: (t) => { prevParagraphText = t; },
