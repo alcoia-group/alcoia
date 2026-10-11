@@ -2728,13 +2728,71 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
       expect(bodies[0].explanation_preceded_attempt).toBe(true);
     });
 
-    it('assistance that cannot be attributed to a paragraph makes later outcomes UNKNOWN (absent), never false', async () => {
+    // Page with two paragraphs: `t` (PARA) and `other`. Answers a question about `el`.
+    const OTHER = 'Some entirely different words elsewhere on the page, long enough to pass the length floor fetchQuestions enforces before it will generate a question, so this second paragraph can be asked about too.';
+    async function answerOn(host, el, index = 7) {
+      await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, el, index);
+      queryAlcoia('.sra-q-option[data-index="0"]').click();
+      queryAlcoia('.sra-q-conf-skip').click();
+    }
+    function twoParagraphs() {
+      document.body.innerHTML = `<p id="t">${PARA}</p><p id="other">${OTHER}</p>`;
+      return { t: document.getElementById('t'), other: document.getElementById('other') };
+    }
+
+    it('MAPPED to a non-current paragraph: a selection found in another paragraph of the page marks that paragraph true', async () => {
       const { bodies } = wire();
       const { host, fetchSummary } = await createHost(assignmentDeps());
-      document.body.innerHTML = `<p id="t">${PARA}</p><p id="other">Some entirely different words elsewhere on the page.</p>`;
-      host.setCurrentParagraph({ type: 'dom', data: document.getElementById('other') });
+      const { t, other } = twoParagraphs();
+      host.setCurrentParagraph({ type: 'dom', data: other });
+      await fetchSummary('for the provenance tests specifically', 'define_word'); // inside `t`, not the paragraph being read
+      await answerOn(host, t);
+      await vi.waitFor(() => expect(bodies.length).toBe(1));
+      expect(bodies[0].explanation_preceded_attempt).toBe(true);
+    });
+
+    it('UNMAPPED but locatable: only the paragraph being read becomes UNKNOWN; an unrelated paragraph is still explicit false', async () => {
+      const { bodies } = wire();
+      const { host, fetchSummary } = await createHost(assignmentDeps());
+      const { t, other } = twoParagraphs();
+      host.setCurrentParagraph({ type: 'dom', data: other });
       await fetchSummary('words that are in neither paragraph', 'tldr');
-      await answerOnce(host);
+      await answerOn(host, t); // unrelated paragraph
+      await vi.waitFor(() => expect(bodies.length).toBe(1));
+      expect(bodies[0].explanation_preceded_attempt).toBe(false);
+    });
+
+    it('UNMAPPED but locatable: the paragraph being read reports UNKNOWN (absent), never false', async () => {
+      const { bodies } = wire();
+      const { host, fetchSummary } = await createHost(assignmentDeps());
+      const { other } = twoParagraphs();
+      host.setCurrentParagraph({ type: 'dom', data: other });
+      await fetchSummary('words that are in neither paragraph', 'tldr');
+      await answerOn(host, other);
+      await vi.waitFor(() => expect(bodies.length).toBe(1));
+      expect(bodies[0]).not.toHaveProperty('explanation_preceded_attempt');
+    });
+
+    it('subsequent answers keep their own provenance: unrelated paragraphs stay false across several outcomes', async () => {
+      const { bodies } = wire();
+      const { host, fetchSummary } = await createHost(assignmentDeps());
+      const { t, other } = twoParagraphs();
+      host.setCurrentParagraph({ type: 'dom', data: other });
+      await fetchSummary('words that are in neither paragraph', 'tldr');
+      await answerOn(host, t);
+      await vi.waitFor(() => expect(bodies.length).toBe(1));
+      host.onStruggle(PARA, 7); // a struggle signal on the same unrelated paragraph
+      await vi.waitFor(() => expect(bodies.length).toBe(2));
+      expect(bodies.map((b) => b.explanation_preceded_attempt)).toEqual([false, false]);
+    });
+
+    it('GENUINELY UNCERTAIN (text on no page element and no paragraph being read): every later outcome is UNKNOWN, as before', async () => {
+      const { bodies } = wire();
+      const { host, fetchSummary } = await createHost(assignmentDeps());
+      const { t } = twoParagraphs();
+      host.setCurrentParagraph(null);
+      await fetchSummary('words that are in neither paragraph', 'tldr');
+      await answerOn(host, t);
       await vi.waitFor(() => expect(bodies.length).toBe(1));
       expect(bodies[0]).not.toHaveProperty('explanation_preceded_attempt');
     });
