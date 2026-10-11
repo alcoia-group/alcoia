@@ -67,9 +67,17 @@ Verified: 68 test files, 1578 tests passing; lint 0 errors (3 older warnings). N
 - **Private stays private.** Anything built from a student's private learning memory no longer reaches the instructor by default.
 - **Plain words for people who read.** Anyone should understand an explanation, and people reading course material should see the word "material", not homework vocabulary.
 
+## Part 3 - quick-check spacing and reassigned material
+
+Owner asked for: (1) quick checks for fluent readers must never appear within 30 seconds of a normal card, and a normal card wins if both are due; (2) improvement on reassigned material, seen by the instructor in the console and by the learner (paid analytics) as a different use.
+
+Commits in alcoia (extension):
+- `74163dc`: Quick checks keep clear of normal cards. A scheduled quick check never appears within 30 seconds of any help, review or focus card, and is dropped if the reader starts to struggle (or a card appears) while its question is still being fetched. Goal: the normal card always has priority, and a fluent-reader check never stacks on top of help. Tests fail if the 30-second window is removed.
+
+Philosophy: a comparison is for noticing, not for judging. It uses the same coarse bands and small-group rules as everything else, says plainly that the two runs are different students, and shows learners only their own history.
+
 ## Agreed but not built yet (so nothing is claimed that does not exist)
 - A struggle profile that carries *how* a student struggles across readings, and a concept layer that links ideas between readings.
 - A passive "drifting" signal (private to the policy, never shown to an instructor).
-- "Improvement since last time" for reused material.
 - Scenario or application questions inline (they need a new validity rule that is not a quote).
 - Making the teaching-recommendations switch follow the instructor's account instead of one browser.
