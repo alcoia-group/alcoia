@@ -529,6 +529,27 @@ export function createInterventionPolicy(config = {}) {
         policyAction = strength.repeated ? POLICY_ACTIONS.RETRIEVE : POLICY_ACTIONS.EXPLAIN;
       }
 
+      // Stage B (learner estimate). ctx.learnerEstimate is the server's reading of the learner's OWN independent
+      // evidence on this paragraph's knowledge unit (null when there is none, which changes nothing). It can only
+      // narrow what the reading signals already proposed, never add an interruption:
+      //   abstain   a question now would add no information (recently established, or too soon after a correct
+      //             answer): deny, spending nothing, re-evaluated on the next signal like any other denial.
+      //   intervene with kind 'explain' (repeated independent misses): a RETRIEVE becomes an EXPLAIN, because
+      //             asking the same kind of question a third time is not new information.
+      //   gather    (or anything else): unchanged. Evidence is still needed, at the normal rate and gates.
+      // Budget, cooldown, paragraph dedup, dismissal and failure back-off below all still apply.
+      const est = ctx.learnerEstimate;
+      if (est && typeof est === 'object') {
+        if (est.action === 'abstain') {
+          return deny(`learner estimate: ${est.reason || 'no question needed'} - a question would add no information`);
+        }
+        if (est.action === 'intervene' && est.kind === 'explain' && policyAction === POLICY_ACTIONS.RETRIEVE) {
+          policyAction = POLICY_ACTIONS.EXPLAIN;
+        } else if (est.action === 'intervene' && est.kind === 'repair' && policyAction === POLICY_ACTIONS.RETRIEVE) {
+          policyAction = POLICY_ACTIONS.REPAIR; // the last independent answer on this unit was wrong, in this or an earlier session
+        }
+      }
+
       // Step 9A (active intervention awareness): a candidate that has
       // already cleared every evidence/adaptation check above is still not
       // promoted to a decision if the reader is already dealing with a
