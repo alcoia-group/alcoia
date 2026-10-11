@@ -36,7 +36,7 @@ describe.each([['anonymous', anonymous], ['identified', identified]])('%s join n
 describe('what each mode says the instructor sees of a receipt', () => {
   it('anonymous: the console does not show submitted receipts; a receipt handed over elsewhere is seen in full', () => {
     expect(anonymous).toMatch(/aggregate results only/i);
-    expect(anonymous).toMatch(/instructor console does not show submitted receipts/i);
+    expect(anonymous).toMatch(/instructor console does not show receipts/i);
     expect(anonymous).toMatch(/some other way, they can see everything in it/i);
     expect(anonymous).not.toMatch(/instructor sees that one receipt/i);
   });
