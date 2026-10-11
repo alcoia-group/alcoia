@@ -466,7 +466,9 @@ export function createQuestionCard(deps = {}) {
     const root = ui.reservePopup(fingerprint, isRepair ? 'repair' : 'explain');
     if (!root) return false;
 
-    const badgeText = isRepair ? "let's clear this up" : 'a closer look';
+    const badgeText = typeof context.badge === 'string' && context.badge.trim()
+      ? context.badge.trim().slice(0, 40)
+      : (isRepair ? "let's clear this up" : 'a closer look');
     const evidenceHtml = context.evidence && context.evidence.length
       ? `<div class="sra-q-evidence">${esc(context.evidence[0])}.</div>`
       : '';

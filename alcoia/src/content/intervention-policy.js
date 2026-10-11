@@ -218,6 +218,16 @@ export const STATE_ACTIONS = Object.freeze({
  * retrieve()`. This policy remains the sole authority over whether/how to
  * intervene regardless of what any future context field says.
  *
+ * -- Scheduled quick checks (probes): the one interruption not caused by detected difficulty --
+ *
+ * The fixed-interval audit just above found no "ask every N minutes regardless of evidence" mechanism, and that
+ * was true when it was written. By owner decision a probe now exists: after a set amount of material has been read
+ * in an ASSIGNED reading, a reader who is reading smoothly is offered one quick check, so the instructor has
+ * evidence from fluent readers and the reader sees the tool at work. host.js decides WHEN a stretch of reading is
+ * long enough; this file only decides whether it is ALLOWED (evaluateRetentionCandidate with kind 'probe'): same
+ * budget, 3-minute gap, dismissal back-off and one-card-at-a-time rules as everything else, plus a rule that a
+ * probe can never take the last free slot of the session budget, which stays for real help.
+ *
  * -- The four concerns, and where each one lives (this item's own §6) --
  *
  *   A. Signal detection ("what is happening?")   -- state-engine.js, the
@@ -745,6 +755,25 @@ export function createInterventionPolicy(config = {}) {
     // budget and gates as a due item; only the label differs. The evidence line is generic on
     // purpose: the student is told a focus was set, never what the instructor wrote.
     const isFocus = ctx.kind === 'focus';
+    // ctx.kind === 'probe': a scheduled quick check offered to a reader who is reading smoothly (owner decision:
+    // evidence from fluent readers matters to the instructor, and a tool that never shows itself to them looks
+    // like it is not working). It is the one interruption not triggered by detected difficulty, so it is held to
+    // a stricter budget than the rest: it can never take the last free slot, which stays for real help.
+    const isProbe = ctx.kind === 'probe';
+    if (isProbe && count >= cap - 1) {
+      return deny(`keeping the last slot of the session budget (${count}/${cap}) for help`);
+    }
+    if (isProbe) {
+      return {
+        allow: true,
+        action: 'probe',
+        policyAction: POLICY_ACTIONS.RETRIEVE,
+        reason: 'scheduled quick check on what was just read',
+        evidence: ['A quick check on what you just read.'],
+        paragraphKey: key,
+        interventionId: generateId(now, random),
+      };
+    }
     return {
       allow: true,
       action: isFocus ? 'focus' : 'retention',
