@@ -3134,6 +3134,18 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
       expect(calls[0].body.mode).toBe('explain_more');
     });
 
+    it('policyAction "explain" on a paragraph built on a relationship asks for the relationship guide ("relate") and labels the card', async () => {
+      const calls = captureRelay();
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      document.body.innerHTML = '<p id="r">Prices rise because demand grows faster than supply, so sellers can charge more; however, when supply catches up, prices fall again toward their earlier level.</p>';
+      const { host } = await createHost(baseDeps());
+
+      const shown = await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['re-read'], interventionId: 'iv_rel_1' }, {}, document.getElementById('r'), 2);
+      expect(shown).toBe(true);
+      expect(calls[0].body.mode).toBe('relate');
+      expect(JSON.stringify([...document.querySelectorAll('*')].map((n) => n.shadowRoot?.innerHTML ?? '')) + document.body.innerHTML).toContain('how the ideas connect');
+    });
+
     it('policyAction "repair" calls the summarize endpoint with mode "repair", never the questions endpoint', async () => {
       const calls = captureRelay();
       chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
@@ -3525,5 +3537,139 @@ describe('learner estimates reach the reading decisions (Stage B)', () => {
     expect(await decide([est(id1, { level: 'needs_help', action: 'intervene', kind: 'explain', reason: 'repeated_independent_misses' })])).toMatchObject({ allow: true, policyAction: 'explain' });
     // one independent miss: repair
     expect(await decide([est(id1, { level: 'needs_help', action: 'intervene', kind: 'repair', reason: 'independent_miss' })])).toMatchObject({ allow: true, policyAction: 'repair' });
+  });
+});
+
+/* Scheduled quick checks ("probes"): an assigned reading, a fluent reader, enough material read. */
+describe('scheduled quick checks (probes)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const deps = (o = {}) => baseDeps({
+    assignmentId: 'assign-42',
+    getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+    ...o,
+  });
+  // A distinct ~100-word paragraph per index, long enough for every floor.
+  const para = (i) => `Paragraph number ${i} explains one idea. ${'The idea is stated in plain words and then illustrated once more. '.repeat(8)}`;
+
+  beforeEach(() => {
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL });
+    document.body.innerHTML = '';
+  });
+
+  function setup() {
+    const asked = [];
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        asked.push(msg.body.kind);
+        cb({ ok: true, data: { questions: [{ q: 'Which idea?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
+      } else cb({ ok: true, data: {} });
+    };
+    const calls = [];
+    mockProxyFetch(vi.fn((url, options) => { calls.push({ url, options }); return { ok: true, status: 200, data: { candidates: [], estimates: [], recorded: true } }; }));
+    return { asked, calls };
+  }
+  async function build(extra) {
+    const { host, setOrchestrator } = await createHost(deps(extra));
+    const policy = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: policy.createInterventionPolicy({}) });
+    return host;
+  }
+  const flush = () => new Promise((r) => setTimeout(r, 40));
+
+  it('offers a quick check once about 500 words have been read, reported with type probe', async () => {
+    const { asked, calls } = setup();
+    const host = await build();
+    for (let i = 0; i < 4; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    expect(asked).toHaveLength(0); // roughly 400 words so far: nothing yet
+    host.onParagraphRead(para(4), 5000, 4);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    expect(asked).toEqual(['recall']);
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body).type).toBe('probe');
+  });
+
+  it('does nothing outside an assigned reading, however much is read', async () => {
+    const { asked } = setup();
+    const { host, setOrchestrator } = await createHost(baseDeps());
+    const policy = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: policy.createInterventionPolicy({}) });
+    for (let i = 0; i < 12; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    expect(asked).toHaveLength(0);
+  });
+
+  it('waits while the reader is struggling (the help path owns that moment)', async () => {
+    const { asked } = setup();
+    const host = await build();
+    host.setCogState('struggling');
+    for (let i = 0; i < 8; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    expect(asked).toHaveLength(0);
+    host.setCogState('on_pace');
+    host.onParagraphRead(para(8), 5000, 8);
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+  });
+
+  it('counts each paragraph once: re-reading the same paragraph does not bring the check closer', async () => {
+    const { asked } = setup();
+    const host = await build();
+    for (let i = 0; i < 20; i += 1) { host.onParagraphRead(para(0), 5000, 0); await flush(); }
+    expect(asked).toHaveLength(0);
+  });
+
+  it('keeps going for a long reading: a second check after about 1000 more words, as fill-in-the-blank', async () => {
+    const { asked } = setup();
+    let clock = Date.now();
+    const { host, setOrchestrator } = await createHost(deps());
+    const policy = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: policy.createInterventionPolicy({ now: () => clock }) });
+    for (let i = 0; i < 5; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    // the reader answers it (which clears the card), and time passes beyond the policy's gap between questions
+    queryAlcoia('.sra-q-option[data-index="0"]').click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+    await flush();
+    queryAlcoia('.sra-close-btn')?.click(); // the reader closes the card after reading the feedback
+    await flush();
+    clock += 4 * 60 * 1000;
+    for (let i = 5; i < 16; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    await vi.waitFor(() => expect(asked).toEqual(['recall', 'cloze']));
+  });
+
+  it('stays clear of a normal card for 30 seconds, even when the policy would allow it (normal card first)', async () => {
+    const { asked } = setup();
+    let clock = Date.now();
+    const { host, setOrchestrator } = await createHost(deps());
+    const policy = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: policy.createInterventionPolicy({ now: () => clock }) });
+    // a normal help card appears (reported as type 'ask'), then is closed
+    document.body.innerHTML = `<p id="t">${para(99)}</p>`;
+    expect(await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'))).toBe(true);
+    await flush();
+    queryAlcoia('.sra-close-btn')?.click();
+    await flush();
+    const askedBefore = asked.length;
+    clock += 4 * 60 * 1000; // the policy's own gap has long passed; only the 30 second quiet window can hold the check back
+    for (let i = 0; i < 14; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); } // well past the 1000 words a check needs
+    expect(asked.slice(askedBefore).filter((k) => k === 'recall' || k === 'cloze')).toHaveLength(0);
+  });
+
+  it('drops a quick check whose question arrived after the reader started to struggle', async () => {
+    const { asked } = setup();
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const original = globalThis.__sendMessageImpl;
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        asked.push(msg.body.kind);
+        gate.then(() => cb({ ok: true, data: { questions: [{ q: 'Which idea?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } }));
+      } else original(msg, cb);
+    };
+    const host = await build();
+    for (let i = 0; i < 5; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    await vi.waitFor(() => expect(asked).toHaveLength(1)); // the check is being fetched
+    host.setCogState('struggling');                         // meanwhile the reader runs into difficulty
+    release();
+    await flush();
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();         // the help path owns the moment; no check shown
   });
 });
