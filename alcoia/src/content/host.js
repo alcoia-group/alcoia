@@ -379,29 +379,62 @@ export async function createHost(deps) {
   // "this client established that no explanation was shown for this paragraph before this attempt". Every
   // explanation or summary the reader is shown is generated through fetchSummary below (the selection
   // tooltip, the explain/repair card, the card's "explain more", simplify, define, ...), cached results
-  // included, so noting assistance there covers them all. A summary of a selection is attributed to the
-  // paragraph being read when the selection lies inside it; when it cannot be attributed to any known
-  // paragraph, assistance is `unmappedAssistance` and later outcomes report UNKNOWN (undefined, never
-  // false) rather than claiming no assistance. A retry or later write cannot clear either record.
+  // included, so noting assistance there covers them all.
+  //
+  // Attribution, in order, for assistance that did not arrive with a paragraph key:
+  //   1. MAPPED: the text is inside the paragraph being read, or inside any paragraph-level element of the
+  //      page (found by looking the text up in the document). Those paragraphs are `assistedKeys` (true).
+  //   2. UNMAPPED but locatable: the text is in no page element, but a paragraph is being read. The
+  //      explanation most plausibly belongs to that paragraph and we cannot rule it out, so only THAT
+  //      paragraph becomes `uncertainKeys` (outcomes there report UNKNOWN: undefined, never false). Answers
+  //      about other paragraphs are unaffected, because nothing ties the explanation to them.
+  //   3. UNMAPPED and unlocatable: no paragraph is being read, so nothing narrows where the explanation
+  //      belongs. Only this case still sets the session-wide `unmappedAssistance`, which makes every later
+  //      outcome UNKNOWN (conservative, as before).
+  // A retry or later write cannot clear any of the three records.
   const assistedKeys = new Set();
+  const uncertainKeys = new Set();
   let unmappedAssistance = false;
+  const MAX_SCANNED_BLOCKS = 2000;
   const keyOf = (t) => (t || '').slice(0, 80).trim();
+  const squash = (t) => (t || '').replace(/\s+/g, ' ').trim();
+  function currentParagraphText() {
+    try {
+      return currentParagraph?.type === 'dom' && currentParagraph.data
+        ? (currentParagraph.data.innerText || currentParagraph.data.textContent || '') : '';
+    } catch (e) { return ''; }
+  }
+  // Paragraph-level elements of the page whose text contains `text`, as paragraph keys (same 80-char convention).
+  function paragraphKeysContaining(text) {
+    const needle = squash(text);
+    const keys = [];
+    if (!needle || typeof document === 'undefined') return keys;
+    try {
+      const blocks = document.querySelectorAll('p, li, blockquote, dd, td, h1, h2, h3, h4, h5, h6');
+      const limit = Math.min(blocks.length, MAX_SCANNED_BLOCKS);
+      for (let i = 0; i < limit; i += 1) {
+        const body = squash(blocks[i].innerText || blocks[i].textContent || '');
+        if (body && body.includes(needle)) keys.push(keyOf(blocks[i].innerText || blocks[i].textContent || ''));
+      }
+    } catch (e) { return keys; }
+    return keys;
+  }
   function noteAssistance(text, paragraphKey) {
     if (paragraphKey) { assistedKeys.add(paragraphKey); return; }
     const own = keyOf(text);
     if (own) assistedKeys.add(own);
-    let current = '';
-    try {
-      current = currentParagraph?.type === 'dom' && currentParagraph.data
-        ? (currentParagraph.data.innerText || currentParagraph.data.textContent || '') : '';
-    } catch (e) { current = ''; }
-    if (current && text && current.includes(text)) assistedKeys.add(keyOf(current));
-    else if (!current || !text || keyOf(current) !== own) unmappedAssistance = true;
+    const current = currentParagraphText();
+    if (current && text && squash(current).includes(squash(text))) { assistedKeys.add(keyOf(current)); return; }
+    const found = paragraphKeysContaining(text);
+    if (found.length) { for (const k of found) assistedKeys.add(k); return; }
+    if (current && keyOf(current) !== own) { uncertainKeys.add(keyOf(current)); return; }
+    if (!current || !text) unmappedAssistance = true;
   }
   function explanationPreceded(paragraphKey) {
     if (!paragraphKey) return undefined;
     if (assistedKeys.has(paragraphKey) || wasParagraphExplained(paragraphKey) === true) return true;
-    return unmappedAssistance ? undefined : false;
+    if (unmappedAssistance || uncertainKeys.has(paragraphKey)) return undefined;
+    return false;
   }
 
   async function fetchSummary(text, mode = 'tldr', context = '', opts = {}) {
