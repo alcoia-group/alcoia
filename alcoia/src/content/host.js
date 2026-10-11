@@ -91,6 +91,15 @@ export async function createHost(deps) {
   // second gate of its own. Fire-and-forget, one POST per discrete signal,
   // no batching — see outcomes.js's own header for the full reasoning on
   // that choice, made explicitly rather than guessed through.
+  // ── Learner estimates (Stage B) ───────────────────────────────────────────
+  // knowledgeUnitId -> { level, confidence, action, kind, reason } as last stated by the server. Read by
+  // learnerEstimateFor() below, which orchestrator.js passes to the intervention policy. Never persisted.
+  const learnerEstimates = new Map();
+  function noteLearnerEstimate(e) {
+    if (!e || typeof e.knowledgeUnitId !== 'string' || !e.knowledgeUnitId) return;
+    if (e.action !== 'abstain' && e.action !== 'gather' && e.action !== 'intervene') return;
+    learnerEstimates.set(e.knowledgeUnitId, { level: e.level, confidence: e.confidence, action: e.action, kind: e.kind, reason: e.reason });
+  }
   let submitOutcome = () => {};
   if (assignmentId && getSession) {
     // Routes through background.js instead of fetching directly — a
@@ -112,7 +121,13 @@ export async function createHost(deps) {
       // guard is what keeps those answers from attempting (and always
       // failing) a submission, rather than special-casing that call site.
       if (!Number.isInteger(fields.paragraphIndex) || fields.paragraphIndex < 0) return;
-      outcomesManager.submit(fields).catch(() => {});
+      // Stage B: new evidence for this unit is on its way, so the copy of its estimate (which was decided
+      // without it) is dropped now; the server's answer, when it carries one, replaces it. A failed or
+      // memory-off submission simply leaves the unit without an estimate, i.e. the normal behaviour.
+      if (fields.knowledgeUnitId && fields.questionId) learnerEstimates.delete(fields.knowledgeUnitId);
+      outcomesManager.submit(fields)
+        .then((r) => { if (r && r.learnerEstimate) noteLearnerEstimate(r.learnerEstimate); })
+        .catch(() => {});
     };
   }
 
@@ -279,6 +294,16 @@ export async function createHost(deps) {
       }
     } catch (e) {}
   }
+  let learnerEstimatesManager = null;
+  async function refreshLearnerEstimates() {
+    if (!learnerEstimatesManager) return;
+    try {
+      const result = await learnerEstimatesManager.getEstimates();
+      if (!result.ok) return; // keep whatever we had; never invent an estimate
+      learnerEstimates.clear();
+      for (const e of result.estimates) noteLearnerEstimate(e);
+    } catch (e) {}
+  }
   let retentionRefreshTimer = null;
   if (assignmentId && getSession) {
     // Same routing reason as submitOutcome above.
@@ -290,6 +315,14 @@ export async function createHost(deps) {
       fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
     await refreshRetentionDue(); // the original, one-time fetch this block always made, unconditional as before
+    // Stage B: the learner's estimates for this assignment, fetched with the same gate and on the same cadence.
+    const estimatesModule = await loadModule('src/shared/learner-estimates.js');
+    learnerEstimatesManager = estimatesModule.createLearnerEstimatesManager({
+      getSession,
+      estimatesUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/knowledge-state/estimates`,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
+    });
+    await refreshLearnerEstimates();
     // Step 27: the periodic half. Not covered by installListeners()'s own
     // AbortSignal (orchestrator.js's own idleTimer isn't either, for the
     // identical reason stated there: "the content script lives as long as
@@ -299,6 +332,7 @@ export async function createHost(deps) {
     retentionRefreshTimer = setInterval(() => {
       if (!s().assistantEnabled) return; // mirrors checkRetentionCandidate's own first real check -- skip this tick's call, not the construction-time one above.
       refreshRetentionDue();
+      refreshLearnerEstimates();
     }, RETENTION_DUE_REFRESH_MS);
   }
   function stopRetentionRefresh() {
@@ -1319,6 +1353,16 @@ export async function createHost(deps) {
     sessionTracker,
     log,
     findParagraphAt,
+    // Stage B: the server's estimate for the knowledge unit of this paragraph element, or null when there is
+    // none (no assignment, no account, learner memory off, or simply no evidence yet).
+    learnerEstimateFor: (el) => {
+      if (!learnerEstimates.size) return null;
+      try {
+        const text = el ? (el.innerText || el.textContent || '').trim() : '';
+        const id = text ? knowledgeUnitModule.computeKnowledgeUnitId(text) : null;
+        return (id && learnerEstimates.get(id)) || null;
+      } catch (e) { return null; }
+    },
     getCurrentParagraph: () => currentParagraph,
     setCurrentParagraph: (p) => { currentParagraph = p; },
     setPrevParagraphText: (t) => { prevParagraphText = t; },

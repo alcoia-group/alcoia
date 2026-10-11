@@ -3436,3 +3436,94 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
     });
   });
 });
+
+/* STAGE B: the learner's own recorded evidence reaches the reading flow. The host fetches the server's
+ * estimates for the assignment, hands the one for the paragraph in view to the intervention policy, drops an
+ * estimate the moment new evidence for that unit is on its way, and replaces it with the server's updated one. */
+describe('learner estimates reach the reading decisions (Stage B)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const ESTIMATES_URL = `${ASSIGNMENTS_URL}/assign-b/knowledge-state/estimates`;
+  const OUTCOMES_URL = `${ASSIGNMENTS_URL}/assign-b/outcomes`;
+  const P1 = 'First concept paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will generate a question about it, for the Stage B tests.';
+  const P2 = 'Second, unrelated concept paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will generate a question, for the Stage B tests.';
+  const deps = (o = {}) => baseDeps({ assignmentId: 'assign-b', getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 999_999 }), ...o });
+  const unitId = async (t) => (await import('../alcoia/src/content/signals/knowledge-unit.js')).computeKnowledgeUnitId(t);
+  const est = (knowledgeUnitId, o = {}) => ({ knowledgeUnitId, level: 'established', confidence: 'high', action: 'abstain', kind: 'retrieve', reason: 'established_recently', ...o });
+
+  beforeEach(() => {
+    document.body.innerHTML = `<p id="p1">${P1}</p><p id="p2">${P2}</p>`;
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL, QUESTION_LEVELS_SUPPORTED: ['recognition'] });
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
+  });
+
+  function server({ estimates = [], outcomeReply = { recorded: true }, failEstimates = false } = {}) {
+    const calls = [];
+    mockProxyFetch(vi.fn((url, options) => {
+      calls.push({ url, options });
+      if (url === ESTIMATES_URL) return failEstimates ? { ok: false, status: 500, data: null } : { ok: true, status: 200, data: { estimates } };
+      if (url === OUTCOMES_URL) return { ok: true, status: 201, data: outcomeReply };
+      return { ok: true, status: 200, data: { recorded: true } };
+    }));
+    return calls;
+  }
+
+  it('fetches the estimates once at construction, Bearer-authenticated, and serves them per paragraph (other paragraphs unaffected)', async () => {
+    const id1 = await unitId(P1);
+    const calls = server({ estimates: [est(id1)] });
+    const { host } = await createHost(deps());
+    const hit = calls.filter((c) => c.url === ESTIMATES_URL);
+    expect(hit).toHaveLength(1);
+    expect(hit[0].options.headers.Authorization).toBe('Bearer tok-1');
+    expect(host.learnerEstimateFor(document.getElementById('p1'))).toMatchObject({ action: 'abstain', level: 'established' });
+    expect(host.learnerEstimateFor(document.getElementById('p2'))).toBeNull(); // multiple concepts: no bleed
+  });
+
+  it('a failed or unavailable estimates fetch means no estimate at all (the normal behaviour), never a made-up one', async () => {
+    server({ failEstimates: true });
+    const { host } = await createHost(deps());
+    expect(host.learnerEstimateFor(document.getElementById('p1'))).toBeNull();
+    const { host: anon } = await createHost(baseDeps()); // no assignment: nothing is fetched
+    expect(anon.learnerEstimateFor(document.getElementById('p1'))).toBeNull();
+  });
+
+  it('new evidence drops the stale estimate at once and the server\'s updated estimate replaces it', async () => {
+    const id1 = await unitId(P1);
+    server({
+      estimates: [est(id1)],
+      outcomeReply: { recorded: true, learnerEstimate: est(id1, { level: 'needs_help', confidence: 'low', action: 'intervene', kind: 'repair', reason: 'independent_miss' }) },
+    });
+    const { host } = await createHost(deps());
+    expect(host.learnerEstimateFor(document.getElementById('p1')).action).toBe('abstain');
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('p1'), 1);
+    queryAlcoia('.sra-q-option[data-index="1"]').click(); // a wrong answer
+    queryAlcoia('.sra-q-conf-skip').click();
+    // dropped immediately: a stale "abstain" must not outlive the answer that contradicts it
+    expect(host.learnerEstimateFor(document.getElementById('p1'))).toBeNull();
+    await vi.waitFor(() => expect(host.learnerEstimateFor(document.getElementById('p1'))).toMatchObject({ action: 'intervene', kind: 'repair', level: 'needs_help' }));
+  });
+
+  it('end to end through the real policy: changing the evidence changes the subsequent decision, and the gates still apply', async () => {
+    const { createInterventionPolicy } = await import('../alcoia/src/content/intervention-policy.js');
+    const { STATES } = await import('../alcoia/src/content/state-engine.js');
+    const id1 = await unitId(P1);
+    let t = 1_000_000;
+    const state = { label: STATES.STRUGGLING, confidence: 0.7, evidence: ['slowed down'], signal: { text: P1 } };
+    const decide = async (estimates) => {
+      server({ estimates });
+      const { host } = await createHost(deps());
+      const policy = createInterventionPolicy({ now: () => t });
+      return policy.evaluate(state, { currentEl: document.getElementById('p1'), learnerEstimate: host.learnerEstimateFor(document.getElementById('p1')) });
+    };
+    // no evidence: the reading signals alone decide (a question, gathering evidence)
+    expect(await decide([])).toMatchObject({ allow: true, policyAction: 'retrieve' });
+    // independently established: the same struggle signal no longer earns a question
+    const established = await decide([est(id1)]);
+    expect(established.allow).toBe(false);
+    expect(established.reason).toMatch(/learner estimate/);
+    // repeated independent misses: explained, not asked again
+    expect(await decide([est(id1, { level: 'needs_help', action: 'intervene', kind: 'explain', reason: 'repeated_independent_misses' })])).toMatchObject({ allow: true, policyAction: 'explain' });
+    // one independent miss: repair
+    expect(await decide([est(id1, { level: 'needs_help', action: 'intervene', kind: 'repair', reason: 'independent_miss' })])).toMatchObject({ allow: true, policyAction: 'repair' });
+  });
+});

@@ -169,7 +169,12 @@ export function createOutcomesManager(opts = {}) {
         const data = await resp.json().catch(() => null);
         return { ok: false, error: (data && typeof data.error === 'string' && data.error) || `status_${resp.status}` };
       }
-      return { ok: true };
+      // Stage B: the server answers with the updated estimate for the unit this outcome touched (labels only),
+      // so the very next decision can use it. Absent for older servers, for learner memory switched off, and
+      // for replayed submissions.
+      const data = await resp.json?.().catch(() => null);
+      const learnerEstimate = data && data.learnerEstimate && typeof data.learnerEstimate === 'object' ? data.learnerEstimate : null;
+      return learnerEstimate ? { ok: true, learnerEstimate } : { ok: true };
     } catch (e) {
       return { ok: false, error: 'network_error' };
     }

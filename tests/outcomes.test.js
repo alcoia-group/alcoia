@@ -254,3 +254,18 @@ describe('submit — intervention_id (step 5)', () => {
     expect(body).not.toHaveProperty('intervention_id');
   });
 });
+
+describe('learnerEstimate in the outcome response (Stage B)', () => {
+  const mk = (data, ok = true) => createOutcomesManager({
+    getSession: async () => ({ token: 't' }), outcomesUrl: 'https://x.invalid/o',
+    fetchImpl: async () => ({ ok, status: ok ? 201 : 500, json: async () => data }),
+  });
+  it('passes the server\'s updated estimate through', async () => {
+    const est = { knowledgeUnitId: 'k1', level: 'needs_help', action: 'intervene', kind: 'repair' };
+    expect(await mk({ recorded: true, learnerEstimate: est }).submit({ paragraphIndex: 0 })).toEqual({ ok: true, learnerEstimate: est });
+  });
+  it('is just { ok: true } when the server sends none (memory off, older server, replay)', async () => {
+    expect(await mk({ recorded: true }).submit({ paragraphIndex: 0 })).toEqual({ ok: true });
+    expect(await mk({ recorded: true, duplicate: true }).submit({ paragraphIndex: 0 })).toEqual({ ok: true });
+  });
+});
