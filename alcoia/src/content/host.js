@@ -220,6 +220,19 @@ export async function createHost(deps) {
     };
   }
 
+  let lastNormalCardAt = 0; // when a help / retention / focus card last appeared; read by the quick-check logic
+  // Any intervention reported (a question, an explanation, a review) means the reader has just had help or been
+  // checked, so the scheduled quick-check window restarts (probeCovered is defined with the probe below).
+  {
+    const baseReport = reportIntervention;
+    reportIntervention = (...args) => {
+      // args[3] is the intervention type. Anything but a scheduled quick check is a "normal" card: note when it
+      // appeared so a quick check keeps clear of it (see PROBE_QUIET_MS).
+      try { if (args[3] !== 'probe') lastNormalCardAt = Date.now(); probeCovered(); } catch (e) { /* defined later; never blocks reporting */ }
+      return baseReport(...args);
+    };
+  }
+
   // ── Retention due-list (intelligence-architecture audit, step 7 built,
   // step 10 context-scoped, step 27 refreshed) ───────────────────────────
   // Same account-only gate as every reporting manager above -- there is no
@@ -710,6 +723,7 @@ export async function createHost(deps) {
   // pickLevelForConcept's compatibility layer already treats as "fall back
   // to paragraphKey," never a crash.
   const knowledgeUnitModule = await loadModule('src/content/signals/knowledge-unit.js');
+  const { hasRelationCues } = await loadModule('src/content/relation-cues.js');
   // Intelligence-architecture audit, step 5 — same shared id generator
   // intervention-policy.js itself uses for a policy-triggered 'ask', reused
   // here for the reader-initiated paths (runSessionRecall) that have no
@@ -1185,7 +1199,10 @@ export async function createHost(deps) {
     if (!automaticInterventionGuard.tryAcquire()) return false;
     try {
       const identity = computeIdentity(text);
-      const mode = kind === 'repair' ? 'repair' : 'explain_more';
+      // An explanation for a paragraph built on a relationship (cause, dependence, contrast...) points the reader
+      // at how the ideas connect; any other explanation, and every repair, is unchanged.
+      const relate = kind !== 'repair' && hasRelationCues(text);
+      const mode = kind === 'repair' ? 'repair' : relate ? 'relate' : 'explain_more';
       const generated = await fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey });
       if (!generated) return false;
 
@@ -1203,6 +1220,7 @@ export async function createHost(deps) {
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: identity.knowledgeUnitId,
         interventionId,
+        ...(relate ? { badge: 'how the ideas connect' } : {}),
       });
       if (shown) {
         // Step 12: same intervention-evidence contract as handleAsk, same
@@ -1322,6 +1340,84 @@ export async function createHost(deps) {
     }
   }
 
+  /* Scheduled quick checks ("probes"). A reader who reads smoothly triggers nothing, which leaves the instructor
+   * with no evidence from exactly the students who are doing well, and can make a fluent reader think the tool
+   * is not working. So, in an assigned reading only, a short quick check is offered after a set amount of
+   * material has been read, then again after each further stretch, for as long as the reading goes on. The
+   * amount is measured in words actually read (each paragraph counted once), so it adapts to the length of the
+   * material without scanning it: a long reading gets more checks, a short one may get none.
+   *
+   * It is deliberately modest:
+   *   - never while the reader is struggling or drifting (the help path owns those moments);
+   *   - never when anything was shown or answered in the current stretch (the stretch restarts, see probeCovered);
+   *   - never about a paragraph the learner has already shown they know (the server's estimate says abstain);
+   *   - always through the same policy gates as every other question (budget, 3-minute gap, dismissal
+   *     back-off, one card at a time), and it can never take the last free slot of the session budget;
+   *   - tagged 'probe' so its answers stay distinguishable from questions triggered by difficulty.
+   * Questions alternate between multiple choice and fill-in-the-blank (choose the word). */
+  const PROBE_FIRST_WORDS = 500;
+  const PROBE_EVERY_WORDS = 1000;
+  const PROBE_MIN_PARAGRAPH_WORDS = 30;
+  // A quick check never appears within this long after a normal card, and if both are due at once the normal
+  // card goes first (the check simply waits for the next paragraph).
+  const PROBE_QUIET_MS = 30000;
+  const probeBlocked = () => (
+    ui.hasVisibleQuestionCard()
+    || (lastNormalCardAt !== 0 && Date.now() - lastNormalCardAt < PROBE_QUIET_MS)
+    || lastCogState === 'struggling' || lastCogState === 'drifting'
+  );
+  const probe = { words: 0, nextAt: PROBE_FIRST_WORDS, counted: new Set(), asked: 0, busy: false };
+  const wordCount = (t) => (String(t || '').trim().match(/\S+/g) || []).length;
+  function probeCovered() { probe.words = 0; probe.nextAt = PROBE_EVERY_WORDS; }
+
+  async function checkProbe(text, paragraphIndex) {
+    if (!assignmentId || !getSession || !text) return;
+    const key = text.slice(0, 80).trim();
+    if (!probe.counted.has(key)) { probe.counted.add(key); probe.words += wordCount(text); }
+    if (probe.words < probe.nextAt || probe.busy) return;
+    if (wordCount(text) < PROBE_MIN_PARAGRAPH_WORDS) return; // wait for a substantive paragraph
+    if (!s().assistantEnabled || !orchestratorRef?.interventionPolicy) return;
+    if (probeBlocked()) return;
+    const identity = computeIdentity(text);
+    if (!identity.knowledgeUnitId) return;
+    const est = learnerEstimates.get(identity.knowledgeUnitId);
+    if (est && est.action === 'abstain') return; // already shown they know this one
+    if (await snoozeControl.isActive()) return;
+
+    const decision = orchestratorRef.interventionPolicy.evaluateRetentionCandidate({
+      paragraphKey: identity.paragraphKey,
+      questionCardVisible: ui.hasVisibleQuestionCard(),
+      kind: 'probe',
+    });
+    if (!decision.allow) return; // stays due; the next paragraph tries again
+
+    if (!automaticInterventionGuard.tryAcquire()) return;
+    probe.busy = true;
+    try {
+      let questions = await fetchQuestions(text, { kind: probe.asked % 2 === 1 ? 'cloze' : 'recall' });
+      if (!questions.length && probe.asked % 2 === 1) questions = await fetchQuestions(text, { kind: 'recall' });
+      if (!questions.length) return;
+      // Fetching took time: a normal card may have appeared meanwhile. It has priority, so drop the check.
+      if (probeBlocked()) return;
+      const shown = questionCard.show(questions[0], {
+        evidence: decision.evidence,
+        paragraphKey: identity.paragraphKey,
+        knowledgeUnitId: identity.knowledgeUnitId,
+        paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
+        interventionId: decision.interventionId,
+      });
+      if (shown) {
+        orchestratorRef.interventionPolicy.record(decision);
+        probe.asked += 1;
+        reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'probe', text, 'retrieve');
+        probeCovered();
+      }
+    } finally {
+      probe.busy = false;
+      automaticInterventionGuard.release();
+    }
+  }
+
   // ── Paragraph state — what setCurrentParagraph/setPrevParagraphText/
   // setCogState/getCurrentParagraph hold ──────────────────────────────────
   let currentParagraph = null;
@@ -1384,6 +1480,7 @@ export async function createHost(deps) {
       // unawaited (see its own comment on this call site), so this must
       // not become async from the caller's own point of view either.
       checkRetentionCandidate(text, paragraphIndex).catch(() => {});
+      checkProbe(text, paragraphIndex).catch(() => {});
     },
     onStruggle: (text, paragraphIndex, substate, selfReported) => {
       sessionRecall.recordStruggle(text);
