@@ -220,11 +220,17 @@ export async function createHost(deps) {
     };
   }
 
+  let lastNormalCardAt = 0; // when a help / retention / focus card last appeared; read by the quick-check logic
   // Any intervention reported (a question, an explanation, a review) means the reader has just had help or been
   // checked, so the scheduled quick-check window restarts (probeCovered is defined with the probe below).
   {
     const baseReport = reportIntervention;
-    reportIntervention = (...args) => { try { probeCovered(); } catch (e) { /* defined later; never blocks reporting */ } return baseReport(...args); };
+    reportIntervention = (...args) => {
+      // args[3] is the intervention type. Anything but a scheduled quick check is a "normal" card: note when it
+      // appeared so a quick check keeps clear of it (see PROBE_QUIET_MS).
+      try { if (args[3] !== 'probe') lastNormalCardAt = Date.now(); probeCovered(); } catch (e) { /* defined later; never blocks reporting */ }
+      return baseReport(...args);
+    };
   }
 
   // ── Retention due-list (intelligence-architecture audit, step 7 built,
@@ -1352,6 +1358,14 @@ export async function createHost(deps) {
   const PROBE_FIRST_WORDS = 500;
   const PROBE_EVERY_WORDS = 1000;
   const PROBE_MIN_PARAGRAPH_WORDS = 30;
+  // A quick check never appears within this long after a normal card, and if both are due at once the normal
+  // card goes first (the check simply waits for the next paragraph).
+  const PROBE_QUIET_MS = 30000;
+  const probeBlocked = () => (
+    ui.hasVisibleQuestionCard()
+    || (lastNormalCardAt !== 0 && Date.now() - lastNormalCardAt < PROBE_QUIET_MS)
+    || lastCogState === 'struggling' || lastCogState === 'drifting'
+  );
   const probe = { words: 0, nextAt: PROBE_FIRST_WORDS, counted: new Set(), asked: 0, busy: false };
   const wordCount = (t) => (String(t || '').trim().match(/\S+/g) || []).length;
   function probeCovered() { probe.words = 0; probe.nextAt = PROBE_EVERY_WORDS; }
@@ -1363,7 +1377,7 @@ export async function createHost(deps) {
     if (probe.words < probe.nextAt || probe.busy) return;
     if (wordCount(text) < PROBE_MIN_PARAGRAPH_WORDS) return; // wait for a substantive paragraph
     if (!s().assistantEnabled || !orchestratorRef?.interventionPolicy) return;
-    if (lastCogState === 'struggling' || lastCogState === 'drifting') return;
+    if (probeBlocked()) return;
     const identity = computeIdentity(text);
     if (!identity.knowledgeUnitId) return;
     const est = learnerEstimates.get(identity.knowledgeUnitId);
@@ -1383,6 +1397,8 @@ export async function createHost(deps) {
       let questions = await fetchQuestions(text, { kind: probe.asked % 2 === 1 ? 'cloze' : 'recall' });
       if (!questions.length && probe.asked % 2 === 1) questions = await fetchQuestions(text, { kind: 'recall' });
       if (!questions.length) return;
+      // Fetching took time: a normal card may have appeared meanwhile. It has priority, so drop the check.
+      if (probeBlocked()) return;
       const shown = questionCard.show(questions[0], {
         evidence: decision.evidence,
         paragraphKey: identity.paragraphKey,

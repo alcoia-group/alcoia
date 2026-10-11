@@ -3634,4 +3634,42 @@ describe('scheduled quick checks (probes)', () => {
     for (let i = 5; i < 16; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
     await vi.waitFor(() => expect(asked).toEqual(['recall', 'cloze']));
   });
+
+  it('stays clear of a normal card for 30 seconds, even when the policy would allow it (normal card first)', async () => {
+    const { asked } = setup();
+    let clock = Date.now();
+    const { host, setOrchestrator } = await createHost(deps());
+    const policy = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: policy.createInterventionPolicy({ now: () => clock }) });
+    // a normal help card appears (reported as type 'ask'), then is closed
+    document.body.innerHTML = `<p id="t">${para(99)}</p>`;
+    expect(await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'))).toBe(true);
+    await flush();
+    queryAlcoia('.sra-close-btn')?.click();
+    await flush();
+    const askedBefore = asked.length;
+    clock += 4 * 60 * 1000; // the policy's own gap has long passed; only the 30 second quiet window can hold the check back
+    for (let i = 0; i < 14; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); } // well past the 1000 words a check needs
+    expect(asked.slice(askedBefore).filter((k) => k === 'recall' || k === 'cloze')).toHaveLength(0);
+  });
+
+  it('drops a quick check whose question arrived after the reader started to struggle', async () => {
+    const { asked } = setup();
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const original = globalThis.__sendMessageImpl;
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        asked.push(msg.body.kind);
+        gate.then(() => cb({ ok: true, data: { questions: [{ q: 'Which idea?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } }));
+      } else original(msg, cb);
+    };
+    const host = await build();
+    for (let i = 0; i < 5; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    await vi.waitFor(() => expect(asked).toHaveLength(1)); // the check is being fetched
+    host.setCogState('struggling');                         // meanwhile the reader runs into difficulty
+    release();
+    await flush();
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();         // the help path owns the moment; no check shown
+  });
 });
