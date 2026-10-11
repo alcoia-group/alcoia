@@ -1228,3 +1228,33 @@ describe('learner estimate in the policy (Stage B)', () => {
     expect(d.reason).toMatch(/declined|raised bar/);
   });
 });
+
+describe('evaluateRetentionCandidate with kind "probe" (scheduled quick check)', () => {
+  it('is allowed under ordinary conditions and labelled as a probe, as a retrieval', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1', kind: 'probe' });
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('probe');
+    expect(d.policyAction).toBe('retrieve');
+    expect(d.evidence[0]).toMatch(/quick check/i);
+  });
+  it('can never take the last free slot of the session budget, which stays for real help', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, budget: { baseAllowance: 2, minGapMs: 0 } });
+    p.record(p.evaluateRetentionCandidate({ paragraphKey: 'a', kind: 'retention' })); // 1 of 2 used
+    const probe = p.evaluateRetentionCandidate({ paragraphKey: 'b', kind: 'probe' });
+    expect(probe.allow).toBe(false);
+    expect(probe.reason).toMatch(/last slot/);
+    // real help still has that slot
+    expect(p.evaluateRetentionCandidate({ paragraphKey: 'c', kind: 'retention' }).allow).toBe(true);
+  });
+  it('shares the cooldown, the one-card-at-a-time rule and the dismissal back-off with every other question', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    p.record(p.evaluateRetentionCandidate({ paragraphKey: 'a', kind: 'retention' }));
+    expect(p.evaluateRetentionCandidate({ paragraphKey: 'b', kind: 'probe' }).allow).toBe(false); // gap
+    clock.advance(4 * 60 * 1000);
+    expect(p.evaluateRetentionCandidate({ paragraphKey: 'b', kind: 'probe', questionCardVisible: true }).allow).toBe(false);
+    p.recordDismissal(); p.recordDismissal();
+    expect(p.evaluateRetentionCandidate({ paragraphKey: 'b', kind: 'probe' }).allow).toBe(false);
+  });
+});
