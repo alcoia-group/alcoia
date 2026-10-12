@@ -446,7 +446,7 @@ describe('entitlement source (item S6 follow-up): subscription vs. class seat vs
     loadUpgradeBody();
     vi.stubGlobal('chrome', fakeChrome({
       sra_session: VALID_SESSION,
-      sra_class_membership: { classId: 'c-seat-1', seatId: 's1', role: 'student', joinedAt: Date.now() },
+      sra_class_memberships: [{ classId: 'c-seat-1', seatId: 's1', role: 'student', joinedAt: Date.now() }],
     }));
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => SEAT_ONLY_RESPONSE })]]));
@@ -466,7 +466,7 @@ describe('entitlement source (item S6 follow-up): subscription vs. class seat vs
 
   it('seat-only with no local class record: falls back to a generic message rather than fabricating a class id', async () => {
     loadUpgradeBody();
-    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION })); // no sra_class_membership
+    vi.stubGlobal('chrome', fakeChrome({ sra_session: VALID_SESSION })); // no sra_class_memberships
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => SEAT_ONLY_RESPONSE })]]));
 
@@ -480,7 +480,7 @@ describe('entitlement source (item S6 follow-up): subscription vs. class seat vs
     loadUpgradeBody();
     vi.stubGlobal('chrome', fakeChrome({
       sra_session: VALID_SESSION,
-      sra_class_membership: { classId: 'c-both-1', seatId: 's2', role: 'student', joinedAt: Date.now() },
+      sra_class_memberships: [{ classId: 'c-both-1', seatId: 's2', role: 'student', joinedAt: Date.now() }],
     }));
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => BOTH_RESPONSE })]]));
@@ -505,13 +505,13 @@ describe('entitlement source (item S6 follow-up): subscription vs. class seat vs
   it('subscription + a seat that was since left: behaves exactly like subscription-only, no leftover seat note', async () => {
     // A real, distinct case from "both active": the server reports
     // hasActiveSeat: false once the seat is released, even though a local
-    // sra_class_membership record might still exist from before leaving
+    // sra_class_memberships record might still exist from before leaving
     // (e.g. leave happened on another device) -- the server bit, not the
     // stale local record, is what this page trusts.
     loadUpgradeBody();
     vi.stubGlobal('chrome', fakeChrome({
       sra_session: VALID_SESSION,
-      sra_class_membership: { classId: 'c-since-left', seatId: 's3', role: 'student', joinedAt: Date.now() - 999_999 },
+      sra_class_memberships: [{ classId: 'c-since-left', seatId: 's3', role: 'student', joinedAt: Date.now() - 999_999 }],
     }));
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => READER_RESPONSE })]]));
@@ -569,7 +569,7 @@ describe('Teams & classrooms card reflects real active-seat state (item S6 follo
     loadUpgradeBody();
     const chrome = fakeChrome({
       sra_session: VALID_SESSION,
-      sra_class_membership: { classId: 'c-teams-1', seatId: 's4', role: 'student', joinedAt: Date.now() },
+      sra_class_memberships: [{ classId: 'c-teams-1', seatId: 's4', role: 'student', joinedAt: Date.now() }],
     });
     vi.stubGlobal('chrome', chrome);
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
@@ -609,7 +609,7 @@ describe('Teams & classrooms card reflects real active-seat state (item S6 follo
     loadUpgradeBody();
     vi.stubGlobal('chrome', fakeChrome({
       sra_session: VALID_SESSION,
-      sra_class_membership: { classId: 'c-teams-2', seatId: 's5', role: 'student', joinedAt: Date.now() },
+      sra_class_memberships: [{ classId: 'c-teams-2', seatId: 's5', role: 'student', joinedAt: Date.now() }],
     }));
     vi.stubGlobal('ALCOIA_CONFIG', fakeConfig());
     vi.stubGlobal('fetch', routedFetch([[ENTITLEMENTS_URL, async () => ({ ok: true, json: async () => BOTH_RESPONSE })]]));

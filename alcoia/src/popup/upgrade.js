@@ -61,7 +61,7 @@
  * a small additive field (hasActiveSeat) was added there first — see that
  * file's own comment — and entitlements.js's getEntitlementSource() derives
  * 'subscription' | 'seat' | 'free' from it. Never inferred from this
- * extension's own local sra_class_membership record alone: that record is
+ * extension's own local sra_class_memberships record alone: that record is
  * only ever used below to LABEL which class, once the server has already
  * confirmed a seat is active — a reader could hold a stale local record
  * for a class left on another device while the server reports no active
@@ -72,7 +72,7 @@ import { createSessionManager } from '../shared/session.js';
 import { createEntitlementsManager } from '../shared/entitlements.js';
 import { createBillingManager } from '../shared/billing.js';
 
-const CLASS_MEMBERSHIP_KEY = 'sra_class_membership';
+const CLASS_MEMBERSHIPS_KEY = 'sra_class_memberships';
 
 function seatOnlyMessage(classId) {
   return classId
@@ -95,10 +95,20 @@ function teamsMembershipMessage(classId) {
 // by reading alcoiaServer's classes.js/invites.js — see src/shared/
 // invites.js's own header). This never decides WHETHER a seat is active —
 // only which id to print once the server has already said one is.
+//
+// A student can now hold more than one local class membership (join-class.js,
+// item: "even if a student has joined a class already, they can join
+// more") — the server's own hasActiveSeat is a bare boolean, it never says
+// WHICH of several locally-held classes is the one granting it. Naming one
+// arbitrarily would be a guess dressed up as a fact, so this only ever
+// labels a class when exactly one local membership exists; two or more
+// falls back to the same generic "a class seat" message already used for
+// zero.
 async function getLocalClassId() {
   const stored = await new Promise((resolve) =>
-    chrome.storage.local.get({ [CLASS_MEMBERSHIP_KEY]: null }, (res) => resolve(res[CLASS_MEMBERSHIP_KEY])));
-  return stored && typeof stored.classId === 'string' ? stored.classId : null;
+    chrome.storage.local.get({ [CLASS_MEMBERSHIPS_KEY]: null }, (res) => resolve(res[CLASS_MEMBERSHIPS_KEY])));
+  const list = Array.isArray(stored) ? stored : [];
+  return list.length === 1 && typeof list[0].classId === 'string' ? list[0].classId : null;
 }
 
 const PRICES = {

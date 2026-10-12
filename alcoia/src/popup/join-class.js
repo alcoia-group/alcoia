@@ -32,7 +32,32 @@ const PENDING_INVITE_KEY = 'sra_pending_invite';
 const PENDING_INVITE_MAX_AGE_MS = 10 * 60 * 1000;
 const PENDING_LTI_LAUNCH_KEY = 'sra_pending_lti_launch';
 const PENDING_LTI_LAUNCH_MAX_AGE_MS = 10 * 60 * 1000;
-const CLASS_MEMBERSHIP_KEY = 'sra_class_membership';
+// A real array now, not a single record — a student can hold more than one
+// seat at once ("even if a student has joined a class already, they can
+// join more"). CLASS_MEMBERSHIP_KEY (singular) is the pre-existing key this
+// replaces; still read once, below, as a one-time migration so an install
+// that already has a single stored membership doesn't silently lose it.
+const CLASS_MEMBERSHIPS_KEY = 'sra_class_memberships';
+const CLASS_MEMBERSHIP_KEY_LEGACY = 'sra_class_membership';
+
+async function loadMemberships() {
+  const result = await new Promise((resolve) => chrome.storage.local.get(
+    { [CLASS_MEMBERSHIPS_KEY]: null, [CLASS_MEMBERSHIP_KEY_LEGACY]: null }, resolve,
+  ));
+  if (Array.isArray(result[CLASS_MEMBERSHIPS_KEY])) return result[CLASS_MEMBERSHIPS_KEY];
+  // Migration: the old single-record key, wrapped into the new array shape
+  // and written back once. Never both keys read as sources on later calls —
+  // this only ever runs while the new key has not been written yet.
+  const legacy = result[CLASS_MEMBERSHIP_KEY_LEGACY];
+  const migrated = legacy && typeof legacy.classId === 'string' ? [legacy] : [];
+  await new Promise((resolve) => chrome.storage.local.set({ [CLASS_MEMBERSHIPS_KEY]: migrated }, resolve));
+  if (legacy) await new Promise((resolve) => chrome.storage.local.remove(CLASS_MEMBERSHIP_KEY_LEGACY, resolve));
+  return migrated;
+}
+
+function saveMemberships(list) {
+  return new Promise((resolve) => chrome.storage.local.set({ [CLASS_MEMBERSHIPS_KEY]: list }, resolve));
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -67,7 +92,7 @@ let disclosureRendered = false;
 let pendingInviteText = '';
 // Set instead of pendingInviteText for the LTI entry path (item S6/E4
 // follow-up) — mutually exclusive with it; completeJoin() below branches
-// on which one is set, never both at once, since showInput()/showMember()
+// on which one is set, never both at once, since showInput()/showMemberships()
 // clear both together.
 let pendingLtiAckCode = '';
 
@@ -113,7 +138,38 @@ function showDisclosure(mode, className) {
   disclosureRendered = true;
 }
 
-function showMember(classId) {
+function renderMembershipRow(m) {
+  const li = document.createElement('li');
+  li.className = 'membership-row';
+
+  const title = document.createElement('p');
+  title.className = 'member-class-id';
+  title.textContent = `Class ${m.classId}`;
+  li.appendChild(title);
+
+  const gapNote = document.createElement('p');
+  gapNote.className = 'member-gap-note';
+  gapNote.textContent = "(alcoia can't show the class's name here yet — only its id.)";
+  li.appendChild(gapNote);
+
+  const consequence = document.createElement('div');
+  consequence.className = 'leave-consequence';
+  consequence.textContent = 'Leaving releases your seat immediately and reverts this class\'s access to free. '
+    + 'Your highlights, notes and quizzes stay on this device either way — leaving never deletes anything local.';
+  li.appendChild(consequence);
+
+  const leaveBtn = document.createElement('button');
+  leaveBtn.type = 'button';
+  leaveBtn.className = 'btn btn-ghost leave-btn';
+  leaveBtn.textContent = 'Leave this class';
+  leaveBtn.dataset.classId = m.classId;
+  if (m.seatId) leaveBtn.dataset.seatId = m.seatId;
+  li.appendChild(leaveBtn);
+
+  return li;
+}
+
+async function showMemberships() {
   disclosureRendered = false;
   pendingInviteText = '';
   pendingLtiAckCode = '';
@@ -121,7 +177,11 @@ function showMember(classId) {
   disclosureState.hidden = true;
   memberState.hidden = false;
   hideErrors();
-  $('memberClassId').textContent = `Class ${classId}`;
+
+  const memberships = await loadMemberships();
+  const list = $('membershipList');
+  list.innerHTML = '';
+  for (const m of memberships) list.appendChild(renderMembershipRow(m));
 }
 
 function joinErrorMessage(code) {
@@ -181,7 +241,6 @@ async function completeJoin() {
     // already acknowledged; this is the branch for the one that wasn't).
     await new Promise((resolve) => chrome.storage.local.set({
       [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: { token: result.sessionToken, email: '', expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1000 },
-      [CLASS_MEMBERSHIP_KEY]: { classId: result.classId, seatId: result.seatId || null, role: result.role || null, joinedAt: Date.now() },
     }, resolve));
     // Open the assignment signed in (the redirect carries a one-use reader
     // code), but only on the reader's own origin: never follow an
@@ -192,17 +251,23 @@ async function completeJoin() {
         chrome.tabs.create({ url: result.redirectTo });
       }
     } catch (e) { /* a malformed redirect is ignored; the join itself is done */ }
-  } else {
-    await new Promise((resolve) => chrome.storage.local.set({
-      [CLASS_MEMBERSHIP_KEY]: { classId: result.classId, seatId: result.seatId, role: result.role, joinedAt: Date.now() },
-    }, resolve));
   }
+
+  // Appended, never overwritten — a join never erases an earlier one.
+  // Re-joining the same classId (shouldn't happen; the server itself
+  // rejects that with already_a_member) still dedupes defensively rather
+  // than listing the same class twice. The ack response now carries real
+  // seatId/role for the LTI path too (null only against an older server),
+  // so neither branch has to force either field to null anymore.
+  const memberships = (await loadMemberships()).filter((m) => m.classId !== result.classId);
+  memberships.push({ classId: result.classId, seatId: result.seatId || null, role: result.role || null, joinedAt: Date.now() });
+  await saveMemberships(memberships);
 
   // "Holding a seat grants Reader entitlements automatically" — refresh
   // now, using Phase 3's own mechanism, not a guess that it worked.
   await entitlements.refresh();
 
-  showMember(result.classId);
+  await showMemberships();
 }
 
 $('inputFormEl').addEventListener('submit', async (e) => {
@@ -240,15 +305,21 @@ $('backBtn').addEventListener('click', () => {
   showInput($('inviteInput').value);
 });
 
-$('leaveBtn').addEventListener('click', async () => {
-  const leaveBtn = $('leaveBtn');
-  const stored = await new Promise((resolve) =>
-    chrome.storage.local.get({ [CLASS_MEMBERSHIP_KEY]: null }, (res) => resolve(res[CLASS_MEMBERSHIP_KEY])));
-  if (!stored) { showInput(); return; }
+$('joinAnotherBtn').addEventListener('click', () => showInput());
 
+// One row's worth of rows can each Leave independently — event delegation
+// on the list, since rows are rebuilt fresh on every showMemberships() call
+// rather than wired one by one.
+$('membershipList').addEventListener('click', async (e) => {
+  const leaveBtn = e.target.closest('.leave-btn');
+  if (!leaveBtn) return;
+  const classId = leaveBtn.dataset.classId;
+  const seatId = leaveBtn.dataset.seatId || null;
+
+  hideErrors();
   leaveBtn.disabled = true;
   leaveBtn.textContent = 'Leaving…';
-  const result = await invites.releaseSeat(stored.seatId);
+  const result = await invites.releaseSeat(seatId);
   leaveBtn.disabled = false;
   leaveBtn.textContent = 'Leave this class';
 
@@ -258,11 +329,14 @@ $('leaveBtn').addEventListener('click', async () => {
     return;
   }
 
-  await new Promise((resolve) => chrome.storage.local.remove(CLASS_MEMBERSHIP_KEY, resolve));
+  const memberships = (await loadMemberships()).filter((m) => m.classId !== classId);
+  await saveMemberships(memberships);
   // Releasing reverts the account to free (ALCOIA-PLATFORM-SPEC.md §6) —
   // reflect it now via Phase 3's own refresh(), not by assuming.
   await entitlements.refresh();
-  showInput();
+
+  if (memberships.length === 0) { showInput(); return; }
+  await showMemberships();
 });
 
 async function boot() {
@@ -292,17 +366,13 @@ async function boot() {
     // can no longer actually complete.
   }
 
-  const membership = await new Promise((resolve) =>
-    chrome.storage.local.get({ [CLASS_MEMBERSHIP_KEY]: null }, (res) => resolve(res[CLASS_MEMBERSHIP_KEY])));
-  if (membership) {
-    showMember(membership.classId);
-    return;
-  }
-
-  // Resumed from account.js after signing in specifically to finish this
-  // join — the disclosure still has to render fresh here (see this file's
-  // own header), so this jumps straight to showDisclosure(), never
-  // straight to completeJoin().
+  // Resumed from account.js after signing in specifically to finish a
+  // join — checked BEFORE the memberships list, not after: a student who
+  // already belongs to one class but signed in specifically to join a
+  // second must land on the fresh disclosure for that second class, not
+  // get stuck looking at the roster of the first. The disclosure still has
+  // to render fresh here (see this file's own header), so this jumps
+  // straight to showDisclosure(), never straight to completeJoin().
   const pending = await new Promise((resolve) =>
     chrome.storage.local.get({ [PENDING_INVITE_KEY]: null }, (res) => resolve(res[PENDING_INVITE_KEY])));
   if (pending) {
@@ -321,6 +391,15 @@ async function boot() {
       inputError.hidden = false;
       return;
     }
+  }
+
+  // Never a dead end — an existing membership shows the roster (with its
+  // own "+ Join another class" action always present), it never blocks a
+  // fresh join from ever being reachable.
+  const memberships = await loadMemberships();
+  if (memberships.length > 0) {
+    await showMemberships();
+    return;
   }
 
   showInput();

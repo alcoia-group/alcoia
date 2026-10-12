@@ -2926,7 +2926,7 @@ try {
     body: JSON.stringify({ tier: 'reader', features: ['own_documents', 'portable_receipt', 'sync'], expires: null, hasActiveSeat: true }),
   }));
   await routePage.evaluate(() => new Promise((r) => chrome.storage.local.set(
-    { sra_class_membership: { classId: 'smoke-class-1', seatId: 'smoke-seat-1', role: 'student', joinedAt: Date.now() } }, r,
+    { sra_class_memberships: [{ classId: 'smoke-class-1', seatId: 'smoke-seat-1', role: 'student', joinedAt: Date.now() }] }, r,
   )));
   // Case B just cached a "subscription-active" entitlements response for
   // this same session token (entitlements.js's own 15-minute TTL cache,
