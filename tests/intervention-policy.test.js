@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInterventionPolicy, STATE_ACTIONS, EXPLORATION_SAMPLE_RATE } from '../alcoia/src/content/intervention-policy.js';
+import { createInterventionPolicy, STATE_ACTIONS } from '../alcoia/src/content/intervention-policy.js';
 import { STATES } from '../alcoia/src/content/state-engine.js';
 
 function fixedClock(start = 1_000_000) {
@@ -31,8 +31,6 @@ describe('what earns an interruption', () => {
   });
 
   it('takes no action on on_pace', () => {
-    // random: () => 1 disables exploration sampling — that mechanism is
-    // covered on its own further down; this test is about the base table.
     // (ABSENT used to be a second case here; STATES.ABSENT no longer
     // exists — see the "removed state" describe block below.)
     const p = createInterventionPolicy({ now: fixedClock().now, random: () => 1 });
@@ -315,91 +313,40 @@ describe('dismissal-aware backoff', () => {
   });
 });
 
-/* Labels collected so far all come from paragraphs the state machine already
- * flagged. Exploration sampling asks anyway on a slice of paragraphs the
- * detector would have left alone, so the resulting labels aren't conditioned
- * on the detector's own decision. See the project notes. */
-describe('exploration sampling', () => {
-  const onPace = (over = {}) => ({
+/* Exploration sampling was removed: an on-pace reader is never interrupted
+ * just because a random draw came up. These tests pin that, including with a
+ * random source that would have triggered the old sampler on every call. */
+describe('no exploration sampling', () => {
+  const onPace = () => ({
     label: STATES.ON_PACE, confidence: 0.9, evidence: [],
     signal: { text: 'an on-pace paragraph' },
-    ...over,
   });
 
-  it('the rate is a named constant in the 10-15% band', () => {
-    expect(EXPLORATION_SAMPLE_RATE).toBeGreaterThanOrEqual(0.10);
-    expect(EXPLORATION_SAMPLE_RATE).toBeLessThanOrEqual(0.15);
+  it('never interrupts an on-pace reader, whatever the random source returns', () => {
+    for (const r of [0, 0.01, 0.125, 0.5, 0.99, 1]) {
+      const p = createInterventionPolicy({ now: fixedClock().now, random: () => r });
+      const d = p.evaluate(onPace());
+      expect(d.allow).toBe(false);
+      expect(d.action).toBe('none');
+    }
   });
 
-  it('samples when the injected RNG lands under the rate', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => EXPLORATION_SAMPLE_RATE - 0.01 });
-    const d = p.evaluate(onPace());
+  it('ignores a legacy explorationRate config value', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0, explorationRate: 1 });
+    expect(p.evaluate(onPace()).allow).toBe(false);
+  });
+
+  it('decisions carry no exploration tag', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
+    const d = p.evaluate({ label: STATES.STRUGGLING, confidence: 0.9, evidence: ['x'], signal: { text: 'a struggling paragraph' } });
+    expect('wasExplorationSample' in d).toBe(false);
+  });
+
+  it('still asks when other evidence independently justifies it', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 1 });
+    const d = p.evaluate({ label: STATES.STRUGGLING, confidence: 0.9, evidence: ['You re-read this'], signal: { text: 'a struggling paragraph' } });
     expect(d.allow).toBe(true);
     expect(d.action).toBe('ask');
-    expect(d.wasExplorationSample).toBe(true);
-  });
-
-  it('declines to sample when the injected RNG lands over the rate', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => EXPLORATION_SAMPLE_RATE + 0.01 });
-    const d = p.evaluate(onPace());
-    expect(d.allow).toBe(false);
-    expect(d.wasExplorationSample).toBe(false);
-  });
-
-  it('fires on a paragraph whose state is on_pace', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate(onPace());
-    expect(d.allow).toBe(true);
-    expect(d.action).toBe('ask');
-    expect(d.wasExplorationSample).toBe(true);
-  });
-
-  it('never fires on a drifting reader, even when the RNG would sample', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate({ label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting para' } });
-    expect(d.wasExplorationSample).toBe(false);
-    expect(d.action).not.toBe('ask');
-  });
-
-  // The "never fires on an absent reader" case that used to live here is
-  // gone along with STATES.ABSENT itself — see the "removed state" describe
-  // block below for the replacement coverage (ABSENT is no longer a value
-  // this policy, or anything else, can be asked to evaluate).
-
-  it('still respects the confidence floor', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate(onPace({ confidence: 0.3 }));
-    expect(d.allow).toBe(false);
-  });
-
-  it('still respects the 3-minute gap and spends the budget like any interruption', () => {
-    const clock = fixedClock();
-    const p = createInterventionPolicy({ now: clock.now, random: () => 0 });
-
-    const first = take(p, onPace({ signal: { text: 'a' } }));
-    expect(first.allow).toBe(true);
-    expect(p.stats().count).toBe(1);
-
-    clock.advance(60_000);
-    const tooSoon = p.evaluate(onPace({ signal: { text: 'b' } }));
-    expect(tooSoon.allow).toBe(false);
-  });
-
-  it('still never interrupts twice on the same paragraph', () => {
-    const clock = fixedClock();
-    const p = createInterventionPolicy({ now: clock.now, random: () => 0 });
-    const state = onPace({ signal: { text: 'the same on-pace paragraph' } });
-
-    expect(take(p, state).allow).toBe(true);
-    clock.advance(600_000);
-    expect(p.evaluate(state).allow).toBe(false);
-  });
-
-  it('does not tag a normal struggling ask as an exploration sample', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate(struggling());
-    expect(d.allow).toBe(true);
-    expect(d.wasExplorationSample).toBe(false);
   });
 });
 
@@ -688,11 +635,10 @@ describe('scroll-back candidate strength (step 8)', () => {
     expect(d.allow).toBe(true);
   });
 
-  it('a single scroll-back never becomes an intervention purely because the RNG would have sampled it — exploration only applies to states with no assigned action at all', () => {
+  it('a single scroll-back never becomes an intervention purely because the RNG would have sampled it', () => {
     const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
     const d = p.evaluate(regressionStruggling());
     expect(d.allow).toBe(false);
-    expect(d.wasExplorationSample).toBe(false);
   });
 
   it('is not hardcoded to "never on scroll-up" — plainer, non-regression struggle evidence (an incorrect answer) is unaffected and still fires on its own', () => {
@@ -1060,14 +1006,6 @@ describe('Step 23 — policy action vocabulary (decision.policyAction)', () => {
     expect(d.policyAction).toBe('retrieve');
   });
 
-  it('retrieve: an exploration sample also carries policyAction "retrieve"', () => {
-    const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
-    const d = p.evaluate({ label: STATES.ON_PACE, confidence: 0.9, evidence: [], signal: { text: 'an on-pace paragraph' } });
-    expect(d.allow).toBe(true);
-    expect(d.wasExplorationSample).toBe(true);
-    expect(d.policyAction).toBe('retrieve');
-  });
-
   describe('explain vs retrieve — the new distinction within regression-sourced evidence', () => {
     it('a REPEATED scroll-back (the stronger signal) is policyAction "retrieve"', () => {
       const p = createInterventionPolicy({ now: fixedClock().now });
@@ -1224,5 +1162,99 @@ describe('Step 23 — policy action vocabulary (decision.policyAction)', () => {
     const d = p.evaluateContentTrigger({ evidence: ['a pretest trigger'] });
     expect(d.allow).toBe(true);
     expect(d).not.toHaveProperty('policyAction');
+  });
+});
+
+/* STAGE B: a learner estimate can only narrow or re-type an interruption the reading signals already
+ * justified. It never creates one, and it never bypasses a budget, cooldown or per-paragraph dedup. */
+describe('learner estimate in the policy (Stage B)', () => {
+  const abstain = { level: 'established', confidence: 'high', action: 'abstain', kind: 'retrieve', reason: 'established_recently' };
+  const explain = { level: 'needs_help', confidence: 'moderate', action: 'intervene', kind: 'explain', reason: 'repeated_independent_misses' };
+  const repair = { level: 'needs_help', confidence: 'low', action: 'intervene', kind: 'repair', reason: 'independent_miss' };
+  const gather = { level: 'insufficient', confidence: 'none', action: 'gather', kind: 'retrieve', reason: 'no_evidence' };
+
+  it('abstain withholds the question, spends no budget, and the next paragraph without that evidence is still asked', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    const denied = p.evaluate(struggling(), { learnerEstimate: abstain });
+    expect(denied).toMatchObject({ allow: false, action: 'none', interventionId: null });
+    expect(denied.reason).toMatch(/learner estimate: established_recently/);
+    p.record(denied);
+    const next = p.evaluate(struggling({ signal: { text: 'another paragraph' } }), { learnerEstimate: null });
+    expect(next.allow).toBe(true); // nothing was spent by the abstention
+  });
+
+  it('gather and a missing estimate leave the decision exactly as it was', () => {
+    const base = createInterventionPolicy({ now: fixedClock().now, random: () => 0.5 }).evaluate(struggling());
+    for (const est of [undefined, null, gather, {}]) {
+      const d = createInterventionPolicy({ now: fixedClock().now, random: () => 0.5 }).evaluate(struggling(), { learnerEstimate: est });
+      expect(d).toEqual(base);
+    }
+  });
+
+  it('repeated independent misses turn a question into an explanation; one miss turns it into a repair', () => {
+    expect(createInterventionPolicy({ now: fixedClock().now }).evaluate(struggling(), { learnerEstimate: explain })).toMatchObject({ allow: true, action: 'ask', policyAction: 'explain' });
+    expect(createInterventionPolicy({ now: fixedClock().now }).evaluate(struggling(), { learnerEstimate: repair })).toMatchObject({ allow: true, action: 'ask', policyAction: 'repair' });
+  });
+
+  it('an estimate never creates an interruption: an on-pace reader is not interrupted whatever the evidence says', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    expect(p.evaluate({ label: STATES.ON_PACE, confidence: 0.9, evidence: [] }, { learnerEstimate: repair }).allow).toBe(false);
+    expect(p.evaluate({ label: STATES.UNKNOWN, confidence: 0.9, evidence: [] }, { learnerEstimate: explain }).allow).toBe(false);
+  });
+
+  it('cooldown, session budget and per-paragraph dedup still bind an interruption an estimate re-typed', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    const first = take(p, struggling(), { learnerEstimate: explain });
+    expect(first.allow).toBe(true);
+    // same moment, different paragraph: the cooldown holds
+    const tooSoon = p.evaluate(struggling({ signal: { text: 'second paragraph' } }), { learnerEstimate: explain });
+    expect(tooSoon.allow).toBe(false);
+    expect(tooSoon.reason).toMatch(/since the last interruption/);
+    clock.advance(10 * 60_000);
+    // the same paragraph is never interrupted twice, estimate or not
+    const again = p.evaluate(struggling(), { learnerEstimate: explain });
+    expect(again.allow).toBe(false);
+    expect(again.reason).toMatch(/already interrupted on this paragraph/);
+  });
+
+  it('dismissal back-off still applies to an estimate-driven question', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    for (let i = 0; i < 6; i += 1) p.recordDismissal();
+    const d = p.evaluate(struggling(), { learnerEstimate: gather });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/declined|raised bar/);
+  });
+});
+
+describe('evaluateRetentionCandidate with kind "probe" (scheduled quick check)', () => {
+  it('is allowed under ordinary conditions and labelled as a probe, as a retrieval', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1', kind: 'probe' });
+    expect(d.allow).toBe(true);
+    expect(d.action).toBe('probe');
+    expect(d.policyAction).toBe('retrieve');
+    expect(d.evidence[0]).toMatch(/quick check/i);
+  });
+  it('can never take the last free slot of the session budget, which stays for real help', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now, budget: { baseAllowance: 2, minGapMs: 0 } });
+    p.record(p.evaluateRetentionCandidate({ paragraphKey: 'a', kind: 'retention' })); // 1 of 2 used
+    const probe = p.evaluateRetentionCandidate({ paragraphKey: 'b', kind: 'probe' });
+    expect(probe.allow).toBe(false);
+    expect(probe.reason).toMatch(/last slot/);
+    // real help still has that slot
+    expect(p.evaluateRetentionCandidate({ paragraphKey: 'c', kind: 'retention' }).allow).toBe(true);
+  });
+  it('shares the cooldown, the one-card-at-a-time rule and the dismissal back-off with every other question', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    p.record(p.evaluateRetentionCandidate({ paragraphKey: 'a', kind: 'retention' }));
+    expect(p.evaluateRetentionCandidate({ paragraphKey: 'b', kind: 'probe' }).allow).toBe(false); // gap
+    clock.advance(4 * 60 * 1000);
+    expect(p.evaluateRetentionCandidate({ paragraphKey: 'b', kind: 'probe', questionCardVisible: true }).allow).toBe(false);
+    p.recordDismissal(); p.recordDismissal();
+    expect(p.evaluateRetentionCandidate({ paragraphKey: 'b', kind: 'probe' }).allow).toBe(false);
   });
 });

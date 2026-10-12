@@ -308,6 +308,22 @@
     </div>
   </div>
 
+  <!-- ════════════════════ Popup history ════════════════════ -->
+  <div class="settings-card" id="popupHistory">
+    <div class="settings-group-title">Popup history</div>
+    <p class="section-note">
+      Keep a short list of the popups alcoia showed, so you can find one again after it closes.
+      It stays on this device only: it is never sent anywhere, and it is lost if you uninstall or
+      switch devices. It keeps the last 30 popups, trimmed, a few kilobytes in all. Turning it off
+      deletes the list and frees the space.
+    </p>
+    <label class="toggle-row"><input type="checkbox" id="popupHistoryToggle"> Keep popup history on this device</label>
+    <div id="popupHistoryBody">
+      <ul id="popupHistoryList" class="section-note"></ul>
+      <button type="button" id="popupHistoryClear">Clear history</button>
+    </div>
+  </div>
+
   <!-- ════════════════════ Account-based learning ════════════════════ -->
   <div class="settings-card" id="learningMemory" hidden>
     <div class="settings-group-title" id="lmTitle">Account-based learning</div>
@@ -328,7 +344,7 @@
         surveillance history of your reading.</p>
       <p class="section-note"><strong>Who can see it:</strong> you can see it, export it and delete it. Other
         learners cannot see it, and instructors cannot see it as your private learning memory. It is separate
-        from class-level results, which are kept anonymously for each assignment, and some class features may
+        from class-level results, which are kept anonymously for each material, and some class features may
         use aggregated learning information under their own privacy rules. Service providers process it on
         Alcoia's behalf to run the service.</p>
       <p class="section-note">Your notes, highlights and quizzes stay on this device and are separate from this.</p>

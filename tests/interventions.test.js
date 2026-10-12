@@ -31,6 +31,19 @@ describe('submit — a successful intervention record', () => {
     expect(JSON.parse(seenInit.body)).toEqual({ intervention_id: 'iv_1_abc', type: 'ask' });
   });
 
+  it('sends policy_action only for retrieve, explain or repair', async () => {
+    const bodies = [];
+    const fetchImpl = vi.fn(async (url, init) => { bodies.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const m = createInterventionsManager({ fetchImpl, interventionsUrl: INTERVENTIONS_URL, getSession: sessionOf('tok-1') });
+
+    await m.submit({ interventionId: 'iv_1', type: 'ask', policyAction: 'repair' });
+    await m.submit({ interventionId: 'iv_2', type: 'ask', policyAction: 'apply' });
+    await m.submit({ interventionId: 'iv_3', type: 'ask' });
+    expect(bodies[0].policy_action).toBe('repair');
+    expect(bodies[1]).not.toHaveProperty('policy_action');
+    expect(bodies[2]).not.toHaveProperty('policy_action');
+  });
+
   it('includes knowledge_unit_id when given one', async () => {
     let seenBody = null;
     const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
