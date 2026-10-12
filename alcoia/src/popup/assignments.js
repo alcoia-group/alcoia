@@ -27,6 +27,17 @@ chrome.storage.local.get({ sra_dark_mode: false }, (res) => {
 });
 $('closeBtn').addEventListener('click', () => window.close());
 
+// Moved here from the popup's own home-screen row (item: popup declutter —
+// "join a class must be within a popup that shows all available
+// assignments"). join-class.html itself is what requires sign-in before
+// completing a join (its own inputFormEl submit handler) and what lets a
+// student join additional classes even after already holding a seat
+// (its own always-present "+ Join another class" action) — nothing about
+// either of those rules is reimplemented here, this just opens that page.
+$('joinClassBtn').addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/join-class.html') });
+});
+
 const session = createSessionManager();
 const assignments = createAssignmentsManager({
   getSession: session.getSession,

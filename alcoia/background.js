@@ -161,7 +161,7 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
 //     disclosure has genuinely rendered") is already satisfied server-side
 //     — this seat's disclosure_ack_at was set on a PRIOR launch that DID
 //     go through the disclosure screen, not skipped.
-function handleLtiLaunchMessage(payload, sendResponse) {
+async function handleLtiLaunchMessage(payload, sendResponse) {
   if (!payload || typeof payload !== 'object') {
     sendResponse({ ok: false, error: 'malformed_payload' });
     return;
@@ -199,21 +199,34 @@ function handleLtiLaunchMessage(payload, sendResponse) {
       email: '',
       expiresAt: normaliseSessionExpiry(payload.expiresAt),
     };
-    chrome.storage.local.set({
-      [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: session,
-      // Same key, same shape join-class.js/upgrade.js already read for
-      // display. The server now returns seatId/role with the launch (null
-      // only against an older server), so "Leave this class" can release
-      // the seat.
-      sra_class_membership: {
-        classId: payload.classId,
-        seatId: typeof payload.seatId === 'string' && payload.seatId ? payload.seatId : null,
-        role: typeof payload.role === 'string' && payload.role ? payload.role : null,
-        joinedAt: Date.now(),
-      },
-    }, () => {
-      sendResponse({ ok: true, disclosureRequired: false });
+    // Appended to the same array join-class.js owns (sra_class_memberships,
+    // not the old singular key) — a student can hold more than one class
+    // seat at once, so an already-acknowledged LTI launch must never
+    // overwrite an unrelated native-invite membership already stored. The
+    // server now returns seatId/role with the launch (null only against an
+    // older server), so "Leave this class" can release this seat too, not
+    // just a native-invite one.
+    const stored = await new Promise((resolve) => chrome.storage.local.get(
+      { sra_class_memberships: null, sra_class_membership: null }, resolve,
+    ));
+    const existing = Array.isArray(stored.sra_class_memberships)
+      ? stored.sra_class_memberships
+      : (stored.sra_class_membership && typeof stored.sra_class_membership.classId === 'string'
+        ? [stored.sra_class_membership] : []);
+    const memberships = existing.filter((m) => m.classId !== payload.classId);
+    memberships.push({
+      classId: payload.classId,
+      seatId: typeof payload.seatId === 'string' && payload.seatId ? payload.seatId : null,
+      role: typeof payload.role === 'string' && payload.role ? payload.role : null,
+      joinedAt: Date.now(),
     });
+
+    await new Promise((resolve) => chrome.storage.local.set({
+      [self.ALCOIA_CONFIG.SESSION_STORAGE_KEY]: session,
+      sra_class_memberships: memberships,
+    }, resolve));
+    await new Promise((resolve) => chrome.storage.local.remove('sra_class_membership', resolve));
+    sendResponse({ ok: true, disclosureRequired: false });
     return;
   }
 
