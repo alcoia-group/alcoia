@@ -72,7 +72,10 @@ export async function createHost(deps) {
     // the same three-way shape `correct`/`substate` already use, so an
     // existing outcome body is byte-for-byte unchanged until a real
     // tracker (content.js's selection-explain.js) is actually wired in.
-    wasParagraphExplained = () => undefined,
+    // Optional extra tracker (content.js's selection-explain). host.js now tracks assistance itself at its
+    // own fetchSummary chokepoint (see assistedKeys below), so the absence of this dependency no longer means
+    // "unknown": every explanation surface in this host goes through that chokepoint.
+    wasParagraphExplained = () => false,
   } = deps;
 
   const s = () => settings() || {};
@@ -88,6 +91,15 @@ export async function createHost(deps) {
   // second gate of its own. Fire-and-forget, one POST per discrete signal,
   // no batching — see outcomes.js's own header for the full reasoning on
   // that choice, made explicitly rather than guessed through.
+  // ── Learner estimates (Stage B) ───────────────────────────────────────────
+  // knowledgeUnitId -> { level, confidence, action, kind, reason } as last stated by the server. Read by
+  // learnerEstimateFor() below, which orchestrator.js passes to the intervention policy. Never persisted.
+  const learnerEstimates = new Map();
+  function noteLearnerEstimate(e) {
+    if (!e || typeof e.knowledgeUnitId !== 'string' || !e.knowledgeUnitId) return;
+    if (e.action !== 'abstain' && e.action !== 'gather' && e.action !== 'intervene') return;
+    learnerEstimates.set(e.knowledgeUnitId, { level: e.level, confidence: e.confidence, action: e.action, kind: e.kind, reason: e.reason });
+  }
   let submitOutcome = () => {};
   if (assignmentId && getSession) {
     // Routes through background.js instead of fetching directly — a
@@ -109,7 +121,13 @@ export async function createHost(deps) {
       // guard is what keeps those answers from attempting (and always
       // failing) a submission, rather than special-casing that call site.
       if (!Number.isInteger(fields.paragraphIndex) || fields.paragraphIndex < 0) return;
-      outcomesManager.submit(fields).catch(() => {});
+      // Stage B: new evidence for this unit is on its way, so the copy of its estimate (which was decided
+      // without it) is dropped now; the server's answer, when it carries one, replaces it. A failed or
+      // memory-off submission simply leaves the unit without an estimate, i.e. the normal behaviour.
+      if (fields.knowledgeUnitId && fields.questionId) learnerEstimates.delete(fields.knowledgeUnitId);
+      outcomesManager.submit(fields)
+        .then((r) => { if (r && r.learnerEstimate) noteLearnerEstimate(r.learnerEstimate); })
+        .catch(() => {});
     };
   }
 
@@ -196,9 +214,22 @@ export async function createHost(deps) {
     // site below — never re-fetched, never more than the one paragraph
     // already in hand. Optional, the same as every parameter above it —
     // see interventions.js's own header for the full reasoning.
-    reportIntervention = (interventionId, knowledgeUnitId, paragraphIndex, type, text) => {
+    reportIntervention = (interventionId, knowledgeUnitId, paragraphIndex, type, text, policyAction) => {
       if (!interventionId) return;
-      interventionsManager.submit({ interventionId, knowledgeUnitId, paragraphIndex, type, text }).catch(() => {});
+      interventionsManager.submit({ interventionId, knowledgeUnitId, paragraphIndex, type, text, policyAction }).catch(() => {});
+    };
+  }
+
+  let lastNormalCardAt = 0; // when a help / retention / focus card last appeared; read by the quick-check logic
+  // Any intervention reported (a question, an explanation, a review) means the reader has just had help or been
+  // checked, so the scheduled quick-check window restarts (probeCovered is defined with the probe below).
+  {
+    const baseReport = reportIntervention;
+    reportIntervention = (...args) => {
+      // args[3] is the intervention type. Anything but a scheduled quick check is a "normal" card: note when it
+      // appeared so a quick check keeps clear of it (see PROBE_QUIET_MS).
+      try { if (args[3] !== 'probe') lastNormalCardAt = Date.now(); probeCovered(); } catch (e) { /* defined later; never blocks reporting */ }
+      return baseReport(...args);
     };
   }
 
@@ -276,6 +307,16 @@ export async function createHost(deps) {
       }
     } catch (e) {}
   }
+  let learnerEstimatesManager = null;
+  async function refreshLearnerEstimates() {
+    if (!learnerEstimatesManager) return;
+    try {
+      const result = await learnerEstimatesManager.getEstimates();
+      if (!result.ok) return; // keep whatever we had; never invent an estimate
+      learnerEstimates.clear();
+      for (const e of result.estimates) noteLearnerEstimate(e);
+    } catch (e) {}
+  }
   let retentionRefreshTimer = null;
   if (assignmentId && getSession) {
     // Same routing reason as submitOutcome above.
@@ -287,6 +328,14 @@ export async function createHost(deps) {
       fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
     await refreshRetentionDue(); // the original, one-time fetch this block always made, unconditional as before
+    // Stage B: the learner's estimates for this assignment, fetched with the same gate and on the same cadence.
+    const estimatesModule = await loadModule('src/shared/learner-estimates.js');
+    learnerEstimatesManager = estimatesModule.createLearnerEstimatesManager({
+      getSession,
+      estimatesUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/knowledge-state/estimates`,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
+    });
+    await refreshLearnerEstimates();
     // Step 27: the periodic half. Not covered by installListeners()'s own
     // AbortSignal (orchestrator.js's own idleTimer isn't either, for the
     // identical reason stated there: "the content script lives as long as
@@ -296,6 +345,7 @@ export async function createHost(deps) {
     retentionRefreshTimer = setInterval(() => {
       if (!s().assistantEnabled) return; // mirrors checkRetentionCandidate's own first real check -- skip this tick's call, not the construction-time one above.
       refreshRetentionDue();
+      refreshLearnerEstimates();
     }, RETENTION_DUE_REFRESH_MS);
   }
   function stopRetentionRefresh() {
@@ -372,11 +422,75 @@ export async function createHost(deps) {
     return true;
   }
 
-  async function fetchSummary(text, mode = 'tldr', context = '') {
+  // Answer provenance (what the server reads as explanation_preceded_attempt). `false` is a positive claim:
+  // "this client established that no explanation was shown for this paragraph before this attempt". Every
+  // explanation or summary the reader is shown is generated through fetchSummary below (the selection
+  // tooltip, the explain/repair card, the card's "explain more", simplify, define, ...), cached results
+  // included, so noting assistance there covers them all.
+  //
+  // Attribution, in order, for assistance that did not arrive with a paragraph key:
+  //   1. MAPPED: the text is inside the paragraph being read, or inside any paragraph-level element of the
+  //      page (found by looking the text up in the document). Those paragraphs are `assistedKeys` (true).
+  //   2. UNMAPPED but locatable: the text is in no page element, but a paragraph is being read. The
+  //      explanation most plausibly belongs to that paragraph and we cannot rule it out, so only THAT
+  //      paragraph becomes `uncertainKeys` (outcomes there report UNKNOWN: undefined, never false). Answers
+  //      about other paragraphs are unaffected, because nothing ties the explanation to them.
+  //   3. UNMAPPED and unlocatable: no paragraph is being read, so nothing narrows where the explanation
+  //      belongs. Only this case still sets the session-wide `unmappedAssistance`, which makes every later
+  //      outcome UNKNOWN (conservative, as before).
+  // A retry or later write cannot clear any of the three records.
+  const assistedKeys = new Set();
+  const uncertainKeys = new Set();
+  let unmappedAssistance = false;
+  const MAX_SCANNED_BLOCKS = 2000;
+  const keyOf = (t) => (t || '').slice(0, 80).trim();
+  const squash = (t) => (t || '').replace(/\s+/g, ' ').trim();
+  function currentParagraphText() {
+    try {
+      return currentParagraph?.type === 'dom' && currentParagraph.data
+        ? (currentParagraph.data.innerText || currentParagraph.data.textContent || '') : '';
+    } catch (e) { return ''; }
+  }
+  // Paragraph-level elements of the page whose text contains `text`, as paragraph keys (same 80-char convention).
+  function paragraphKeysContaining(text) {
+    const needle = squash(text);
+    const keys = [];
+    if (!needle || typeof document === 'undefined') return keys;
+    try {
+      const blocks = document.querySelectorAll('p, li, blockquote, dd, td, h1, h2, h3, h4, h5, h6');
+      const limit = Math.min(blocks.length, MAX_SCANNED_BLOCKS);
+      for (let i = 0; i < limit; i += 1) {
+        const body = squash(blocks[i].innerText || blocks[i].textContent || '');
+        if (body && body.includes(needle)) keys.push(keyOf(blocks[i].innerText || blocks[i].textContent || ''));
+      }
+    } catch (e) { return keys; }
+    return keys;
+  }
+  function noteAssistance(text, paragraphKey) {
+    if (paragraphKey) { assistedKeys.add(paragraphKey); return; }
+    const own = keyOf(text);
+    if (own) assistedKeys.add(own);
+    const current = currentParagraphText();
+    if (current && text && squash(current).includes(squash(text))) { assistedKeys.add(keyOf(current)); return; }
+    const found = paragraphKeysContaining(text);
+    if (found.length) { for (const k of found) assistedKeys.add(k); return; }
+    if (current && keyOf(current) !== own) { uncertainKeys.add(keyOf(current)); return; }
+    if (!current || !text) unmappedAssistance = true;
+  }
+  function explanationPreceded(paragraphKey) {
+    if (!paragraphKey) return undefined;
+    if (assistedKeys.has(paragraphKey) || wasParagraphExplained(paragraphKey) === true) return true;
+    if (unmappedAssistance || uncertainKeys.has(paragraphKey)) return undefined;
+    return false;
+  }
+
+  async function fetchSummary(text, mode = 'tldr', context = '', opts = {}) {
     const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
     if (_summaryCache.has(cacheKey)) {
       log(`Cache hit: ${mode}`);
-      return _summaryCache.get(cacheKey);
+      const cached = _summaryCache.get(cacheKey);
+      if (cached) noteAssistance(text, opts.paragraphKey);
+      return cached;
     }
     if (!checkAiCallBudget('summarize', mode)) return null;
     try {
@@ -390,6 +504,7 @@ export async function createHost(deps) {
       if (!j) return null;
       const result = j.summary || j.result || null;
       if (result) {
+        noteAssistance(text, opts.paragraphKey);
         _summaryCache.set(cacheKey, result);
         if (_summaryCache.size > 100) _summaryCache.delete(_summaryCache.keys().next().value);
       }
@@ -399,6 +514,16 @@ export async function createHost(deps) {
       return null;
     }
   }
+
+  // Levels the connected server can deliver. ALCOIA_CONFIG.QUESTION_LEVELS_SUPPORTED is the single
+  // switch: it ships as ['recognition'] because alcoiaServer has no level-aware /api/questions and no
+  // /api/grade route (its the project notes section 7 keeps the higher rungs unbuilt until a level-dependent
+  // span validator exists). Add 'free_recall', 'scenario' and 'adversarial' here only together with
+  // that server work.
+  const supportedQuestionLevels = () => {
+    const configured = self.ALCOIA_CONFIG && self.ALCOIA_CONFIG.QUESTION_LEVELS_SUPPORTED;
+    return Array.isArray(configured) && configured.length ? configured : ['recognition'];
+  };
 
   const questionsUrl = () => (s().backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/questions');
 
@@ -414,7 +539,7 @@ export async function createHost(deps) {
     // Item 42/44: one level per call, decided by the caller — omitted
     // entirely rather than defaulted here, so a server that has never heard
     // of levels sees exactly the request shape it always has.
-    if (opts.level) body.level = opts.level;
+    if (opts.level && supportedQuestionLevels().includes(opts.level)) body.level = opts.level;
     const resp = await callBackend('apiPost', questionsUrl(), body);
     if (!resp.ok) {
       log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
@@ -422,6 +547,12 @@ export async function createHost(deps) {
     }
     const j = resp.data;
     if (!j) return [];
+    if (body.level && j.levelHonoured === false) {
+      // The server answered with a different level than requested. Questions keep the level the
+      // server labelled them with (question-card.js and response-signals.js read question.level),
+      // so nothing downstream records a level that was not delivered.
+      diagLog.log('questions', `level_not_honoured requested=${body.level} delivered=${j.deliveredLevel || 'unknown'}`);
+    }
     return Array.isArray(j.questions) ? j.questions : [];
   }
 
@@ -595,6 +726,7 @@ export async function createHost(deps) {
   // pickLevelForConcept's compatibility layer already treats as "fall back
   // to paragraphKey," never a crash.
   const knowledgeUnitModule = await loadModule('src/content/signals/knowledge-unit.js');
+  const { hasRelationCues } = await loadModule('src/content/relation-cues.js');
   // Intelligence-architecture audit, step 5 — same shared id generator
   // intervention-policy.js itself uses for a policy-triggered 'ask', reused
   // here for the reader-initiated paths (runSessionRecall) that have no
@@ -640,7 +772,10 @@ export async function createHost(deps) {
   // that decision, only supplies the merged history to decide it against.
   async function pickLevel(identity) {
     const quizEvidence = await readQuizEvidence(orchestratorRef?.documentKey?.() || null);
-    return engineModule.pickLevelForConcept(identity, [...responseSignals.history(), ...quizEvidence]);
+    const wanted = engineModule.pickLevelForConcept(identity, [...responseSignals.history(), ...quizEvidence]);
+    // Stage A: never ask the server for a level it has not said it can deliver. The ladder's own
+    // decision is unchanged; only the request is clamped (see supportedQuestionLevels()).
+    return supportedQuestionLevels().includes(wanted) ? wanted : 'recognition';
   }
 
   const questionCard = cardModule.createQuestionCard({
@@ -692,7 +827,7 @@ export async function createHost(deps) {
         // null for those rather than fabricating an option id.
         selectedAnswer: typeof record.chosenIndex === 'number' ? record.chosenIndex : null,
         // Item DC-2 — same paragraph-key lookup as onStruggle above.
-        explanationPrecededAttempt: wasParagraphExplained(record.paragraphKey),
+        explanationPrecededAttempt: explanationPreceded(record.paragraphKey),
         // Knowledge-unit identity (step 3): additive, sent whenever the
         // record has one (null whenever there was no computable text to
         // hash at present()-time — outcomes.js's own guard treats that the
@@ -1003,12 +1138,11 @@ export async function createHost(deps) {
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: identity.knowledgeUnitId,
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
-        wasExplorationSample: decision.wasExplorationSample === true,
         showSelfReport: state.substate === 'unclear',
         interventionId,
       });
       if (shown) {
-        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text);
+        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text, 'retrieve');
       } else {
         // Step 12A: generation succeeded (a real, usable question came
         // back) but presentation did not — diagnostic-only, never a budget
@@ -1068,8 +1202,11 @@ export async function createHost(deps) {
     if (!automaticInterventionGuard.tryAcquire()) return false;
     try {
       const identity = computeIdentity(text);
-      const mode = kind === 'repair' ? 'repair' : 'explain_more';
-      const generated = await fetchSummary(text, mode);
+      // An explanation for a paragraph built on a relationship (cause, dependence, contrast...) points the reader
+      // at how the ideas connect; any other explanation, and every repair, is unchanged.
+      const relate = kind !== 'repair' && hasRelationCues(text);
+      const mode = kind === 'repair' ? 'repair' : relate ? 'relate' : 'explain_more';
+      const generated = await fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey });
       if (!generated) return false;
 
       let anchorRect = null;
@@ -1086,6 +1223,7 @@ export async function createHost(deps) {
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: identity.knowledgeUnitId,
         interventionId,
+        ...(relate ? { badge: 'how the ideas connect' } : {}),
       });
       if (shown) {
         // Step 12: same intervention-evidence contract as handleAsk, same
@@ -1095,7 +1233,7 @@ export async function createHost(deps) {
         // reused rather than inventing a new type. The retrieve/explain/
         // repair distinction lives in which generation mode produced the
         // content the reader actually saw, not in a new reporting field.
-        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text);
+        reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text, decision.policyAction === 'repair' ? 'repair' : 'explain');
       } else {
         diagLog.log('questions', `generated_not_presented action=${decision.action} policyAction=${decision.policyAction} reason=${decision.reason}`);
       }
@@ -1205,6 +1343,84 @@ export async function createHost(deps) {
     }
   }
 
+  /* Scheduled quick checks ("probes"). A reader who reads smoothly triggers nothing, which leaves the instructor
+   * with no evidence from exactly the students who are doing well, and can make a fluent reader think the tool
+   * is not working. So, in an assigned reading only, a short quick check is offered after a set amount of
+   * material has been read, then again after each further stretch, for as long as the reading goes on. The
+   * amount is measured in words actually read (each paragraph counted once), so it adapts to the length of the
+   * material without scanning it: a long reading gets more checks, a short one may get none.
+   *
+   * It is deliberately modest:
+   *   - never while the reader is struggling or drifting (the help path owns those moments);
+   *   - never when anything was shown or answered in the current stretch (the stretch restarts, see probeCovered);
+   *   - never about a paragraph the learner has already shown they know (the server's estimate says abstain);
+   *   - always through the same policy gates as every other question (budget, 3-minute gap, dismissal
+   *     back-off, one card at a time), and it can never take the last free slot of the session budget;
+   *   - tagged 'probe' so its answers stay distinguishable from questions triggered by difficulty.
+   * Questions alternate between multiple choice and fill-in-the-blank (choose the word). */
+  const PROBE_FIRST_WORDS = 500;
+  const PROBE_EVERY_WORDS = 1000;
+  const PROBE_MIN_PARAGRAPH_WORDS = 30;
+  // A quick check never appears within this long after a normal card, and if both are due at once the normal
+  // card goes first (the check simply waits for the next paragraph).
+  const PROBE_QUIET_MS = 30000;
+  const probeBlocked = () => (
+    ui.hasVisibleQuestionCard()
+    || (lastNormalCardAt !== 0 && Date.now() - lastNormalCardAt < PROBE_QUIET_MS)
+    || lastCogState === 'struggling' || lastCogState === 'drifting'
+  );
+  const probe = { words: 0, nextAt: PROBE_FIRST_WORDS, counted: new Set(), asked: 0, busy: false };
+  const wordCount = (t) => (String(t || '').trim().match(/\S+/g) || []).length;
+  function probeCovered() { probe.words = 0; probe.nextAt = PROBE_EVERY_WORDS; }
+
+  async function checkProbe(text, paragraphIndex) {
+    if (!assignmentId || !getSession || !text) return;
+    const key = text.slice(0, 80).trim();
+    if (!probe.counted.has(key)) { probe.counted.add(key); probe.words += wordCount(text); }
+    if (probe.words < probe.nextAt || probe.busy) return;
+    if (wordCount(text) < PROBE_MIN_PARAGRAPH_WORDS) return; // wait for a substantive paragraph
+    if (!s().assistantEnabled || !orchestratorRef?.interventionPolicy) return;
+    if (probeBlocked()) return;
+    const identity = computeIdentity(text);
+    if (!identity.knowledgeUnitId) return;
+    const est = learnerEstimates.get(identity.knowledgeUnitId);
+    if (est && est.action === 'abstain') return; // already shown they know this one
+    if (await snoozeControl.isActive()) return;
+
+    const decision = orchestratorRef.interventionPolicy.evaluateRetentionCandidate({
+      paragraphKey: identity.paragraphKey,
+      questionCardVisible: ui.hasVisibleQuestionCard(),
+      kind: 'probe',
+    });
+    if (!decision.allow) return; // stays due; the next paragraph tries again
+
+    if (!automaticInterventionGuard.tryAcquire()) return;
+    probe.busy = true;
+    try {
+      let questions = await fetchQuestions(text, { kind: probe.asked % 2 === 1 ? 'cloze' : 'recall' });
+      if (!questions.length && probe.asked % 2 === 1) questions = await fetchQuestions(text, { kind: 'recall' });
+      if (!questions.length) return;
+      // Fetching took time: a normal card may have appeared meanwhile. It has priority, so drop the check.
+      if (probeBlocked()) return;
+      const shown = questionCard.show(questions[0], {
+        evidence: decision.evidence,
+        paragraphKey: identity.paragraphKey,
+        knowledgeUnitId: identity.knowledgeUnitId,
+        paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
+        interventionId: decision.interventionId,
+      });
+      if (shown) {
+        orchestratorRef.interventionPolicy.record(decision);
+        probe.asked += 1;
+        reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'probe', text, 'retrieve');
+        probeCovered();
+      }
+    } finally {
+      probe.busy = false;
+      automaticInterventionGuard.release();
+    }
+  }
+
   // ── Paragraph state — what setCurrentParagraph/setPrevParagraphText/
   // setCogState/getCurrentParagraph hold ──────────────────────────────────
   let currentParagraph = null;
@@ -1236,6 +1452,16 @@ export async function createHost(deps) {
     sessionTracker,
     log,
     findParagraphAt,
+    // Stage B: the server's estimate for the knowledge unit of this paragraph element, or null when there is
+    // none (no assignment, no account, learner memory off, or simply no evidence yet).
+    learnerEstimateFor: (el) => {
+      if (!learnerEstimates.size) return null;
+      try {
+        const text = el ? (el.innerText || el.textContent || '').trim() : '';
+        const id = text ? knowledgeUnitModule.computeKnowledgeUnitId(text) : null;
+        return (id && learnerEstimates.get(id)) || null;
+      } catch (e) { return null; }
+    },
     getCurrentParagraph: () => currentParagraph,
     setCurrentParagraph: (p) => { currentParagraph = p; },
     setPrevParagraphText: (t) => { prevParagraphText = t; },
@@ -1257,6 +1483,7 @@ export async function createHost(deps) {
       // unawaited (see its own comment on this call site), so this must
       // not become async from the caller's own point of view either.
       checkRetentionCandidate(text, paragraphIndex).catch(() => {});
+      checkProbe(text, paragraphIndex).catch(() => {});
     },
     onStruggle: (text, paragraphIndex, substate, selfReported) => {
       sessionRecall.recordStruggle(text);
@@ -1272,7 +1499,7 @@ export async function createHost(deps) {
       // own paragraphKey, intervention-policy.js's paragraphKey()) — so a
       // key produced by selection-explain.js's markParagraphExplained() is
       // directly comparable here with no second convention to keep in sync.
-      const explanationPrecededAttempt = wasParagraphExplained(text.slice(0, 80).trim());
+      const explanationPrecededAttempt = explanationPreceded(text.slice(0, 80).trim());
       // Knowledge-unit identity (step 3): computed straight from the same
       // text, not via computeIdentity() — this call site never needed a
       // paragraphKey of its own (wasParagraphExplained above still uses the
