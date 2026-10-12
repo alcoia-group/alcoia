@@ -147,7 +147,7 @@ export const STATE_ACTIONS = Object.freeze({
  *                      SKIMMING candidate whose evidence is strong enough on
  *                      its own (repeated regression, or any non-regression
  *                      STRUGGLING signal that already cleared confidence/
- *                      backoff), or an exploration sample.
+ *                      backoff).
  *                      Renders as: `action: 'ask'`.
  *
  *   repair            A retrieval was already attempted recently and failed
@@ -217,6 +217,16 @@ export const STATE_ACTIONS = Object.freeze({
  * MAY consult, never a rule of the shape `if (concept.hasPrerequisite)
  * retrieve()`. This policy remains the sole authority over whether/how to
  * intervene regardless of what any future context field says.
+ *
+ * -- Scheduled quick checks (probes): the one interruption not caused by detected difficulty --
+ *
+ * The fixed-interval audit just above found no "ask every N minutes regardless of evidence" mechanism, and that
+ * was true when it was written. By owner decision a probe now exists: after a set amount of material has been read
+ * in an ASSIGNED reading, a reader who is reading smoothly is offered one quick check, so the instructor has
+ * evidence from fluent readers and the reader sees the tool at work. host.js decides WHEN a stretch of reading is
+ * long enough; this file only decides whether it is ALLOWED (evaluateRetentionCandidate with kind 'probe'): same
+ * budget, 3-minute gap, dismissal back-off and one-card-at-a-time rules as everything else, plus a rule that a
+ * probe can never take the last free slot of the session budget, which stays for real help.
  *
  * -- The four concerns, and where each one lives (this item's own §6) --
  *
@@ -320,18 +330,6 @@ export const DEFAULT_BUDGET = Object.freeze({
   },
 });
 
-/* Every label collected so far comes from a paragraph the state machine
- * already flagged, so a model trained on it can only learn to reproduce
- * today's thresholds — including their errors. Asking anyway on a slice of
- * paragraphs the detector would have left alone is the only way to collect
- * labels that are not conditioned on the detector's own decision, and data
- * collected before this exists is permanently unusable for that purpose.
- *
- * 10-15%: high enough that a session produces a usable number of exploration
- * labels, low enough that it doesn't turn the product into a quiz app for
- * readers who are doing fine. 0.125 is the midpoint of that band. */
-export const EXPLORATION_SAMPLE_RATE = 0.125;
-
 function paragraphKey(state, fallbackEl) {
   const el = (state.signal && state.signal.el) || fallbackEl || null;
   const text = (state.signal && state.signal.text) ||
@@ -391,7 +389,6 @@ export function createInterventionPolicy(config = {}) {
   const now            = config.now || (() => Date.now());
   // Injectable so the sampling rate is assertable under a deterministic RNG.
   const random         = config.random || Math.random;
-  const explorationRate = config.explorationRate ?? EXPLORATION_SAMPLE_RATE;
   // Intelligence-architecture audit, step 5. Injectable for the same
   // testability reason `now`/`random` already are above — a test can
   // assert on the exact id a decision carries rather than only its shape.
@@ -423,8 +420,7 @@ export function createInterventionPolicy(config = {}) {
     return Math.min(budget.absoluteCeiling, earned);
   }
 
-  /* Returns { allow, action, reason, evidence, paragraphKey, wasExplorationSample,
-   * interventionId }. `reason` is always populated, including on refusal —
+  /* Returns { allow, action, reason, evidence, paragraphKey,    * interventionId }. `reason` is always populated, including on refusal —
    * it is the only way to debug why an interruption did or didn't happen.
    *
    * interventionId (intelligence-architecture audit, step 5): a fresh,
@@ -442,7 +438,7 @@ export function createInterventionPolicy(config = {}) {
     // header comment above: "no action" has one meaning in this vocabulary,
     // regardless of what a candidate almost became.
     const deny = (reason) =>
-      ({ allow: false, action: 'none', policyAction: POLICY_ACTIONS.NONE, reason, evidence: [], paragraphKey: null, wasExplorationSample: false, interventionId: null });
+      ({ allow: false, action: 'none', policyAction: POLICY_ACTIONS.NONE, reason, evidence: [], paragraphKey: null, interventionId: null });
 
     if (!state || !state.label) return deny('no state');
     if (state.label === STATES.UNKNOWN) return deny('state is unknown');
@@ -454,26 +450,11 @@ export function createInterventionPolicy(config = {}) {
     let policyAction = action === 'ask' ? POLICY_ACTIONS.RETRIEVE
       : action === 'nudge' ? POLICY_ACTIONS.NUDGE
       : POLICY_ACTIONS.NONE;
-    let wasExplorationSample = false;
 
-    if (action === 'none') {
-      /* Exploration bypasses only this test — the state-to-action table —
-       * never the checks below it. A drifting reader is excluded outright:
-       * they are not reading the paragraph in front of them, and invariant 8
-       * forbids testing someone who did not read, regardless of what
-       * exploration wants to learn. (In practice DRIFTING already earns
-       * 'nudge' from STATE_ACTIONS above and never reaches this branch at
-       * all — the check stays as a defensive guard, not a load-bearing one.)
-       * ABSENT used to be excluded here too; removed along with the state. */
-      const explorationEligible = state.label !== STATES.DRIFTING;
-      if (explorationEligible && random() < explorationRate) {
-        action = 'ask';
-        policyAction = POLICY_ACTIONS.RETRIEVE;
-        wasExplorationSample = true;
-      } else {
-        return deny(`no action for ${state.label}`);
-      }
-    }
+    // No state-to-action entry means no action. There is no sampling: a
+    // reader the detector judged on pace is never interrupted for that
+    // reason alone.
+    if (action === 'none') return deny(`no action for ${state.label}`);
 
     if (state.confidence < budget.minConfidence) {
       return deny(`confidence ${state.confidence.toFixed(2)} below ${budget.minConfidence}`);
@@ -558,6 +539,27 @@ export function createInterventionPolicy(config = {}) {
         policyAction = strength.repeated ? POLICY_ACTIONS.RETRIEVE : POLICY_ACTIONS.EXPLAIN;
       }
 
+      // Stage B (learner estimate). ctx.learnerEstimate is the server's reading of the learner's OWN independent
+      // evidence on this paragraph's knowledge unit (null when there is none, which changes nothing). It can only
+      // narrow what the reading signals already proposed, never add an interruption:
+      //   abstain   a question now would add no information (recently established, or too soon after a correct
+      //             answer): deny, spending nothing, re-evaluated on the next signal like any other denial.
+      //   intervene with kind 'explain' (repeated independent misses): a RETRIEVE becomes an EXPLAIN, because
+      //             asking the same kind of question a third time is not new information.
+      //   gather    (or anything else): unchanged. Evidence is still needed, at the normal rate and gates.
+      // Budget, cooldown, paragraph dedup, dismissal and failure back-off below all still apply.
+      const est = ctx.learnerEstimate;
+      if (est && typeof est === 'object') {
+        if (est.action === 'abstain') {
+          return deny(`learner estimate: ${est.reason || 'no question needed'} - a question would add no information`);
+        }
+        if (est.action === 'intervene' && est.kind === 'explain' && policyAction === POLICY_ACTIONS.RETRIEVE) {
+          policyAction = POLICY_ACTIONS.EXPLAIN;
+        } else if (est.action === 'intervene' && est.kind === 'repair' && policyAction === POLICY_ACTIONS.RETRIEVE) {
+          policyAction = POLICY_ACTIONS.REPAIR; // the last independent answer on this unit was wrong, in this or an earlier session
+        }
+      }
+
       // Step 9A (active intervention awareness): a candidate that has
       // already cleared every evidence/adaptation check above is still not
       // promoted to a decision if the reader is already dealing with a
@@ -618,17 +620,14 @@ export function createInterventionPolicy(config = {}) {
       // Step 23: the new 8-value vocabulary (POLICY_ACTIONS). Additive --
       // every existing consumer of `action` is unaffected; this is new
       // surface for a future renderer/evidence-reporting path to read, same
-      // shape of addition `wasExplorationSample`/`interventionId` already
+      // shape of addition `interventionId` already
       // were before this item.
       policyAction,
-      reason: wasExplorationSample
-        ? `exploration sample on ${state.label}`
-        : `${state.label} at ${state.confidence.toFixed(2)}`,
+      reason: `${state.label} at ${state.confidence.toFixed(2)}`,
       // Evidence goes in front of the reader. An interruption that cannot say
       // what it noticed should not be shown.
       evidence: state.evidence || [],
       paragraphKey: key,
-      wasExplorationSample,
       // See this function's own header comment. Reuses this closure's own
       // injected now()/random() rather than the module-level defaults, so a
       // test constructed with a fixed clock/RNG gets a deterministic id
@@ -676,7 +675,6 @@ export function createInterventionPolicy(config = {}) {
       reason: 'pretest trigger matched',
       evidence: ctx.evidence || [],
       paragraphKey: key,
-      wasExplorationSample: false,
     };
   }
 
@@ -757,6 +755,25 @@ export function createInterventionPolicy(config = {}) {
     // budget and gates as a due item; only the label differs. The evidence line is generic on
     // purpose: the student is told a focus was set, never what the instructor wrote.
     const isFocus = ctx.kind === 'focus';
+    // ctx.kind === 'probe': a scheduled quick check offered to a reader who is reading smoothly (owner decision:
+    // evidence from fluent readers matters to the instructor, and a tool that never shows itself to them looks
+    // like it is not working). It is the one interruption not triggered by detected difficulty, so it is held to
+    // a stricter budget than the rest: it can never take the last free slot, which stays for real help.
+    const isProbe = ctx.kind === 'probe';
+    if (isProbe && count >= cap - 1) {
+      return deny(`keeping the last slot of the session budget (${count}/${cap}) for help`);
+    }
+    if (isProbe) {
+      return {
+        allow: true,
+        action: 'probe',
+        policyAction: POLICY_ACTIONS.RETRIEVE,
+        reason: 'scheduled quick check on what was just read',
+        evidence: ['A quick check on what you just read.'],
+        paragraphKey: key,
+        interventionId: generateId(now, random),
+      };
+    }
     return {
       allow: true,
       action: isFocus ? 'focus' : 'retention',
@@ -767,7 +784,6 @@ export function createInterventionPolicy(config = {}) {
       reason: isFocus ? 'instructor-marked part of this reading' : 'retention item due',
       evidence: [isFocus ? 'This part of the reading is worth checking.' : 'Time to check whether this has stuck.'],
       paragraphKey: key,
-      wasExplorationSample: false,
       interventionId: generateId(now, random),
     };
   }

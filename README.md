@@ -13,7 +13,7 @@ track eye movement, and does not build a profile of what you read. It is for any
 material online who wants to retain it: students, researchers, habitual skimmers. The client is
 open source so the privacy claim above can be checked against the code, not taken on trust.
 
-## Install
+## Install 
 
 **Chrome Web Store:** not published yet.
 

@@ -72,7 +72,7 @@ export function createQuestionCard(deps = {}) {
 
   /* question: { q, options[4], answerIndex, explanation, span, level?, span_role? }
    * context: { evidence[], anchorRect, paragraphKey, knowledgeUnitId, interventionId,
-   *            passage?, wasExplorationSample, showSelfReport?, badge? } — item 13a:
+   *            passage?, showSelfReport?, badge? } — item 13a:
    *            showSelfReport renders the self-report options alongside this
    *            question, additive to the answer flow, never a replacement for it.
    *            badge (Step 29, optional, defaults to "quick check"): the one
@@ -466,7 +466,9 @@ export function createQuestionCard(deps = {}) {
     const root = ui.reservePopup(fingerprint, isRepair ? 'repair' : 'explain');
     if (!root) return false;
 
-    const badgeText = isRepair ? "let's clear this up" : 'a closer look';
+    const badgeText = typeof context.badge === 'string' && context.badge.trim()
+      ? context.badge.trim().slice(0, 40)
+      : (isRepair ? "let's clear this up" : 'a closer look');
     const evidenceHtml = context.evidence && context.evidence.length
       ? `<div class="sra-q-evidence">${esc(context.evidence[0])}.</div>`
       : '';

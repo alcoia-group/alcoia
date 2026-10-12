@@ -201,25 +201,10 @@ describe('response-signals', () => {
     expect(r.dismiss()).toBeNull();
   });
 
-  it('tags an exploration-sample record so it stays identifiable downstream', () => {
+  it('records carry no exploration tag', () => {
     const r = createResponseSignals({ now: fixedClock().now });
     r.present(QUESTION, { paragraphKey: 'p1', wasExplorationSample: true });
-    const rec = r.answer(0, QUESTION);
-    expect(rec.wasExplorationSample).toBe(true);
-  });
-
-  it('defaults wasExplorationSample to false for an ordinary ask', () => {
-    const r = createResponseSignals({ now: fixedClock().now });
-    r.present(QUESTION);
-    const rec = r.answer(0, QUESTION);
-    expect(rec.wasExplorationSample).toBe(false);
-  });
-
-  it('carries the exploration tag through a dismissal too', () => {
-    const r = createResponseSignals({ now: fixedClock().now });
-    r.present(QUESTION, { wasExplorationSample: true });
-    const rec = r.dismiss();
-    expect(rec.wasExplorationSample).toBe(true);
+    expect('wasExplorationSample' in r.answer(0, QUESTION)).toBe(false);
   });
 
   it('reports session stats for the receipt', () => {
@@ -370,9 +355,6 @@ describe('responses outrank reading signals in the engine', () => {
 
   it('a correct answer earns no interruption', () => {
     const engine = createReadingStateEngine();
-    // random: () => 1 disables exploration sampling for this assertion — the
-    // question here is whether a correct answer's resulting on_pace state
-    // earns an interruption on its own merits, not a probabilistic one.
     const policy = createInterventionPolicy({ random: () => 1 });
     const s = engine.update({ reading: { type: 'response', subtype: 'correct', correct: true } });
     expect(policy.evaluate(s).allow).toBe(false);
