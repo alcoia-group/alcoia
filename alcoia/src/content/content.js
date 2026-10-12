@@ -206,6 +206,7 @@ async function boot() {
   // ── UI ─────────────────────────────────────────────────────────────────
   const uiModule = await loadModule('src/content/ui-controller.js');
   const { esc, clamp, applyDarkMode } = uiModule;
+  const popupHistory = await loadModule('src/shared/popup-history.js');
   // hostApi is constructed just below and needs `ui` already built (it is a
   // single shared registry — CLAUDE.md: "ui-controller.js owns openPopups
   // and nothing else may mutate it" — so there can only ever be one
@@ -223,6 +224,11 @@ async function boot() {
     }),
     fetchSummary: (...a) => hostApi.fetchSummary(...a),
     sharedStyles,
+    // Optional local popup history (settings: "Popup history"). Reads its own on/off flag.
+    onPopupShown: (root) => {
+      const text = root.textContent;
+      popupHistory.record({ text, host: location.hostname, kind: root.querySelector?.('textarea, input, button[data-choice], .sra-choice') ? 'question' : 'note' });
+    },
   });
   const {
     openPopups, highlightElement, closePopup, flashPopup, hidePopup,

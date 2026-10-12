@@ -244,3 +244,33 @@ describe('createOrchestrator(): host.isQuestionCardVisible() gates onInterventio
     await vi.waitFor(() => expect(host.onIntervention).toHaveBeenCalled());
   });
 });
+
+/* STAGE B: the orchestrator hands the host's estimate for the paragraph in view to the policy. */
+describe('createOrchestrator(): host.learnerEstimateFor() reaches the policy (Stage B)', () => {
+  async function makeOrch(host) {
+    return createOrchestrator({
+      loadModule,
+      comprehensionMonitor: stubComprehensionMonitor(),
+      settings: () => ({ assistantEnabled: true, comprehensionCheckEnabled: true, focusRulerEnabled: false, debugEnabled: false }),
+      host,
+    });
+  }
+  const fail = { reading: { type: 'response', subtype: 'incorrect', correct: false } };
+
+  it('an "abstain" estimate withholds an interruption the signal alone would have shown', async () => {
+    const learnerEstimateFor = vi.fn(() => ({ level: 'established', action: 'abstain', kind: 'retrieve', reason: 'established_recently' }));
+    const host = stubHost({ learnerEstimateFor, onIntervention: vi.fn(async () => true) });
+    const orch = await makeOrch(host);
+    orch.stateEngine.update(fail);
+    await vi.waitFor(() => expect(learnerEstimateFor).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(host.onIntervention).not.toHaveBeenCalled();
+  });
+
+  it('a "gather" estimate, or none, leaves the interruption as it was', async () => {
+    const host = stubHost({ learnerEstimateFor: vi.fn(() => ({ action: 'gather', kind: 'retrieve', reason: 'no_evidence' })), onIntervention: vi.fn(async () => true) });
+    const orch = await makeOrch(host);
+    orch.stateEngine.update(fail);
+    await vi.waitFor(() => expect(host.onIntervention).toHaveBeenCalled());
+  });
+});

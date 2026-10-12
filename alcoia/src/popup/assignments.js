@@ -58,8 +58,8 @@ function showError(text) {
 
 function fetchErrorMessage(code) {
   switch (code) {
-    case 'no_session': return 'Sign in to see your assignments.';
-    default: return "Couldn't load your assignments just now. Try again.";
+    case 'no_session': return 'Sign in to see your materials.';
+    default: return "Couldn't load your materials just now. Try again.";
   }
 }
 
@@ -95,7 +95,7 @@ async function openInReader(a, doc) {
   }
   // Fall back to what worked before the workspace existed.
   if (doc.format === 'pdf') {
-    await openPdf(a.assignmentId, doc.documentId, a.className || 'Assignment');
+    await openPdf(a.assignmentId, doc.documentId, a.className || 'Material');
     return;
   }
   showError("Couldn't open that document just now. Try again.");
@@ -129,7 +129,7 @@ function renderRow(a) {
 
   const title = document.createElement('p');
   title.className = 'assign-row-title';
-  title.textContent = a.className || 'Assignment';
+  title.textContent = a.className || 'Material';
   li.appendChild(title);
 
   const closes = document.createElement('p');
