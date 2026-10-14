@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/version-0.2.0--pre--release-lightgrey.svg" alt="Version 0.2.0 (pre-release)">
 </p>
 
-alcoia is a browser extension that notices when a reader has stopped following a page and asks a
+Alcoia is a browser extension that notices when a reader has stopped following a page and asks a
 short question about the passage instead of summarizing it. It does not use a camera, does not
 track eye movement, and does not build a profile of what you read. It is for anyone reading long
 material online who wants to retain it: students, researchers, habitual skimmers. The client is
