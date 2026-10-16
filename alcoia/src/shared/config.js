@@ -114,10 +114,16 @@
     // "/:id/outcomes" itself.
     ASSIGNMENTS_MINE_URL: BACKEND_ORIGIN + '/api/assignments/mine',
     ASSIGNMENTS_URL: BACKEND_ORIGIN + '/api/assignments',
-    // Question levels the server can deliver. The ladder above 'recognition' needs a level-aware
-    // /api/questions and a /api/grade route that alcoiaServer does not have; until it does, the
-    // extension only requests (and only claims to deliver) recognition questions.
-    QUESTION_LEVELS_SUPPORTED: ['recognition'],
+    // Question levels the server can deliver (alcoiaServer: level-aware POST /api/questions, and POST
+    // /api/check-answer for the free-text levels). A server that does not know a level answers with recognition
+    // questions and says so (levelHonoured: false), which host.js records rather than hides, so an older server is safe.
+    QUESTION_LEVELS_SUPPORTED: ['recognition', 'free_recall', 'scenario', 'adversarial'],
+    // The learner's own adaptive profile, portable across devices (GET the derived adaptation, POST count deltas).
+    LEARNER_POLICY_PROFILE_URL: BACKEND_ORIGIN + '/api/learner-memory/policy-profile',
+    LEARNER_POLICY_EVENTS_URL: BACKEND_ORIGIN + '/api/learner-memory/policy-events',
+    // Evidence pool: anonymous daily counters. The server says whether it is on; nothing is sent while it is off.
+    POOL_STATUS_URL: BACKEND_ORIGIN + '/api/pool/status',
+    POOL_COUNTERS_URL: BACKEND_ORIGIN + '/api/pool/counters',
     // The workspace app (workspace.alcoia.app, repo alcoiaAssignments). The
     // popup asks the server for a one-time handoff code
     // (POST ASSIGNMENTS_URL/:id/reader-handoff -> { code, expiresAt }) and

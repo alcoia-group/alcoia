@@ -314,7 +314,7 @@ describe('fetchGrading (item 43)', () => {
 
   it('has its own rate-limit bucket, independent of summarize and questions', async () => {
     globalThis.__sendMessageImpl = (msg, cb) => {
-      if (msg.url?.includes('/api/grade')) cb({ ok: true, data: { verdict: 'correct', span: SPAN } });
+      if (msg.url?.includes('/api/check-answer')) cb({ ok: true, data: { verdict: 'correct', span: SPAN } });
       else if (msg.url?.includes('/api/questions')) cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a' }] } });
       else cb({ ok: true, data: { summary: 'a canned summary' } });
     };
@@ -1648,6 +1648,87 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
     expect(queryAlcoia('.sra-q-badge').textContent).toBe('from earlier');
     expect(queryAlcoia('.sra-q-badge').textContent).not.toBe('quick check');
+  });
+
+  it('a card turned away is counted by its kind on the learner\'s account, and a card answered likewise', async () => {
+    const text = 'A due paragraph, long enough to clear fetchQuestions\' own 120-character floor, used to prove card kinds reach the account profile.';
+    const knowledgeUnitId = await realKnowledgeUnitId(text);
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 1, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL,
+      LEARNER_POLICY_PROFILE_URL: 'https://api.test.invalid/api/learner-memory/policy-profile',
+      LEARNER_POLICY_EVENTS_URL: 'https://api.test.invalid/api/learner-memory/policy-events',
+    });
+
+    const { host, setOrchestrator, stopAdaptationSync } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+    host.onParagraphRead(text, 5000, 3);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
+
+    queryAlcoia('.sra-q-option[data-index="0"]').click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
+    // the outcome names the rung of the ladder it answered
+    expect(JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).options.body).question_level).toBe('recognition');
+
+    stopAdaptationSync();
+  });
+
+  it('turning a card away is counted by its kind (a quick-dismissed review) and reaches the account', async () => {
+    const text = 'A due paragraph, long enough to clear fetchQuestions\' own 120-character floor, dismissed at once to prove the kind is counted.';
+    const knowledgeUnitId = await realKnowledgeUnitId(text);
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 1, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+    vi.stubGlobal('ALCOIA_CONFIG', {
+      SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL,
+      LEARNER_POLICY_PROFILE_URL: 'https://api.test.invalid/api/learner-memory/policy-profile',
+      LEARNER_POLICY_EVENTS_URL: 'https://api.test.invalid/api/learner-memory/policy-events',
+    });
+    const { host, setOrchestrator, stopAdaptationSync } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+    host.onParagraphRead(text, 5000, 3);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    queryAlcoia('.sra-close-btn').click();
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/policy-events'))).toBe(true));
+    const sent = calls.filter((c) => c.url.endsWith('/policy-events')).flatMap((c) => JSON.parse(c.options.body).events);
+    const card = sent.find((e) => e.scope === 'card' && e.key === 'retention');
+    expect(card).toMatchObject({ shown: 1, dismissed: 1, quickDismissed: 1 });
+    // counts only: nothing about the page, the text or the paragraph travels
+    expect(JSON.stringify(sent)).not.toMatch(/paragraph|due|text/i);
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    stopAdaptationSync();
+  });
+
+  it('exposure: each paragraph read is reported once, by id only', async () => {
+    const text = 'A paragraph the reader actually reads, long enough to be a real unit, reported once as an exposure by its content id only.';
+    const knowledgeUnitId = await realKnowledgeUnitId(text);
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, []));
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL });
+    const { host, setOrchestrator, stopAdaptationSync } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+    host.onParagraphRead(text, 5000, 1);
+    host.onParagraphRead(text, 5000, 1);
+    // flushed on the page being hidden
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/exposure'))).toBe(true));
+    const bodies = calls.filter((c) => c.url.endsWith('/exposure')).map((c) => JSON.parse(c.options.body));
+    // (other hosts left open by earlier tests may flush their own ids on the same event: only this one's matter)
+    expect(bodies.flatMap((b) => b.unitIds).filter((id) => id === knowledgeUnitId)).toHaveLength(1);
+    for (const b of bodies) expect(Object.keys(b)).toEqual(['unitIds']);
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    stopAdaptationSync();
   });
 
   it('a paragraph whose knowledge unit is NOT due produces no retention intervention', async () => {

@@ -124,7 +124,7 @@ const tokenUrl = () => {
   try { return new URL('/api/token', backendUrl || self.ALCOIA_CONFIG.SUMMARIZE_URL).href; }
   catch (e) { return self.ALCOIA_CONFIG.TOKEN_URL; }
 };
-const gradeUrl = () => (backendUrl || self.ALCOIA_CONFIG.SUMMARIZE_URL).replace(/\/api\/summarize\/?$/, '/api/grade');
+const gradeUrl = () => (backendUrl || self.ALCOIA_CONFIG.SUMMARIZE_URL).replace(/\/api\/summarize\/?$/, '/api/check-answer');
 
 const { callBackend } = createBackendClient({ getTokenUrl: tokenUrl });
 // Own rate-limit bucket, same burst/ceiling shape as host.js's own

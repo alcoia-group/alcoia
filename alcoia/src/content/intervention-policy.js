@@ -413,6 +413,32 @@ export function createInterventionPolicy(config = {}) {
   let consecutiveIncorrectAnswers = 0;
   let lastAnswerCorrect = null;
 
+  // THE LEARNER'S OWN ADAPTATION (src/shared/policy-profile.js, derived on the server from how THIS learner has responded
+  // across all their devices). The numbers in DEFAULT_BUDGET are only the starting values: with a profile, the gap before
+  // another card of a kind, whether that kind is shown at all, how readily a reading state is trusted, and how soon the
+  // dismissal back-off sets in all move with what the learner has actually done. Without one (signed out, memory off,
+  // new account) every factor is 1 and nothing changes.
+  let adaptation = { cards: {}, detectors: {}, sensitivity: 1 };
+  function setAdaptation(a) {
+    const num = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+    const cards = {};
+    for (const [k, v] of Object.entries((a && a.cards) || {})) cards[k] = { cooldownFactor: num(v?.cooldownFactor, 0.5, 4, 1), withhold: v?.withhold === true };
+    const detectors = {};
+    for (const [k, v] of Object.entries((a && a.detectors) || {})) detectors[k] = { confidenceFactor: num(v?.confidenceFactor, 0.5, 1.5, 1) };
+    adaptation = { cards, detectors, sensitivity: num(a?.sensitivity, 0.8, 1.3, 1) };
+  }
+  const cardFactor = (type) => adaptation.cards[type]?.cooldownFactor ?? 1;
+  const cardWithheld = (type) => adaptation.cards[type]?.withhold === true;
+  const detectorFactor = (state) => adaptation.detectors[`${state.label}:${state.detectionBasis ?? 'unknown'}`]?.confidenceFactor ?? 1;
+  // How soon a run of dismissals changes behaviour: a learner who turns questions away more than most is listened to
+  // sooner, one who engages is given more room. The starting values are DEFAULT_BUDGET's.
+  function effectiveBackoff() {
+    const f = Math.sqrt(cardFactor('ask'));
+    const { raiseConfidenceAfter, raisedMinConfidence, stopAskingAfter } = budget.dismissalBackoff;
+    const clampInt = (x, lo, hi) => Math.min(hi, Math.max(lo, Math.round(x)));
+    return { raiseConfidenceAfter: clampInt(raiseConfidenceAfter / f, 1, 4), raisedMinConfidence, stopAskingAfter: clampInt(stopAskingAfter / f, 2, 5) };
+  }
+
   function sessionCap() {
     const paragraphUnits = Math.floor(paragraphsRead / budget.paragraphsPerUnit);
     const minuteUnits = Math.floor(msRead / (budget.minutesPerUnit * 60000));
@@ -456,8 +482,12 @@ export function createInterventionPolicy(config = {}) {
     // reason alone.
     if (action === 'none') return deny(`no action for ${state.label}`);
 
-    if (state.confidence < budget.minConfidence) {
-      return deny(`confidence ${state.confidence.toFixed(2)} below ${budget.minConfidence}`);
+    // What the reading signals are worth for THIS learner here: the reading state's own track record with them, the
+    // reading states they have reported missing, and what they have shown on this concept (all 1 when nothing is known).
+    const conf = Math.min(1, state.confidence * detectorFactor(state) * adaptation.sensitivity * (ctx.learnerEstimate?.concept?.confidenceFactor ?? 1));
+
+    if (conf < budget.minConfidence) {
+      return deny(`confidence ${conf.toFixed(2)} below ${budget.minConfidence}`);
     }
 
     if (state.label === STATES.SKIMMING) {
@@ -482,12 +512,12 @@ export function createInterventionPolicy(config = {}) {
      * who dismisses questions three times in a row is refusing to be tested,
      * not refusing to be told they slowed down. */
     if (action === 'ask') {
-      const { raiseConfidenceAfter, raisedMinConfidence, stopAskingAfter } = budget.dismissalBackoff;
+      const { raiseConfidenceAfter, raisedMinConfidence, stopAskingAfter } = effectiveBackoff();
       if (consecutiveDismissals >= stopAskingAfter) {
         return deny(`declined ${consecutiveDismissals} questions in a row — holding off until answered`);
       }
-      if (consecutiveDismissals >= raiseConfidenceAfter && state.confidence < raisedMinConfidence) {
-        return deny(`confidence ${state.confidence.toFixed(2)} below the raised bar of ${raisedMinConfidence} after ${consecutiveDismissals} consecutive dismissals`);
+      if (consecutiveDismissals >= raiseConfidenceAfter && conf < raisedMinConfidence) {
+        return deny(`confidence ${conf.toFixed(2)} below the raised bar of ${raisedMinConfidence} after ${consecutiveDismissals} consecutive dismissals`);
       }
 
       // Step 8: repeated WRONG answers raise the same kind of bar repeated
@@ -497,8 +527,8 @@ export function createInterventionPolicy(config = {}) {
       // than another question stacked immediately on top of it. See
       // recordAnswered()'s own header for how the counter moves.
       const { raiseConfidenceAfter: failRaiseAfter, raisedMinConfidence: failRaisedMin } = budget.failureBackoff;
-      if (consecutiveIncorrectAnswers >= failRaiseAfter && state.confidence < failRaisedMin) {
-        return deny(`confidence ${state.confidence.toFixed(2)} below the raised bar of ${failRaisedMin} after ${consecutiveIncorrectAnswers} consecutive wrong answers`);
+      if (consecutiveIncorrectAnswers >= failRaiseAfter && conf < failRaisedMin) {
+        return deny(`confidence ${conf.toFixed(2)} below the raised bar of ${failRaisedMin} after ${consecutiveIncorrectAnswers} consecutive wrong answers`);
       }
 
       // Step 8: candidate-vs-decision boundary for scroll-back regressions
@@ -599,13 +629,24 @@ export function createInterventionPolicy(config = {}) {
       }
     }
 
+    // What kind of card this would be, for THIS learner's history with that kind.
+    const cardType = action === 'nudge' ? 'nudge'
+      : policyAction === POLICY_ACTIONS.EXPLAIN ? 'explain'
+      : policyAction === POLICY_ACTIONS.REPAIR ? 'repair'
+      : 'ask';
+    // A kind the learner reliably turns away is shown only when their own evidence says help is needed.
+    if (action === 'ask' && cardWithheld(cardType) && !(ctx.learnerEstimate && ctx.learnerEstimate.action === 'intervene')) {
+      return deny(`this learner turns ${cardType} cards away more often than not; held back unless their own evidence calls for help`);
+    }
+
     const cap = sessionCap();
     if (count >= cap) {
       return deny(`session budget spent (${count}/${cap}, ceiling ${budget.absoluteCeiling})`);
     }
 
+    const gap = budget.minGapMs * cardFactor(cardType);
     const since = now() - lastAt;
-    if (lastAt !== 0 && since < budget.minGapMs) {
+    if (lastAt !== 0 && since < gap) {
       return deny(`only ${Math.round(since / 1000)}s since the last interruption`);
     }
 
@@ -635,6 +676,8 @@ export function createInterventionPolicy(config = {}) {
       // tests/intervention-policy.test.js, which predate this field and
       // must keep passing unmodified).
       interventionId: action === 'ask' ? generateId(now, random) : null,
+      // A concept the learner knows but has not yet shown they retain: one short check, never an explanation.
+      ...(ctx.learnerEstimate && ctx.learnerEstimate.light === true && policyAction === POLICY_ACTIONS.RETRIEVE ? { light: true } : {}),
     };
   }
 
@@ -708,17 +751,26 @@ export function createInterventionPolicy(config = {}) {
     const deny = (reason) =>
       ({ allow: false, action: 'none', policyAction: POLICY_ACTIONS.NONE, reason, evidence: [], paragraphKey: null, interventionId: null });
 
+    // The kind of card, for this learner's history with that kind (retention, focus, probe, return_check).
+    const cardType = ['focus', 'probe', 'return_check'].includes(ctx.kind) ? ctx.kind : 'retention';
+    // A kind the learner reliably turns away is not shown. The one exception is an instructor-flagged concept the
+    // learner's own evidence says they do not know (mode support or repair): that is help, not a check.
+    const needsHelp = ctx.kind === 'focus' && (ctx.mode === 'support' || ctx.mode === 'repair');
+    if (cardWithheld(cardType) && !needsHelp) {
+      return deny(`this learner turns ${cardType} cards away more often than not; held back`);
+    }
+
     const cap = sessionCap();
     if (count >= cap) {
       return deny(`session budget spent (${count}/${cap}, ceiling ${budget.absoluteCeiling})`);
     }
 
     const since = now() - lastAt;
-    if (lastAt !== 0 && since < budget.minGapMs) {
+    if (lastAt !== 0 && since < budget.minGapMs * cardFactor(cardType)) {
       return deny(`only ${Math.round(since / 1000)}s since the last interruption`);
     }
 
-    const { raiseConfidenceAfter, stopAskingAfter } = budget.dismissalBackoff;
+    const { raiseConfidenceAfter, stopAskingAfter } = effectiveBackoff();
     if (consecutiveDismissals >= stopAskingAfter) {
       return deny(`declined ${consecutiveDismissals} questions in a row — holding off until answered`);
     }
@@ -788,6 +840,19 @@ export function createInterventionPolicy(config = {}) {
         interventionId: generateId(now, random),
       };
     }
+    if (isFocus && needsHelp) {
+      // An instructor-flagged concept the learner reliably does not know: help first (an explanation, or a direct
+      // correction when confident wrong answers dominate), not a quiz.
+      return {
+        allow: true,
+        action: 'focus',
+        policyAction: ctx.mode === 'repair' ? POLICY_ACTIONS.REPAIR : POLICY_ACTIONS.EXPLAIN,
+        reason: 'instructor-marked concept this learner has not yet shown they know',
+        evidence: ['This part of the reading is worth a closer look.'],
+        paragraphKey: key,
+        interventionId: generateId(now, random),
+      };
+    }
     return {
       allow: true,
       action: isFocus ? 'focus' : 'retention',
@@ -799,6 +864,8 @@ export function createInterventionPolicy(config = {}) {
       evidence: [isFocus ? 'This part of the reading is worth checking.' : 'Time to check whether this has stuck.'],
       paragraphKey: key,
       interventionId: generateId(now, random),
+      // A flagged concept the learner already knows but has not yet shown they retain: one short check.
+      ...(isFocus && ctx.mode === 'light' ? { light: true } : {}),
     };
   }
 
@@ -881,6 +948,7 @@ export function createInterventionPolicy(config = {}) {
     recordCoverage,
     recordDismissal,
     recordAnswered,
+    setAdaptation,
     stats: () => ({
       count, lastAt,
       cap: sessionCap(),
