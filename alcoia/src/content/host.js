@@ -228,7 +228,7 @@ export async function createHost(deps) {
     reportIntervention = (...args) => {
       // args[3] is the intervention type. Anything but a scheduled quick check is a "normal" card: note when it
       // appeared so a quick check keeps clear of it (see PROBE_QUIET_MS).
-      try { if (args[3] !== 'probe') lastNormalCardAt = Date.now(); probeCovered(); } catch (e) { /* defined later; never blocks reporting */ }
+      try { if (args[3] !== 'probe' && args[3] !== 'return_check') lastNormalCardAt = Date.now(); probeCovered(); } catch (e) { /* defined later; never blocks reporting */ }
       return baseReport(...args);
     };
   }
@@ -1421,6 +1421,48 @@ export async function createHost(deps) {
     }
   }
 
+  // A long absence followed by a return to the same paragraph is its own retrieval check, never a struggle
+  // signal: the reader may simply have been away. One check per return, and it yields to any normal card.
+  const returnCheck = { busy: false, lastAt: 0 };
+  const RETURN_CHECK_GAP_MS = 5 * 60 * 1000;
+  async function checkReturnCheck(blurMs) {
+    if (returnCheck.busy || !s().assistantEnabled || !orchestratorRef?.interventionPolicy) return;
+    if (Date.now() - returnCheck.lastAt < RETURN_CHECK_GAP_MS) return;
+    const el = currentParagraph?.type === 'dom' ? currentParagraph.data : null;
+    const text = el ? String(el.innerText || el.textContent || '').trim() : '';
+    if (wordCount(text) < PROBE_MIN_PARAGRAPH_WORDS) return;
+    if (probeBlocked() || await snoozeControl.isActive()) return;
+    const identity = computeIdentity(text);
+    if (!identity.knowledgeUnitId) return;
+    const decision = orchestratorRef.interventionPolicy.evaluateRetentionCandidate({
+      paragraphKey: identity.paragraphKey,
+      questionCardVisible: ui.hasVisibleQuestionCard(),
+      kind: 'return_check',
+    });
+    if (!decision.allow) return;
+    if (!automaticInterventionGuard.tryAcquire()) return;
+    returnCheck.busy = true;
+    try {
+      const questions = await fetchQuestions(text, { kind: 'recall' });
+      if (!questions.length || probeBlocked()) return;
+      const shown = questionCard.show(questions[0], {
+        evidence: decision.evidence,
+        paragraphKey: identity.paragraphKey,
+        knowledgeUnitId: identity.knowledgeUnitId,
+        paragraphIndex: null,
+        interventionId: decision.interventionId,
+      });
+      if (shown) {
+        orchestratorRef.interventionPolicy.record(decision);
+        returnCheck.lastAt = Date.now();
+        reportIntervention(decision.interventionId, identity.knowledgeUnitId, null, 'return_check', text, 'retrieve');
+      }
+    } finally {
+      returnCheck.busy = false;
+      automaticInterventionGuard.release();
+    }
+  }
+
   // ── Paragraph state — what setCurrentParagraph/setPrevParagraphText/
   // setCogState/getCurrentParagraph hold ──────────────────────────────────
   let currentParagraph = null;
@@ -1485,6 +1527,7 @@ export async function createHost(deps) {
       checkRetentionCandidate(text, paragraphIndex).catch(() => {});
       checkProbe(text, paragraphIndex).catch(() => {});
     },
+    onReturnCheck: (blurMs) => { checkReturnCheck(blurMs).catch(() => {}); },
     onStruggle: (text, paragraphIndex, substate, selfReported) => {
       sessionRecall.recordStruggle(text);
       // Item S6/E4 follow-up — see submitOutcome's own header just above.

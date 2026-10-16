@@ -96,6 +96,7 @@ class WpmBaseline {
 
   get() { return this._stored; }
   hasSamples() { return this._samples.length >= 5; }
+  sampleCount() { return this._samples.length; }
 }
 
 /* One WpmBaseline per language, persisted as a map. `sra_baseline_wpm` (a bare
@@ -128,6 +129,7 @@ class WpmRegistry {
   }
 
   hasSamples(lang) { return this._for(lang).hasSamples(); }
+  sampleCount(lang) { return this._for(lang).sampleCount(); }
 
   add(lang, wpm, grade) {
     this._for(lang).add(wpm, grade);
@@ -234,6 +236,16 @@ export function createComprehensionMonitor(opts = {}) {
     // this reader rather than comparing against a constant. Someone who always
     // reads at 0.6x the model is not struggling on every paragraph.
     const z = residuals.zScore(ratio);
+    /* How much this reader's own history stands behind the comparison. Cold start is real: before a
+     * personal baseline and spread exist, the comparison is against a generic reading rate, which is
+     * the weakest basis this monitor has. The state engine reads `reliability` to discount confidence;
+     * nothing here changes whether a signal is produced. 'personal_z' = compared with this reader's own
+     * distribution; 'personal_ratio' = own baseline rate, fixed cut-off; 'generic' = generic rate only. */
+    const reliability = {
+      basis: z != null ? 'personal_z' : (wpmBaseline.hasSamples(lang) ? 'personal_ratio' : 'generic'),
+      baselineSamples: wpmBaseline.sampleCount(lang),
+      residualSamples: residuals.stats().n,
+    };
     const unusuallyFast = z != null ? z <= Z_FAST : ratio < SPEED_RATIO_FAST;
     const unusuallySlow = z != null ? z >= Z_SLOW : null;
 
@@ -242,7 +254,7 @@ export function createComprehensionMonitor(opts = {}) {
       return {
         type: 'speed_mismatch', subtype: 'too_fast',
         el: entry.el, text: entry.text, readability: r,
-        ratio, elapsed, expected, z,
+        ratio, elapsed, expected, z, reliability,
       };
     }
 
@@ -256,7 +268,7 @@ export function createComprehensionMonitor(opts = {}) {
         return {
           type: 'speed_mismatch', subtype: 'too_slow',
           el: entry.el, text: entry.text, readability: r,
-          ratio: slowRatio, actualWpm: Math.round(actualWpm), baselineWpm: baseWpm, z,
+          ratio: slowRatio, actualWpm: Math.round(actualWpm), baselineWpm: baseWpm, z, reliability,
         };
       }
     }
