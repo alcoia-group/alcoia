@@ -3754,3 +3754,88 @@ describe('scheduled quick checks (probes)', () => {
     expect(queryAlcoia('.sra-q-badge')).toBeNull();         // the help path owns the moment; no check shown
   });
 });
+
+describe('ways of explaining adapt to this learner', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const PROFILE_URL = 'https://api.test.invalid/api/learner-memory/policy-profile';
+  const EVENTS_URL = 'https://api.test.invalid/api/learner-memory/policy-events';
+  const PARA = 'A paragraph long enough to be a real bounded extraction, used across the explanation style tests so there is real text to explain and to ask about afterwards.';
+  const deps = () => baseDeps({ assignmentId: 'assign-s', getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 999_999 }) });
+  const styles = (first) => ({ explain_more: [{ style: first, n: 20, trials: 9, rate: 0.8 }, { style: 'analogy', n: 20, trials: 9, rate: 0.3 }], repair: [{ style: 'contrast', n: 20, trials: 9, rate: 0.7 }] });
+
+  function setup(profile) {
+    document.body.innerHTML = `<p id="t">${PARA}</p>`;
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL, LEARNER_POLICY_PROFILE_URL: PROFILE_URL, LEARNER_POLICY_EVENTS_URL: EVENTS_URL, QUESTION_LEVELS_SUPPORTED: ['recognition'] });
+    const summarize = [];
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    const calls = [];
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.action === 'proxyFetch') {
+        calls.push({ url: msg.url, options: msg.options });
+        if (msg.url === PROFILE_URL) return cb({ ok: true, status: 200, data: profile });
+        return cb({ ok: true, status: 200, data: { recorded: true, candidates: [], estimates: [] } });
+      }
+      if (msg.url?.includes('/api/questions')) return cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
+      summarize.push(msg.body);
+      return cb({ ok: true, data: { summary: 'A plainer explanation of the idea.' } });
+    };
+    return { calls, summarize };
+  }
+  const events = (calls) => calls.filter((c) => c.url === EVENTS_URL).flatMap((c) => JSON.parse(c.options.body).events);
+  const flush = () => { Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); document.dispatchEvent(new Event('visibilitychange')); };
+
+  it('asks for the style the learner\'s own results favour, and counts it as shown', async () => {
+    const { calls, summarize } = setup({ cards: {}, detectors: {}, sensitivity: 1, styles: styles('scenario') });
+    vi.spyOn(Math, 'random').mockReturnValue(0.99); // no exploring: the best style
+    const { host, stopAdaptationSync } = await createHost(deps());
+    await vi.waitFor(() => expect(calls.some((c) => c.url === PROFILE_URL)).toBe(true));
+    await new Promise((r) => setTimeout(r, 20));
+    const shown = await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_s1' }, {}, document.getElementById('t'), 2);
+    expect(shown).toBe(true);
+    expect(summarize.at(-1)).toMatchObject({ mode: 'explain_more', style: 'scenario' });
+    flush();
+    await vi.waitFor(() => expect(events(calls).some((e) => e.scope === 'style' && e.key === 'explain_more:scenario' && e.shown === 1)).toBe(true));
+    stopAdaptationSync();
+  });
+
+  it('sends no style when there is no profile, so the ordinary prompt is used', async () => {
+    const { summarize } = setup(null);
+    const { host, stopAdaptationSync } = await createHost(deps());
+    await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_s2' }, {}, document.getElementById('t'), 2);
+    expect(summarize.at(-1).style).toBeUndefined();
+    stopAdaptationSync();
+  });
+
+  it('"Did this help?" is optional, and a tap is counted for that style only', async () => {
+    const { calls } = setup({ cards: {}, detectors: {}, sensitivity: 1, styles: styles('scenario') });
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const { host, stopAdaptationSync } = await createHost(deps());
+    await vi.waitFor(() => expect(calls.some((c) => c.url === PROFILE_URL)).toBe(true));
+    await new Promise((r) => setTimeout(r, 20));
+    await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_s3' }, {}, document.getElementById('t'), 2);
+    expect(queryAlcoia('.sra-q-helped')).not.toBeNull();
+    queryAlcoia('.sra-q-helped-no').click();
+    expect(queryAlcoia('.sra-q-helped').textContent).toContain('Thanks');
+    flush();
+    await vi.waitFor(() => expect(events(calls).some((e) => e.key === 'explain_more:scenario' && e.notHelped === 1)).toBe(true));
+    expect(events(calls).some((e) => e.helped > 0)).toBe(false);
+    stopAdaptationSync();
+  });
+
+  it('the next answered question on the same passage is counted as what followed the explanation', async () => {
+    const { calls } = setup({ cards: {}, detectors: {}, sensitivity: 1, styles: styles('scenario') });
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const { host, stopAdaptationSync } = await createHost(deps());
+    await vi.waitFor(() => expect(calls.some((c) => c.url === PROFILE_URL)).toBe(true));
+    await new Promise((r) => setTimeout(r, 20));
+    const el = document.getElementById('t');
+    await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_s4' }, {}, el, 2);
+    queryAlcoia('.sra-q-skip').click();
+    await host.onIntervention({ action: 'ask', policyAction: 'retrieve', evidence: ['because'], interventionId: 'iv_s5' }, {}, el, 2);
+    queryAlcoia('.sra-q-option[data-index="0"]').click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+    flush();
+    await vi.waitFor(() => expect(events(calls).some((e) => e.key === 'explain_more:scenario' && e.answered === 1 && e.correct === 1)).toBe(true));
+    stopAdaptationSync();
+  });
+});

@@ -447,6 +447,7 @@ export async function createHost(deps) {
   const cardsShown = new Map(); // interventionId -> { type, at, state, basis }
   let lastCardId = null;
   let policyProfileManager = null;
+  let styleModule = null;
   let poolReporter = null;
   let adaptationTimer = null;
   let visibilityHandler = null;
@@ -498,6 +499,36 @@ export async function createHost(deps) {
   function noteSelfReport(previousState) {
     if (!previousState || ['on_pace', 'skimming', 'unknown'].includes(previousState)) profileRecord({ scope: 'detector', key: 'quiet', selfReports: 1 });
   }
+  // WAYS OF EXPLAINING. Which style worked for this learner is learned from their own results: what they say ("Did this
+  // help?") and what happens next (a later question on the same passage, answered correctly or not). Counts go to their
+  // account profile and, anonymously, to the pool. Nothing is stored about the passage.
+  const styleFollow = new Map(); // paragraphKey -> 'mode:style' awaiting the next answered question on that passage
+  function pickExplanationStyle(mode) {
+    try {
+      const list = policyProfileManager?.getProfile?.().styles?.[mode];
+      return styleModule ? styleModule.chooseStyle(list) : null;
+    } catch (e) { return null; }
+  }
+  function noteStyleShown(mode, style, paragraphKey) {
+    const key = `${mode}:${style}`;
+    profileRecord({ scope: 'style', key, shown: 1 });
+    poolAdd('style_shown', key);
+    if (paragraphKey) {
+      styleFollow.set(paragraphKey, key);
+      if (styleFollow.size > 40) styleFollow.delete(styleFollow.keys().next().value);
+    }
+  }
+  function noteStyleFeedback(mode, style, helped) {
+    const key = `${mode}:${style}`;
+    profileRecord({ scope: 'style', key, [helped ? 'helped' : 'notHelped']: 1 });
+    poolAdd(helped ? 'style_helped' : 'style_not_helped', key);
+  }
+  function noteStyleFollowed(record) {
+    const key = record?.paragraphKey ? styleFollow.get(record.paragraphKey) : null;
+    if (!key) return;
+    styleFollow.delete(record.paragraphKey);
+    profileRecord({ scope: 'style', key, answered: 1, ...(record.correct === true ? { correct: 1 } : {}) });
+  }
   // Generation that failed (a question, an explanation, a grading call), counted anonymously by kind.
   function noteGenerationFailure(kind) { poolAdd('generation_failure', kind); }
   try {
@@ -505,6 +536,7 @@ export async function createHost(deps) {
     const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
     const profileModule = await loadModule('src/shared/policy-profile.js');
     const poolModule = await loadModule('src/shared/pool-counters.js');
+    styleModule = await loadModule('src/shared/explanation-style.js');
     const profileGetSession = getSession || sessionModule.createSessionManager().getSession;
     policyProfileManager = profileModule.createPolicyProfileManager({
       getSession: profileGetSession,
@@ -618,7 +650,8 @@ export async function createHost(deps) {
   }
 
   async function fetchSummary(text, mode = 'tldr', context = '', opts = {}) {
-    const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
+    const style = typeof opts.style === 'string' && opts.style ? opts.style : null;
+    const cacheKey = `${mode}${style ? ':' + style : ''}:${text.slice(0, 80).trim()}`;
     if (_summaryCache.has(cacheKey)) {
       log(`Cache hit: ${mode}`);
       const cached = _summaryCache.get(cacheKey);
@@ -631,6 +664,7 @@ export async function createHost(deps) {
       log(`Fetching ${url} mode=${mode} len=${text.length}`);
       const body = { text: text.slice(0, 3500), mode };
       if (context) body.context = context.slice(0, 800);
+      if (style) body.style = style;
       const resp = await callBackend('summarize', url, body);
       if (!resp.ok) { warn(`Server ${resp.status || ''} ${resp.error || ''}`); if (resp.status !== 429) noteGenerationFailure(mode === 'repair' ? 'repair' : mode === 'relate' ? 'relate' : mode === 'explain_more' ? 'explain' : 'summarize'); return null; }
       const j = resp.data;
@@ -934,6 +968,7 @@ export async function createHost(deps) {
     onAnswered: (record) => {
       let answeredCard = null;
       try { answeredCard = noteCardAnswered(record); } catch (e) {}
+      try { noteStyleFollowed(record); } catch (e) {}
       try { decisionLog.record({ kind: 'answered', basis: lastShownBasis, cardType: answeredCard }); } catch (e) {}
       try { orchestratorRef?.pumpSignals(record); } catch (e) {}
       try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
@@ -1357,7 +1392,10 @@ export async function createHost(deps) {
       // at how the ideas connect; any other explanation, and every repair, is unchanged.
       const relate = kind !== 'repair' && hasRelationCues(text);
       const mode = kind === 'repair' ? 'repair' : relate ? 'relate' : 'explain_more';
-      const generated = await fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey });
+      // The way of explaining is chosen from THIS learner's own results (their account profile), mostly the best so far and
+      // sometimes another so the order can change. Only explain and repair have styles; with no profile there is none.
+      const style = mode === 'relate' ? null : pickExplanationStyle(mode);
+      const generated = await fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey, style });
       if (!generated) return false;
 
       let anchorRect = null;
@@ -1375,7 +1413,9 @@ export async function createHost(deps) {
         knowledgeUnitId: identity.knowledgeUnitId,
         interventionId,
         ...(relate ? { badge: 'how the ideas connect' } : {}),
+        ...(style ? { onFeedback: (helped) => noteStyleFeedback(mode, style, helped) } : {}),
       });
+      if (shown && style) noteStyleShown(mode, style, identity.paragraphKey);
       if (shown) {
         // Step 12: same intervention-evidence contract as handleAsk, same
         // wire-level type 'ask' — interventions.type's own CHECK constraint
