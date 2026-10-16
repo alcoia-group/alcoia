@@ -8,7 +8,7 @@
 const PENDING_KEY = 'sra_pool_pending';
 const STATUS_KEY = 'sra_pool_status';
 const DAY = 86400000;
-export const METRICS = ['generation_failure', 'card_shown', 'card_answered', 'card_dismissed', 'card_quick_dismissed'];
+export const METRICS = ['generation_failure', 'card_shown', 'card_answered', 'card_dismissed', 'card_quick_dismissed', 'style_shown', 'style_helped', 'style_not_helped'];
 
 export function createPoolReporter(opts = {}) {
   const callBackend = opts.callBackend; // (action, url, body) => { ok, data }

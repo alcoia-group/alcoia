@@ -29,7 +29,7 @@ describe('policy profile manager (the learner\'s adaptation follows their accoun
     m.record({ scope: 'card', key: 'probe', shown: 1 });
     expect(await m.flush()).toBe(true);
     const post = calls.find((c) => c.init.method === 'POST');
-    expect(JSON.parse(post.init.body)).toEqual({ events: [{ scope: 'card', key: 'probe', shown: 2, answered: 0, dismissed: 1, quickDismissed: 1, correct: 0, selfReports: 0 }] });
+    expect(JSON.parse(post.init.body)).toEqual({ events: [{ scope: 'card', key: 'probe', shown: 2, answered: 0, dismissed: 1, quickDismissed: 1, correct: 0, selfReports: 0, helped: 0, notHelped: 0 }] });
     expect(post.init.headers.Authorization).toBe('Bearer tok');
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ sensitivity: 1.1 }));
     expect(m.getProfile().cards.probe.withhold).toBe(true);
@@ -228,5 +228,43 @@ describe('decision log by card type', () => {
     const s = summarizeDecisions(e);
     expect(s.byCardType.probe).toEqual({ shown: 2, answered: 0, dismissed: 2, dismissRate: 1 });
     expect(s.byCardType.ask).toEqual({ shown: 1, answered: 1, dismissed: 0, dismissRate: 0 });
+  });
+});
+
+import { chooseStyle } from '../alcoia/src/shared/explanation-style.js';
+
+describe('which way of explaining to try', () => {
+  const list = [{ style: 'scenario', n: 20, rate: 0.8 }, { style: 'analogy', n: 3, rate: 0.4 }, { style: 'contrast', n: 9, rate: 0.5 }];
+  it('mostly keeps to the best style once there is evidence', () => {
+    expect(chooseStyle(list, () => 0.9)).toBe('scenario');
+  });
+  it('sometimes tries the style it knows least about, so the order can change', () => {
+    const seq = [0.01, 0];
+    expect(chooseStyle(list, () => seq.shift() ?? 0)).toBe('analogy');
+  });
+  it('explores more when there is little evidence', () => {
+    const little = [{ style: 'a', n: 1, rate: 0.5 }, { style: 'b', n: 0, rate: 0.5 }];
+    const seq = [0.3, 0]; // 0.3 is below the early exploring rate, above the later one
+    expect(chooseStyle(little, () => seq.shift() ?? 0)).toBe('b');
+    const seq2 = [0.3, 0];
+    expect(chooseStyle(list, () => seq2.shift() ?? 0)).toBe('scenario');
+  });
+  it('returns null with nothing to choose from, so the ordinary prompt is used', () => {
+    expect(chooseStyle(undefined)).toBeNull();
+    expect(chooseStyle([])).toBeNull();
+    expect(chooseStyle([{ nope: 1 }])).toBeNull();
+  });
+});
+
+describe('the policy profile carries explanation styles', () => {
+  it('sends style counts like any other and reads the ordered list back', async () => {
+    const posted = [];
+    const profile = { cards: {}, detectors: {}, sensitivity: 1, styles: { explain_more: [{ style: 'scenario', n: 2, trials: 2, rate: 0.6 }] } };
+    const fetchImpl = vi.fn(async (url, init) => { if (init.method === 'POST') { posted.push(JSON.parse(init.body)); return ok({ recorded: 1 }); } return ok(profile); });
+    const m = createPolicyProfileManager({ getSession: session('tok'), profileUrl: 'https://s/p', eventsUrl: 'https://s/e', fetchImpl, storage: memoryStorage() });
+    m.record({ scope: 'style', key: 'explain_more:scenario', shown: 1, helped: 1 });
+    expect(await m.flush()).toBe(true);
+    expect(posted[0].events[0]).toMatchObject({ scope: 'style', key: 'explain_more:scenario', shown: 1, helped: 1, notHelped: 0 });
+    expect(m.getProfile().styles.explain_more[0].style).toBe('scenario');
   });
 });
