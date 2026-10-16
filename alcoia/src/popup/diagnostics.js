@@ -117,6 +117,12 @@ async function renderDecisions() {
     ['Times you told it you were struggling', sum.selfReports],
     ['Of those, when it had not noticed', pct(sum.selfReportsWhileDetectorQuietRate)],
   ];
+  // Which kinds of card you close without answering. The same counts, by kind, also go to your account (counts only)
+  // so what the system learns about how you like to be helped follows you to other devices.
+  const KIND_LABELS = { ask: 'Questions', explain: 'Explanations', repair: 'Corrections', retention: 'Reviews', probe: 'Quick checks', return_check: 'Where you left off', focus: 'Teacher-marked parts', session_recall: 'Session reviews' };
+  for (const [type, r] of Object.entries(sum.byCardType || {})) {
+    rows.push([`${KIND_LABELS[type] || type}: shown, closed without answering`, `${r.shown}, ${r.dismissed} (${pct(r.dismissRate)})`]);
+  }
   for (const [label, value] of rows) {
     const row = document.createElement('div');
     row.className = 'kv-row';

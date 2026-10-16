@@ -16,7 +16,7 @@ describe('decision log', () => {
     const log = createDecisionLog({ storage, now: () => 5 });
     await log.record({ kind: 'decision', state: 'struggling', confidence: 0.678, basis: 'generic', action: 'ask', reason: 'see https://x.test/page now', text: 'PASSAGE TEXT', paragraphKey: 'secret' });
     const [e] = await log.list();
-    expect(e).toEqual({ at: 5, kind: 'decision', state: 'struggling', confidence: 0.68, basis: 'generic', action: 'ask', policyAction: null, reason: 'see  now', previousState: null });
+    expect(e).toEqual({ at: 5, kind: 'decision', state: 'struggling', confidence: 0.68, basis: 'generic', action: 'ask', policyAction: null, cardType: null, reason: 'see  now', previousState: null });
     expect(JSON.stringify(e)).not.toMatch(/PASSAGE|secret|x\.test/);
   });
   it('ignores unknown kinds, caps its size, and clears', async () => {
