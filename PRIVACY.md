@@ -12,3 +12,6 @@ reference.
 
 For the mechanism-level detail behind the policy (what stays local, what's transmitted and why, the
 hard invariants the code enforces), see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+## Ideas noticed on web pages (on this device only)
+On ordinary web pages the extension keeps a short list of ideas that came up repeatedly (at most 400 labels) with counts of questions you answered right and wrong about them, so it can ask less about what you know and explain what you keep missing. It is stored in the browser's local storage, is never sent to alcoia or anyone else, is not synced, contains no page address, title or text, and can be cleared from the diagnostics page. (Wording for the owner and counsel to confirm.)
