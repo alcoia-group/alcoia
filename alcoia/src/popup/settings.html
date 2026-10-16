@@ -142,19 +142,38 @@
   </div>
 
   <!-- ════════════════════ Interventions ════════════════════
-       The task's own suggested items here ("self-report button visible",
-       "question-mark pulse on struggle") do not exist anywhere in this
-       codebase — the self-report trigger is unconditionally always shown
-       (ui-controller.js's own comment: "not conditional on any detected
-       state"), so there is nothing to toggle. This group instead holds the
-       real card-behaviour switches that were homeless in the task's
-       original four groups. -->
+       Two view-only switches, added later, now live here alongside the
+       card-behaviour switches below rather than in a separate group: both
+       are about whether something automatic is visible on the page, which
+       is exactly this card's existing subject. Neither one touches
+       detection, reporting, or anything feeding the instructor view or
+       learner memory — see each toggle's own description. -->
   <div class="settings-card">
     <div class="settings-group-title">Interventions</div>
+    <label class="toggle-row" for="showInterventionsToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Show intervention popups</span>
+        <span class="toggle-desc">
+          Off hides question and explanation cards (and the nudge cue) even when difficulty is
+          detected. Detection, the instructor view, and your learner memory keep working exactly
+          as before — this only stops a card from appearing on the page.
+        </span>
+      </div>
+      <label class="pill"><input type="checkbox" id="showInterventionsToggle" checked><span class="pill-track"></span></label>
+    </label>
+    <label class="toggle-row" for="showSelfReportToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Show the self-report button</span>
+        <span class="toggle-desc">
+          The small "?" in the corner of the page, for reporting how your reading is going
+          yourself. Independent of the switch above — it's reader-initiated, not automatic, so it
+          stays available even with intervention popups off, unless you turn it off here too.
+        </span>
+      </div>
+      <label class="pill"><input type="checkbox" id="showSelfReportToggle" checked><span class="pill-track"></span></label>
+    </label>
     <p class="settings-group-note">
-      How question and explanation cards behave once one appears. (The self-report button on the
-      page and the struggle-detection cue are always available — there is no separate visibility
-      switch for either in this codebase today.)
+      The two switches below control how question and explanation cards behave once one appears.
     </p>
     <label class="toggle-row" for="pinDefaultToggle">
       <div class="toggle-info">
