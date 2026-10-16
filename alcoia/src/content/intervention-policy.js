@@ -760,8 +760,22 @@ export function createInterventionPolicy(config = {}) {
     // like it is not working). It is the one interruption not triggered by detected difficulty, so it is held to
     // a stricter budget than the rest: it can never take the last free slot, which stays for real help.
     const isProbe = ctx.kind === 'probe';
-    if (isProbe && count >= cap - 1) {
+    // ctx.kind === 'return_check': the reader came back after a long time away. Coming back says nothing about
+    // difficulty, so this is a check on what they had just read, not help. Same stricter budget as a probe.
+    const isReturnCheck = ctx.kind === 'return_check';
+    if ((isProbe || isReturnCheck) && count >= cap - 1) {
       return deny(`keeping the last slot of the session budget (${count}/${cap}) for help`);
+    }
+    if (isReturnCheck) {
+      return {
+        allow: true,
+        action: 'return_check',
+        policyAction: POLICY_ACTIONS.RETRIEVE,
+        reason: 'reader returned after a long absence; a quick check on where they left off',
+        evidence: ['A quick check to pick up where you left off.'],
+        paragraphKey: key,
+        interventionId: generateId(now, random),
+      };
     }
     if (isProbe) {
       return {

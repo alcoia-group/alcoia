@@ -369,16 +369,10 @@ function fromSignal(sig) {
     return proposal;
   }
 
-  if (sig.type === 'blur_return') {
-    const mins = Math.round((sig.blurMs || 0) / 60000);
-    const away = mins >= 1 ? `${mins} minute${mins === 1 ? '' : 's'}` : 'a while';
-    return {
-      label: STATES.STRUGGLING,
-      confidence: SIGNAL_CONFIDENCE.blur_return,
-      evidence: [`You came back to this paragraph after ${away} away`],
-      signal: sig,
-    };
-  }
+  // blur_return is NOT a reading state. Leaving the tab and coming back says
+  // nothing about difficulty (phone call, kettle, another tab), so it never
+  // proposes STRUGGLING. The orchestrator routes it to its own return check.
+  if (sig.type === 'blur_return') return null;
 
   return null;
 }
@@ -441,12 +435,24 @@ function classifySubstate(proposal) {
   return SUBSTATES.UNCLEAR;
 }
 
+/* Cold start: a speed signal judged against generic words-per-minute, with no
+ * personal baseline yet, is weaker evidence than one judged against the
+ * reader's own history. Only signals carrying `reliability` are touched. */
+const GENERIC_BASIS_FACTOR = 0.8;
+function applyReliability(proposal, sig) {
+  const r = sig && sig.reliability;
+  if (!r) return;
+  proposal.detectionBasis = r.basis;
+  if (r.basis === 'generic') proposal.confidence = clamp01(proposal.confidence * GENERIC_BASIS_FACTOR);
+}
+
 /* Pick the strongest thing a signal is willing to assert. */
 function strongestAssertion(signals) {
   let best = null;
   for (const sig of signals) {
     const proposal = fromSignal(sig);
     if (!proposal) continue;
+    applyReliability(proposal, sig);
     if (!best || proposal.confidence > best.confidence) best = proposal;
   }
   return best;
@@ -521,6 +527,7 @@ export function createReadingStateEngine(config = {}) {
           // see STATES' own comment) apart from an inferred state, without
           // every caller re-deriving it from `signal?.type` by hand.
           isSelfReported: proposal.signal?.type === 'self_report',
+          ...(proposal.detectionBasis ? { detectionBasis: proposal.detectionBasis } : {}),
         }
       : {
           label: STATES.UNKNOWN,

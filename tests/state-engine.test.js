@@ -109,12 +109,25 @@ describe('P2 reading signals', () => {
     expect(s.evidence[0]).toMatch(/went back a paragraph to review/);
   });
 
-  it('returning to the same paragraph after a long absence is struggling', () => {
+  it('returning after a long absence is not a reading state at all', () => {
     const s = engineAt(fixedClock()).update({
       reading: { type: 'blur_return', subtype: 'resumed_same', blurMs: 180_000, paragraphIndex: 3 },
     });
-    expect(s.label).toBe(STATES.STRUGGLING);
-    expect(s.evidence[0]).toMatch(/after 3 minutes away/);
+    expect(s.label).toBe(STATES.UNKNOWN);
+  });
+
+  it('a speed signal judged on generic wpm is weaker than one judged on a personal baseline', () => {
+    const base = { type: 'speed_mismatch', subtype: 'too_slow', actualWpm: 90, baselineWpm: 225, readability: { grade: 'standard' } };
+    const personal = engineAt(fixedClock()).update({ reading: { ...base, reliability: { basis: 'personal_z' } } });
+    const generic = engineAt(fixedClock()).update({ reading: { ...base, reliability: { basis: 'generic' } } });
+    expect(generic.confidence).toBeLessThan(personal.confidence);
+    expect(generic.detectionBasis).toBe('generic');
+    expect(personal.detectionBasis).toBe('personal_z');
+  });
+
+  it('a speed signal without reliability keeps its old confidence', () => {
+    const s = engineAt(fixedClock()).update({ reading: { type: 'speed_mismatch', subtype: 'too_slow', actualWpm: 90, baselineWpm: 225, readability: { grade: 'standard' } } });
+    expect(s.detectionBasis).toBeUndefined();
   });
 
   it('takes the strongest assertion when several arrive together', () => {
@@ -340,7 +353,6 @@ describe('substate — additive, struggling-only', () => {
     const cases = [
       { type: 'speed_mismatch', subtype: 'too_slow', actualWpm: 90, baselineWpm: 225, readability: { grade: 'standard' } },
       { type: 'regression', subtype: 'fast_return', distance: 1 },
-      { type: 'blur_return', blurMs: 30000 },
       { type: 'response', subtype: 'incorrect' },
     ];
     for (const reading of cases) {
