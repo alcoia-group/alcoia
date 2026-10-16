@@ -4,6 +4,7 @@
 // page title, a page URL, or passage text. See diagnostics.html's header
 // comment and diag-log.js's for the reasoning.
 import { createDiagLog } from '../shared/diag-log.js';
+import { createDecisionLog, summarizeDecisions } from '../shared/decision-log.js';
 import { maskToken, relativeTime, escapeHtml } from './diagnostics-format.js';
 
 const $ = (id) => document.getElementById(id);
@@ -98,6 +99,33 @@ $('clearLogBtn').addEventListener('click', async () => {
 });
 
 renderLog();
+
+// ── Decisions on this device (local proxies, not accuracy) ───────────────
+const decisionLog = createDecisionLog();
+const pct = (v) => (v == null ? 'not enough yet' : `${Math.round(v * 100)}%`);
+async function renderDecisions() {
+  const sum = summarizeDecisions(await decisionLog.list());
+  const grid = $('decisionSummary');
+  grid.innerHTML = '';
+  const rows = [
+    ['Times it chose to ask or help', sum.allowed],
+    ['Times it held back', sum.withheld],
+    ['Questions and help shown', sum.shown],
+    ['You answered', sum.answered],
+    ['You closed without answering', sum.dismissed],
+    ['Share closed without answering', pct(sum.dismissRate)],
+    ['Times you told it you were struggling', sum.selfReports],
+    ['Of those, when it had not noticed', pct(sum.selfReportsWhileDetectorQuietRate)],
+  ];
+  for (const [label, value] of rows) {
+    const row = document.createElement('div');
+    row.className = 'kv-row';
+    row.innerHTML = `<span class="kv-key">${escapeHtml(label)}</span><span class="kv-val">${escapeHtml(String(value))}</span>`;
+    grid.appendChild(row);
+  }
+}
+$('clearDecisionsBtn').addEventListener('click', async () => { await decisionLog.clear(); renderDecisions(); });
+renderDecisions();
 
 // ── Developer tools (item 33) ──────────────────────────────────────────────
 // Shown only when sra_debug is on — moved here from the main popup, which a

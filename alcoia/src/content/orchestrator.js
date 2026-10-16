@@ -87,6 +87,7 @@ export async function createOrchestrator(deps) {
 
   let idleTimer = null;
   let interventionInFlight = false;
+  let lastLoggedLabel = null;
 
   /* Drains every detector and hands the batch over in one go, so the engine
    * sees a whole moment rather than a sequence of unrelated nudges. */
@@ -230,6 +231,18 @@ export async function createOrchestrator(deps) {
       learnerEstimate: host.learnerEstimateFor?.(currentEl) ?? null,
     });
 
+    // Local, content-free record of why the tool did or did not interrupt (see shared/decision-log.js).
+    try {
+      if (state.isSelfReported) host.logDecision?.({ kind: 'self_report', state: state.label, previousState: lastLoggedLabel });
+      if (state.label !== 'unknown') {
+        host.logDecision?.({
+          kind: 'decision', state: state.label, confidence: state.confidence, basis: state.detectionBasis ?? null,
+          action: decision.allow ? decision.action : 'hold', policyAction: decision.policyAction ?? null, reason: decision.reason,
+        });
+      }
+      lastLoggedLabel = state.label;
+    } catch (e) { /* logging never affects reading */ }
+
     if (s().debugEnabled) {
       host.log(`State: ${state.label} (conf ${state.confidence.toFixed(2)}) — ${decision.allow ? 'ACT: ' + decision.action : 'hold: ' + decision.reason}`);
     }
@@ -255,6 +268,7 @@ export async function createOrchestrator(deps) {
 
       // Budget is spent once, and only for something the reader actually saw.
       if (shown) {
+        try { host.logDecision?.({ kind: 'shown', state: state.label, confidence: state.confidence, basis: state.detectionBasis ?? null, action: decision.action, policyAction: decision.policyAction ?? null }); } catch (e) {}
         interventionPolicy.record(decision);
         try {
           host.sessionTracker.recordSignal(state.label, decision.action, decision.evidence[0] || '');
