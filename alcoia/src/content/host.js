@@ -415,6 +415,12 @@ export async function createHost(deps) {
   const diagLog = diagLogModule.createDiagLog();
   const decisionLogModule = await loadModule('src/shared/decision-log.js');
   const decisionLog = decisionLogModule.createDecisionLog();
+  // Ordinary web pages (no assignment): which ideas this reader grasps, kept on this device only. The module has no
+  // network code; see shared/device-concepts.js. Assigned readings use the account's server-side concept memory instead.
+  let deviceConcepts = null;
+  if (!assignmentId) {
+    try { deviceConcepts = (await loadModule('src/shared/device-concepts.js')).createDeviceConcepts(); deviceConcepts.load(); } catch (e) { deviceConcepts = null; }
+  }
   // The basis of the detection behind the most recently shown card, so a later dismissal or answer can be
   // attributed to it. Short internal tags only, never content.
   let lastShownBasis = null;
@@ -969,6 +975,12 @@ export async function createHost(deps) {
       let answeredCard = null;
       try { answeredCard = noteCardAnswered(record); } catch (e) {}
       try { noteStyleFollowed(record); } catch (e) {}
+      try {
+        // Only an independent correct answer counts for an idea (one given right after an explanation does not).
+        if (deviceConcepts && record.paragraphKey && !(record.correct === true && explanationPreceded(record.paragraphKey) !== false)) {
+          deviceConcepts.noteAnswer(record.paragraphKey, typeof record.correct === 'boolean' ? record.correct : null);
+        }
+      } catch (e) {}
       try { decisionLog.record({ kind: 'answered', basis: lastShownBasis, cardType: answeredCard }); } catch (e) {}
       try { orchestratorRef?.pumpSignals(record); } catch (e) {}
       try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
@@ -1707,11 +1719,15 @@ export async function createHost(deps) {
     // Stage B: the server's estimate for the knowledge unit of this paragraph element, or null when there is
     // none (no assignment, no account, learner memory off, or simply no evidence yet).
     learnerEstimateFor: (el) => {
-      if (!learnerEstimates.size) return null;
       try {
         const text = el ? (el.innerText || el.textContent || '').trim() : '';
-        const id = text ? knowledgeUnitModule.computeKnowledgeUnitId(text) : null;
-        return (id && learnerEstimates.get(id)) || null;
+        if (learnerEstimates.size) {
+          const id = text ? knowledgeUnitModule.computeKnowledgeUnitId(text) : null;
+          if (id && learnerEstimates.get(id)) return learnerEstimates.get(id);
+        }
+        // No account estimate: on an ordinary page, what this device has seen of the paragraph's ideas.
+        if (deviceConcepts && text) return deviceConcepts.estimateFor(computeIdentity(text).paragraphKey);
+        return null;
       } catch (e) { return null; }
     },
     logDecision: (entry) => {
@@ -1745,6 +1761,7 @@ export async function createHost(deps) {
       // file. orchestrator.js calls onParagraphRead synchronously,
       // unawaited (see its own comment on this call site), so this must
       // not become async from the caller's own point of view either.
+      try { if (deviceConcepts) deviceConcepts.noteRead(computeIdentity(text).paragraphKey, text); } catch (e) {}
       try { if (exposureReporter) { const id = computeIdentity(text).knowledgeUnitId; if (id) exposureReporter.note(id); } } catch (e) {}
       checkRetentionCandidate(text, paragraphIndex).catch(() => {});
       checkProbe(text, paragraphIndex).catch(() => {});
