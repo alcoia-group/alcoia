@@ -381,6 +381,11 @@ export async function createHost(deps) {
   // ── AI-call infrastructure ────────────────────────────────────────────
   const diagLogModule = await loadModule('src/shared/diag-log.js');
   const diagLog = diagLogModule.createDiagLog();
+  const decisionLogModule = await loadModule('src/shared/decision-log.js');
+  const decisionLog = decisionLogModule.createDecisionLog();
+  // The basis of the detection behind the most recently shown card, so a later dismissal or answer can be
+  // attributed to it. Short internal tags only, never content.
+  let lastShownBasis = null;
 
   // ── Automatic-intervention concurrency guard (Step 12A) ─────────────────
   // Shared between handleAsk() and checkRetentionCandidate() below — see
@@ -805,6 +810,7 @@ export async function createHost(deps) {
     fetchExplanation: (spanText) => fetchSummary(spanText, 'explain_more'),
     fetchGrading, // item 43 — free_recall/scenario only; question-card.js itself never calls this for recognition or adversarial
     onAnswered: (record) => {
+      try { decisionLog.record({ kind: 'answered', basis: lastShownBasis }); } catch (e) {}
       try { orchestratorRef?.pumpSignals(record); } catch (e) {}
       try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
       if (record.paragraphKey) sessionRecall.recordAnswered(record.paragraphKey, record.correct);
@@ -861,6 +867,7 @@ export async function createHost(deps) {
       });
     },
     onDismissed: () => {
+      try { decisionLog.record({ kind: 'dismissed', basis: lastShownBasis }); } catch (e) {}
       try { orchestratorRef?.interventionPolicy.recordDismissal(); } catch (e) {}
     },
     onSnooze: (durationMs, label) => { startSnooze(durationMs, label); },
@@ -1526,6 +1533,10 @@ export async function createHost(deps) {
         const id = text ? knowledgeUnitModule.computeKnowledgeUnitId(text) : null;
         return (id && learnerEstimates.get(id)) || null;
       } catch (e) { return null; }
+    },
+    logDecision: (entry) => {
+      if (entry?.kind === 'shown') lastShownBasis = entry.basis ?? null;
+      decisionLog.record(entry);
     },
     getCurrentParagraph: () => currentParagraph,
     setCurrentParagraph: (p) => { currentParagraph = p; },
