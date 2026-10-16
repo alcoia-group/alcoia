@@ -905,6 +905,26 @@ describe('onIntervention — the 12-callback surface, branching', () => {
     expect(await host.onIntervention({ action: 'ask' }, {}, null)).toBe(false);
   });
 
+  /* Settings: Interventions -> "Show intervention popups" (default on,
+   * view-only). Same gate shape as assistantEnabled above but narrower in
+   * meaning — see host.js's own comment at this check for what keeps
+   * running underneath. Covers both branches onIntervention dispatches to
+   * (nudge, ask) since both go through the one check. */
+  it('returns false immediately when showInterventions is false, spending nothing — both nudge and ask', async () => {
+    const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    chrome.runtime.sendMessage = sendMessage;
+    const { host } = await createHost(baseDeps({
+      settings: () => ({ assistantEnabled: true, backendUrl: '', showInterventions: false }),
+    }));
+    document.body.innerHTML = '<p id="t">Text</p>';
+    const target = document.getElementById('t');
+
+    expect(await host.onIntervention({ action: 'nudge' }, {}, target)).toBe(false);
+    expect(await host.onIntervention({ action: 'ask', evidence: [] }, {}, target)).toBe(false);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+  });
+
   it('a nudge renders without going through the AI-fetch pipeline at all', async () => {
     const sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     chrome.runtime.sendMessage = sendMessage;
@@ -1674,6 +1694,29 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
 
     const { host, setOrchestrator } = await createHost(assignmentDeps({ settings: () => ({ assistantEnabled: false }) }));
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+
+    host.onParagraphRead(text, 5000, 1);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
+  });
+
+  /* Settings: Interventions -> "Show intervention popups". Same gate shape
+   * as the assistantEnabled test just above, applied to the one other
+   * automatic-render path onIntervention's own dispatcher does not cover —
+   * checkRetentionCandidate is reached from onParagraphRead directly, not
+   * through onIntervention, so it needs this check applied separately. */
+  it('respects showInterventions: false, the same view-only switch onIntervention applies to every other automatic render path', async () => {
+    const text = 'A due paragraph, long enough to clear fetchQuestions\' own 120-character floor, gated behind showInterventions here.';
+    const knowledgeUnitId = await realKnowledgeUnitId(text);
+    stubQuestions();
+    const calls = [];
+    mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 0, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+
+    const { host, setOrchestrator } = await createHost(assignmentDeps({ settings: () => ({ assistantEnabled: true, showInterventions: false }) }));
     const engineModule = await import('../alcoia/src/content/intervention-policy.js');
     setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
 
@@ -2936,6 +2979,33 @@ describe('self-report (item 13a)', () => {
     expect(spy.mock.calls[0][0]).toBe(showSelfReportCard);
   });
 
+  /* Settings: Interventions -> "Show the self-report button" (default on,
+   * view-only, independent of "Show intervention popups"). content.js
+   * calls this once settings finish loading and again on every live
+   * change — see host.js's own comment at setShowSelfReportButton for why
+   * it is a separate function rather than folded into the showInterventions
+   * gate above: this button is reader-initiated, not automatic. */
+  it('setShowSelfReportButton(false) removes the trigger; setShowSelfReportButton(true) re-creates it', async () => {
+    const ui = createUIController({});
+    const ensureSpy = vi.spyOn(ui, 'ensureSelfReportTrigger');
+    const removeSpy = vi.spyOn(ui, 'removeSelfReportTrigger');
+    const { setShowSelfReportButton, showSelfReportCard } = await createHost(baseDeps({ ui }));
+    expect(ensureSpy).toHaveBeenCalledTimes(1); // construction-time call, unaffected by this new setting
+
+    setShowSelfReportButton(false);
+    expect(removeSpy).toHaveBeenCalledTimes(1);
+
+    setShowSelfReportButton(true);
+    expect(ensureSpy).toHaveBeenCalledTimes(2);
+    expect(ensureSpy.mock.calls[1][0]).toBe(showSelfReportCard);
+  });
+
+  it('setShowSelfReportButton never throws against a stub ui with neither method (same optional-chained shape as construction)', async () => {
+    const { setShowSelfReportButton } = await createHost(baseDeps({ ui: {} }));
+    expect(() => setShowSelfReportButton(false)).not.toThrow();
+    expect(() => setShowSelfReportButton(true)).not.toThrow();
+  });
+
   it('showSelfReportCard() (affordances 1 and 2) renders a standalone card with exactly the three self-report options', async () => {
     // Reset first — a stale, not-yet-removed card from an earlier test in
     // this shared jsdom document (closePopup()'s own removal is a 250ms
@@ -3594,6 +3664,16 @@ describe('scheduled quick checks (probes)', () => {
     const { host, setOrchestrator } = await createHost(baseDeps());
     const policy = await import('../alcoia/src/content/intervention-policy.js');
     setOrchestrator({ interventionPolicy: policy.createInterventionPolicy({}) });
+    for (let i = 0; i < 12; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    expect(asked).toHaveLength(0);
+  });
+
+  /* Settings: Interventions -> "Show intervention popups" — a quick check
+   * is still a card on screen, so it respects the same view-only switch as
+   * every other automatic render path (onIntervention, checkRetentionCandidate). */
+  it('does nothing while showInterventions is false, however much is read', async () => {
+    const { asked } = setup();
+    const host = await build({ settings: () => ({ assistantEnabled: true, showInterventions: false }) });
     for (let i = 0; i < 12; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
     expect(asked).toHaveLength(0);
   });
