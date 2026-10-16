@@ -1,7 +1,7 @@
 /* policy-profile.js: the learner's OWN adaptive profile, kept on their account so it follows them across devices.
  *
- *   GET  {profileUrl}  -> { cards: {type: {n, cooldownFactor, withhold}}, detectors: {key: {n, confidenceFactor}}, sensitivity }
- *   POST {eventsUrl}   { events: [{ scope: 'card'|'detector', key, shown, answered, dismissed, quickDismissed, correct, selfReports }] }
+ *   GET  {profileUrl}  -> { cards: {type: {n, cooldownFactor, withhold}}, detectors: {key: {n, confidenceFactor}}, sensitivity, styles: {mode: [{style, n, trials, rate}]} }
+ *   POST {eventsUrl}   { events: [{ scope: 'card'|'detector'|'style', key, shown, answered, dismissed, quickDismissed, correct, selfReports, helped, notHelped }] }
  *
  * The extension only REPORTS counts (what it showed, what the reader answered, turned away, or said it had missed) and
  * READS the adaptation the server derives from them. There is exactly one rule for what the counts mean and it lives on
@@ -11,8 +11,8 @@
  * policy then behaves as it always did (its own fixed starting values). Pending counts are kept in storage until they
  * are sent, so closing a tab does not lose them. Never throws: this must not become a failure on a reading path. */
 const PENDING_KEY = 'sra_policy_pending';
-const NUM = ['shown', 'answered', 'dismissed', 'quickDismissed', 'correct', 'selfReports'];
-export const EMPTY_PROFILE = Object.freeze({ cards: {}, detectors: {}, sensitivity: 1 });
+const NUM = ['shown', 'answered', 'dismissed', 'quickDismissed', 'correct', 'selfReports', 'helped', 'notHelped'];
+export const EMPTY_PROFILE = Object.freeze({ cards: {}, detectors: {}, sensitivity: 1, styles: {} });
 
 export function createPolicyProfileManager(opts = {}) {
   const fetchImpl = opts.fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
@@ -40,9 +40,9 @@ export function createPolicyProfileManager(opts = {}) {
   }
   const ready = loadPending();
   function merge(e) {
-    if (!e || (e.scope !== 'card' && e.scope !== 'detector') || typeof e.key !== 'string' || !e.key) return;
+    if (!e || (e.scope !== 'card' && e.scope !== 'detector' && e.scope !== 'style') || typeof e.key !== 'string' || !e.key) return;
     const id = `${e.scope}|${e.key}`;
-    const cur = pending.get(id) || { scope: e.scope, key: e.key, shown: 0, answered: 0, dismissed: 0, quickDismissed: 0, correct: 0, selfReports: 0 };
+    const cur = pending.get(id) || { scope: e.scope, key: e.key, shown: 0, answered: 0, dismissed: 0, quickDismissed: 0, correct: 0, selfReports: 0, helped: 0, notHelped: 0 };
     for (const f of NUM) if (Number.isInteger(e[f]) && e[f] > 0) cur[f] += e[f];
     pending.set(id, cur);
     if (pending.size > maxPending) pending.delete(pending.keys().next().value);
@@ -75,6 +75,7 @@ export function createPolicyProfileManager(opts = {}) {
         cards: data.cards && typeof data.cards === 'object' ? data.cards : {},
         detectors: data.detectors && typeof data.detectors === 'object' ? data.detectors : {},
         sensitivity: Number.isFinite(data.sensitivity) ? data.sensitivity : 1,
+        styles: data.styles && typeof data.styles === 'object' ? data.styles : {},
       };
       onChange(profile);
       return profile;
