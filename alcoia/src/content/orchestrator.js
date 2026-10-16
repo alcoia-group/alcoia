@@ -98,7 +98,13 @@ export async function createOrchestrator(deps) {
       if (sig) batch.push(sig);
     }
     const interactions = interactionSignals.signal();
-    if (interactions) batch.push(...interactions);
+    if (interactions) {
+      for (const sig of interactions) {
+        // A return after a long absence is its own retrieval check, not evidence of difficulty.
+        if (sig.type === 'blur_return') { try { host.onReturnCheck?.(sig.blurMs); } catch (e) {} continue; }
+        batch.push(sig);
+      }
+    }
     if (extra) batch.push(extra);
     if (!batch.length) return;
     stateEngine.update({ reading: batch });
