@@ -9,9 +9,16 @@ describe('getFocus', () => {
     let init;
     const fetchImpl = vi.fn(async (u, i) => { init = i; return { ok: true, json: async () => ({ unitIds: ['k1', 5, '', 'k2'] }) }; });
     const r = await createTeachingFocusManager({ fetchImpl, focusUrl: URL_, getSession: session('t') }).getFocus();
-    expect(r).toEqual({ ok: true, unitIds: ['k1', 'k2'] });
+    expect(r).toEqual({ ok: true, unitIds: ['k1', 'k2'], units: [{ unitId: 'k1', mode: 'normal' }, { unitId: 'k2', mode: 'normal' }], levelBias: null });
     expect(init.method).toBe('GET');
     expect(init.headers.Authorization).toBe('Bearer t');
+  });
+  it('passes the depth bias through only when it is a known word', async () => {
+    const mk = (levelBias) => createTeachingFocusManager({ fetchImpl: async () => ({ ok: true, json: async () => ({ unitIds: [], levelBias }) }), focusUrl: URL_, getSession: session('t') }).getFocus();
+    expect((await mk('recall')).levelBias).toBe('recall');
+    expect((await mk('application')).levelBias).toBe('application');
+    expect((await mk('free text from a server')).levelBias).toBeNull();
+    expect((await mk(undefined)).levelBias).toBeNull();
   });
   it('fails open with an empty list: no session, bad status, network error', async () => {
     expect((await createTeachingFocusManager({ fetchImpl: vi.fn(), focusUrl: URL_, getSession: session(null) }).getFocus()).unitIds).toEqual([]);

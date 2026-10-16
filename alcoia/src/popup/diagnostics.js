@@ -5,6 +5,7 @@
 // comment and diag-log.js's for the reasoning.
 import { createDiagLog } from '../shared/diag-log.js';
 import { createDecisionLog, summarizeDecisions } from '../shared/decision-log.js';
+import { createDeviceConcepts, estimateFromCounts } from '../shared/device-concepts.js';
 import { maskToken, relativeTime, escapeHtml } from './diagnostics-format.js';
 
 const $ = (id) => document.getElementById(id);
@@ -117,6 +118,12 @@ async function renderDecisions() {
     ['Times you told it you were struggling', sum.selfReports],
     ['Of those, when it had not noticed', pct(sum.selfReportsWhileDetectorQuietRate)],
   ];
+  // Which kinds of card you close without answering. The same counts, by kind, also go to your account (counts only)
+  // so what the system learns about how you like to be helped follows you to other devices.
+  const KIND_LABELS = { ask: 'Questions', explain: 'Explanations', repair: 'Corrections', retention: 'Reviews', probe: 'Quick checks', return_check: 'Where you left off', focus: 'Teacher-marked parts', session_recall: 'Session reviews' };
+  for (const [type, r] of Object.entries(sum.byCardType || {})) {
+    rows.push([`${KIND_LABELS[type] || type}: shown, closed without answering`, `${r.shown}, ${r.dismissed} (${pct(r.dismissRate)})`]);
+  }
   for (const [label, value] of rows) {
     const row = document.createElement('div');
     row.className = 'kv-row';
@@ -156,3 +163,24 @@ $('simStrugglingBtn').addEventListener('click', () => simulateState('struggling'
 $('simDriftingBtn')  .addEventListener('click', () => simulateState('drifting'));
 $('simSkimmingBtn')  .addEventListener('click', () => simulateState('skimming'));
 $('simOnPaceBtn')    .addEventListener('click', () => simulateState('on_pace'));
+
+// ── Ideas noticed on ordinary web pages (this device only) ───────────────
+const deviceConcepts = createDeviceConcepts();
+const IDEA_WORDS = { needs_help: 'worth another look', secure: 'answered well', unknown: 'not enough answers yet' };
+async function renderDeviceConcepts() {
+  const grid = $('deviceConceptList');
+  grid.innerHTML = '';
+  const rows = (await deviceConcepts.list()).filter((r) => r.enc > 0).slice(0, 30);
+  if (!rows.length) {
+    grid.innerHTML = '<div class="kv-row"><span class="kv-key">Nothing yet</span><span class="kv-val"></span></div>';
+    return;
+  }
+  for (const r of rows) {
+    const row = document.createElement('div');
+    row.className = 'kv-row';
+    row.innerHTML = `<span class="kv-key">${escapeHtml(r.label)}</span><span class="kv-val">${escapeHtml(IDEA_WORDS[estimateFromCounts(r)])}</span>`;
+    grid.appendChild(row);
+  }
+}
+$('clearDeviceConceptsBtn').addEventListener('click', async () => { await deviceConcepts.clear(); renderDeviceConcepts(); });
+renderDeviceConcepts();

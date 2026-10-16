@@ -484,12 +484,24 @@ export function createQuestionCard(deps = {}) {
       </div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
+        ${typeof context.onFeedback === 'function' ? '<span class="sra-q-helped"><span class="sra-q-helped-label">Did this help?</span> <button class="sra-btn sra-btn-secondary sra-q-helped-yes">Yes</button> <button class="sra-btn sra-btn-secondary sra-q-helped-no">Not really</button></span>' : ''}
         <button class="sra-btn sra-btn-secondary sra-q-skip">Close</button>
       </div>`;
 
     const dismiss = () => ui.closePopup(root, fingerprint);
     root.querySelector('.sra-close-btn').onclick = dismiss;
     root.querySelector('.sra-q-skip').onclick = dismiss;
+    // One optional tap saying whether the explanation helped. It only reports to the caller; nothing is required, the card
+    // can be closed without it, and a failing callback never affects the card.
+    const helpedBox = root.querySelector('.sra-q-helped');
+    if (helpedBox) {
+      const answer = (helped) => {
+        try { context.onFeedback(helped); } catch (e) { /* feedback is optional */ }
+        helpedBox.textContent = 'Thanks.';
+      };
+      root.querySelector('.sra-q-helped-yes').onclick = () => answer(true);
+      root.querySelector('.sra-q-helped-no').onclick = () => answer(false);
+    }
 
     ui.showPopup(root, context.anchorRect || null);
     return true;
