@@ -9,7 +9,7 @@ describe('getFocus', () => {
     let init;
     const fetchImpl = vi.fn(async (u, i) => { init = i; return { ok: true, json: async () => ({ unitIds: ['k1', 5, '', 'k2'] }) }; });
     const r = await createTeachingFocusManager({ fetchImpl, focusUrl: URL_, getSession: session('t') }).getFocus();
-    expect(r).toEqual({ ok: true, unitIds: ['k1', 'k2'] });
+    expect(r).toEqual({ ok: true, unitIds: ['k1', 'k2'], units: [{ unitId: 'k1', mode: 'normal' }, { unitId: 'k2', mode: 'normal' }] });
     expect(init.method).toBe('GET');
     expect(init.headers.Authorization).toBe('Bearer t');
   });

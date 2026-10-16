@@ -73,7 +73,7 @@ export function createOutcomesManager(opts = {}) {
   async function submit({
     paragraphIndex, struggled, questionId, correct, confidence, reached,
     substate, selfReported, source, selectedAnswer, explanationPrecededAttempt,
-    knowledgeUnitId, interventionId,
+    knowledgeUnitId, interventionId, questionLevel,
   } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
@@ -157,6 +157,11 @@ export function createOutcomesManager(opts = {}) {
     // knowledge-unit id is.
     if (typeof interventionId === 'string' && interventionId) {
       body.intervention_id = interventionId;
+    }
+    // The kind of question answered (the ladder's own names; the server maps them to the evidence levels). Only an
+    // answered question has one. Absent means recognition on the server.
+    if (['recognition', 'free_recall', 'scenario', 'adversarial'].includes(questionLevel) && body.question_id) {
+      body.question_level = questionLevel;
     }
 
     try {
