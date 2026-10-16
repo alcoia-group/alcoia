@@ -55,7 +55,7 @@ export async function createHost(deps) {
     esc,     // from ui-controller.js's own exports
     log,     // content.js's _log
     warn,    // content.js's _warn
-    settings, // () => { assistantEnabled, backendUrl }
+    settings, // () => { assistantEnabled, backendUrl, showInterventions }
     // Item S6/E4 follow-up. Both undefined/null for EVERY caller except
     // reading-bridge.js opening a document from the Assignments entry
     // point — content.js (every ordinary web page) never passes either,
@@ -700,6 +700,21 @@ export async function createHost(deps) {
   // context that predates it.
   try { ui.ensureSelfReportTrigger?.(showSelfReportCard); } catch (e) {}
 
+  /* Settings: Interventions -> "Show the self-report button" (default on),
+   * its own switch, independent of "Show intervention popups" above — this
+   * button is reader-initiated (affordance 2, see showSelfReportCard's own
+   * header), not an automatic interruption, so it stays reachable even with
+   * every automatic popup turned off. content.js calls this once settings
+   * finish loading, and again on every live change from the settings page.
+   * Idempotent either direction, same guard ensureSelfReportTrigger/
+   * removeSelfReportTrigger already use for the master-switch teardown. */
+  function setShowSelfReportButton(show) {
+    try {
+      if (show) ui.ensureSelfReportTrigger?.(showSelfReportCard);
+      else ui.removeSelfReportTrigger?.();
+    } catch (e) {}
+  }
+
   // ── Question layer ─────────────────────────────────────────────────────
   const responseModule = await loadModule('src/content/signals/response-signals.js');
   const cardModule     = await loadModule('src/content/question-card.js');
@@ -1260,6 +1275,11 @@ export async function createHost(deps) {
   async function checkRetentionCandidate(text, paragraphIndex) {
     if ((!dueKnowledgeUnits.size && !focusKnowledgeUnits.size) || !text) return;
     if (!s().assistantEnabled) return;
+    // "Show intervention popups" (settings: Interventions) — a view-only
+    // switch, same reasoning as onIntervention's own check below: detection,
+    // scheduling and reporting all keep running underneath, only the card
+    // itself never reaches the screen while this is off.
+    if (s().showInterventions === false) return;
     if (!orchestratorRef?.interventionPolicy) return;
 
     const identity = computeIdentity(text);
@@ -1380,6 +1400,9 @@ export async function createHost(deps) {
     if (probe.words < probe.nextAt || probe.busy) return;
     if (wordCount(text) < PROBE_MIN_PARAGRAPH_WORDS) return; // wait for a substantive paragraph
     if (!s().assistantEnabled || !orchestratorRef?.interventionPolicy) return;
+    // Same "Show intervention popups" view-only switch as onIntervention and
+    // checkRetentionCandidate — a quick check is still a card on screen.
+    if (s().showInterventions === false) return;
     if (probeBlocked()) return;
     const identity = computeIdentity(text);
     if (!identity.knowledgeUnitId) return;
@@ -1510,6 +1533,19 @@ export async function createHost(deps) {
     onQuizOfferEligible: (result) => showQuizOffer(result),
     onIntervention: async (decision, state, target, paragraphIndex) => {
       if (!s().assistantEnabled) return false;
+      // "Show intervention popups" (settings: Interventions, default on) —
+      // a view-only switch, same shape as the master switch's own comment
+      // above but narrower: the state engine, the intervention policy, and
+      // every signal feeding the instructor view and learner memory keep
+      // running exactly as before. Only the thing a reader would actually
+      // SEE (a nudge, a question card, an explain/repair card) is
+      // suppressed here, at the one dispatcher every automatic render path
+      // (ask/explain/repair/nudge) already goes through. Ambient signals
+      // that never reach this function at all (onStruggle's own
+      // submitOutcome, the self-report button, scroll kinematics) are
+      // completely unaffected — this is why it's independent of the
+      // self-report button's own visibility switch, not the same toggle.
+      if (s().showInterventions === false) return false;
       // Item 18: only the final render is suppressed — see snooze.js's own
       // header for why detection/coverage/the quiz gate keep running above.
       if (await snoozeControl.isActive()) return false;
@@ -1576,6 +1612,7 @@ export async function createHost(deps) {
     // reportSelfState() is exposed separately in case a caller ever needs
     // to submit one without the standalone card (none does today).
     showSelfReportCard,
+    setShowSelfReportButton,
     reportSelfState,
     // startSnooze/SNOOZE_OPTIONS used to also be exposed here for the
     // popup's old "Pause" button (a remote snoozeReminders message) —
