@@ -39,6 +39,8 @@ $('closeBtn').addEventListener('click', () => window.close());
 // ── Elements ────────────────────────────────────────────────────────────
 const assistantToggle          = $('assistantToggle');
 const comprehensionToggle      = $('comprehensionToggle');
+const showInterventionsToggle  = $('showInterventionsToggle');
+const showSelfReportToggle     = $('showSelfReportToggle');
 const selToggle                = $('selToggle');
 const highlightToggle          = $('highlightToggle');
 const highlightColorToggle     = $('highlightColorToggle');
@@ -64,6 +66,7 @@ const DEFAULTS = {
   sra_autohide: false, sra_autohide_timeout: 12,
   sra_pin_default: false, sra_debug: false, sra_enabled: true,
   sra_comprehension: true,
+  sra_show_interventions: true, sra_show_self_report: true,
   sra_dyslexia: false, sra_dyslexia_color: 'rgba(255,243,180,0.12)',
   sra_dark_mode: false,
   sra_pdf_takeover: true,
@@ -73,6 +76,8 @@ const DEFAULTS = {
 function paint(res) {
   assistantToggle.checked     = res.sra_enabled !== false;
   comprehensionToggle.checked = res.sra_comprehension !== false;
+  showInterventionsToggle.checked = res.sra_show_interventions !== false;
+  showSelfReportToggle.checked    = res.sra_show_self_report !== false;
   selToggle.checked           = res.sra_selection !== false;
   highlightToggle.checked     = res.sra_highlight_para !== false;
   highlightColorToggle.checked     = res.sra_highlight_color !== false;
@@ -118,6 +123,8 @@ function saveAndBroadcast() {
     sra_pin_default:      pinDefaultToggle.checked,
     sra_debug:            debugToggle.checked,
     sra_comprehension:    comprehensionToggle.checked,
+    sra_show_interventions: showInterventionsToggle.checked,
+    sra_show_self_report:   showSelfReportToggle.checked,
     sra_dyslexia:         dyslexiaToggle.checked,
     sra_dyslexia_color:   dyslexiaColorSelect.value,
     sra_dark_mode:        darkModeToggle.checked,
@@ -149,6 +156,8 @@ function saveAndBroadcast() {
         autohide: s.sra_autohide, autohideTimeout: s.sra_autohide_timeout,
         pinDefault: s.sra_pin_default, debug: s.sra_debug,
         comprehension: s.sra_comprehension,
+        showInterventions: s.sra_show_interventions,
+        showSelfReport: s.sra_show_self_report,
         dyslexia: s.sra_dyslexia, dyslexiaColor: s.sra_dyslexia_color,
         darkMode: s.sra_dark_mode,
       }, () => { if (chrome.runtime.lastError) { /* no content script here */ } });
@@ -211,7 +220,8 @@ highlightPersistToggle.addEventListener('change', () => {
   });
 });
 [selToggle, highlightToggle, highlightColorToggle, highlightSummarizeToggle,
- debugToggle, comprehensionToggle, darkModeToggle]
+ debugToggle, comprehensionToggle, darkModeToggle,
+ showInterventionsToggle, showSelfReportToggle]
   .forEach((el) => el.addEventListener('change', saveAndBroadcast));
 [autohideTimeout, dyslexiaColorSelect]
   .forEach((el) => el.addEventListener('change', saveAndBroadcast));
