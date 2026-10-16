@@ -29,6 +29,7 @@ export function sanitizeEntry(e, now) {
     basis: tag(e.basis, 20),
     action: tag(e.action, 20),
     policyAction: tag(e.policyAction, 20),
+    cardType: tag(e.cardType, 20), // which kind of card (ask, explain, repair, retention, probe, return_check, focus, ...)
     reason: tag(e.reason, 80),
     previousState: tag(e.previousState),
   };
@@ -90,6 +91,15 @@ export function summarizeDecisions(entries = []) {
     const d = dismissed.filter((e) => e.basis === basis).length;
     if (s > 0) basisRates[basis] = { shown: s, dismissed: d, dismissRate: ratio(d, s) };
   }
+  // Which kinds of card get turned away. Counted from the shown/answered/dismissed entries' cardType, so it works for
+  // every card, not only the ones the detector triggered.
+  const cardRates = {};
+  for (const e of entries) {
+    if (!e.cardType || !['shown', 'answered', 'dismissed'].includes(e.kind)) continue;
+    const r = (cardRates[e.cardType] ||= { shown: 0, answered: 0, dismissed: 0 });
+    r[e.kind] += 1;
+  }
+  for (const r of Object.values(cardRates)) r.dismissRate = ratio(r.dismissed, r.shown);
   return {
     decisionsLogged: decisions.length,
     allowed: allowed.length,
@@ -103,6 +113,7 @@ export function summarizeDecisions(entries = []) {
     selfReportsWhileDetectorQuiet: missedBefore.length, // missed-detection proxy
     selfReportsWhileDetectorQuietRate: ratio(missedBefore.length, selfReports.length),
     byBasis: basisRates,
+    byCardType: cardRates,
     note: 'Proxies from this device only, not accuracy. A dismissal or a self-report does not show what the reader needed.',
   };
 }
