@@ -81,6 +81,16 @@ async function boot() {
    * way to actually stop it was chrome://extensions. It is wired now. */
   let assistantEnabled   = true;
   let backendUrl         = BACKEND_DEFAULT;
+  // Settings: Interventions card — two independent, view-only switches, both
+  // on by default. showInterventions gates host.js's own automatic render
+  // paths (onIntervention/checkRetentionCandidate/checkProbe) directly,
+  // through the live settings() getter below — nothing else here reads it.
+  // showSelfReportButton controls only the persistent "?" trigger's own
+  // visibility; host.js's setShowSelfReportButton() is what actually
+  // creates/removes it, called once below once settings load and again on
+  // every live change.
+  let showInterventions    = true;
+  let showSelfReportButton = true;
   let selectionEnabled   = true;
   let highlightEnabled   = true;
   // Item 26: two independent controls, not one four-way mode — colour is a
@@ -268,7 +278,7 @@ async function boot() {
     warn: _warn,
     // Read live: the storage listener reassigns these at runtime. A
     // deliberately small surface — only what host.js's own code reads.
-    settings: () => ({ assistantEnabled, backendUrl }),
+    settings: () => ({ assistantEnabled, backendUrl, showInterventions }),
     // Item DC-2's passive prerequisite-gap flag — see host.js's own
     // submitOutcome call sites for where this is actually read.
     wasParagraphExplained: selectionExplain.wasParagraphExplained,
@@ -280,6 +290,7 @@ async function boot() {
     comprehensionMonitor, setPdfHandler, setPptxHandler, getCogState,
     getPrevParagraphText, setOrchestrator,
     showSelfReportCard, // item 13a — affordance 1 (Alt+C, below)
+    setShowSelfReportButton, // settings: Interventions -> "Show the self-report button"
     reportExplanationEvent, // item DC-2 follow-up — a no-op outside assignment context, see host.js's own gate
   } = hostApi;
   const hostCallbacks = hostApi.host;
@@ -365,6 +376,7 @@ async function boot() {
     sra_baseline_wpm: null, sra_dark_mode: false,
     sra_highlight_color: true, sra_highlight_summarize: false,
     sra_highlight_persist: true,
+    sra_show_interventions: true, sra_show_self_report: true,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     assistantEnabled   = res.sra_enabled !== false;
@@ -384,6 +396,9 @@ async function boot() {
     if (dyslexiaEnabled) dyslexiaUtils.applyDyslexiaCSS(dyslexiaColor);
     darkModeEnabled = !!res.sra_dark_mode;
     if (darkModeEnabled) applyDarkMode(true);
+    showInterventions    = res.sra_show_interventions !== false;
+    showSelfReportButton = res.sra_show_self_report !== false;
+    if (!showSelfReportButton) setShowSelfReportButton(false);
     settingsLoaded();
   });
 
@@ -1380,6 +1395,11 @@ async function boot() {
           : dyslexiaUtils.removeDyslexiaCSS();
       }
       if (msg.darkMode      !== undefined) { darkModeEnabled = !!msg.darkMode; applyDarkMode(darkModeEnabled); }
+      if (msg.showInterventions !== undefined) showInterventions = !!msg.showInterventions;
+      if (msg.showSelfReport !== undefined) {
+        showSelfReportButton = !!msg.showSelfReport;
+        setShowSelfReportButton(showSelfReportButton);
+      }
       sendResponse({ status: 'ok' }); return;
     }
     if (msg.type === 'debugToggle') {
