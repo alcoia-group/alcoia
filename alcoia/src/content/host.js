@@ -98,7 +98,12 @@ export async function createHost(deps) {
   function noteLearnerEstimate(e) {
     if (!e || typeof e.knowledgeUnitId !== 'string' || !e.knowledgeUnitId) return;
     if (e.action !== 'abstain' && e.action !== 'gather' && e.action !== 'intervene') return;
-    learnerEstimates.set(e.knowledgeUnitId, { level: e.level, confidence: e.confidence, action: e.action, kind: e.kind, reason: e.reason });
+    learnerEstimates.set(e.knowledgeUnitId, {
+      level: e.level, confidence: e.confidence, action: e.action, kind: e.kind, reason: e.reason,
+      // What the learner has shown on the CONCEPT this paragraph belongs to, across every reading (labels only).
+      ...(e.light === true ? { light: true } : {}),
+      ...(e.concept && typeof e.concept === 'object' ? { concept: e.concept } : {}),
+    });
   }
   let submitOutcome = () => {};
   if (assignmentId && getSession) {
@@ -229,6 +234,9 @@ export async function createHost(deps) {
       // args[3] is the intervention type. Anything but a scheduled quick check is a "normal" card: note when it
       // appeared so a quick check keeps clear of it (see PROBE_QUIET_MS).
       try { if (args[3] !== 'probe' && args[3] !== 'return_check') lastNormalCardAt = Date.now(); probeCovered(); } catch (e) { /* defined later; never blocks reporting */ }
+      // The card's kind, for this learner's own profile and the local log. args[6] names a kind the wire type cannot
+      // (a 'focus' card is an ordinary 'ask' on the wire).
+      try { noteCardShown(args[0], args[6] || (args[3] === 'ask' ? (args[5] === 'repair' ? 'repair' : args[5] === 'explain' ? 'explain' : 'ask') : args[3])); } catch (e) { /* never blocks reporting */ }
       return baseReport(...args);
     };
   }
@@ -358,7 +366,11 @@ export async function createHost(deps) {
   // assignment, so ordinary web pages never ask. It never creates a new kind of interruption:
   // checkRetentionCandidate below applies it through the same policy, guard, cooldown and
   // dismissal backoff as a due item, and skips it while the reader is struggling or drifting.
-  const focusKnowledgeUnits = new Set();
+  // unitId -> mode: 'normal' (a check), 'light' (one short check on an idea the learner knows but has not yet shown they
+  // retain), 'support' (an explanation first) or 'repair' (a direct correction). The server decides the mode from what
+  // THIS learner has shown on the concept across every reading; nothing here ever sees the instructor's wording.
+  const focusKnowledgeUnits = new Map();
+  let focusLevelBias = null; // 'recall' | 'application' | null, from the instructor's depth
   if (assignmentId && getSession) {
     const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
     const focusModule = await loadModule('src/shared/teaching-focus.js');
@@ -369,8 +381,28 @@ export async function createHost(deps) {
     });
     try {
       const result = await focusManager.getFocus();
-      if (result.ok) for (const id of result.unitIds) focusKnowledgeUnits.add(id);
+      if (result.ok) {
+        for (const u of result.units) focusKnowledgeUnits.set(u.unitId, u.mode);
+        focusLevelBias = result.levelBias || null;
+      }
     } catch (e) {}
+  }
+
+  // ── Exposure (ASSIGNED readings only) ────────────────────────────────────────────────────────────────────
+  // Which ideas the reader has MET is learned from ordinary reading, not only from questions: each paragraph the reader
+  // actually read is reported once per page load, as its content-hash id, in small batches. The server turns that into
+  // one encounter per idea and keeps no per-paragraph or per-time record. Needs an account with learner memory on.
+  let exposureReporter = null;
+  if (assignmentId && getSession) {
+    try {
+      const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
+      const exposureModule = await loadModule('src/shared/exposure.js');
+      exposureReporter = exposureModule.createExposureReporter({
+        getSession,
+        exposureUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/exposure`,
+        fetchImpl: proxyFetchModule.backgroundFetchImpl,
+      });
+    } catch (e) { /* exposure is an enhancement */ }
   }
 
   const {
@@ -383,6 +415,12 @@ export async function createHost(deps) {
   const diagLog = diagLogModule.createDiagLog();
   const decisionLogModule = await loadModule('src/shared/decision-log.js');
   const decisionLog = decisionLogModule.createDecisionLog();
+  // Ordinary web pages (no assignment): which ideas this reader grasps, kept on this device only. The module has no
+  // network code; see shared/device-concepts.js. Assigned readings use the account's server-side concept memory instead.
+  let deviceConcepts = null;
+  if (!assignmentId) {
+    try { deviceConcepts = (await loadModule('src/shared/device-concepts.js')).createDeviceConcepts(); deviceConcepts.load(); } catch (e) { deviceConcepts = null; }
+  }
   // The basis of the detection behind the most recently shown card, so a later dismissal or answer can be
   // attributed to it. Short internal tags only, never content.
   let lastShownBasis = null;
@@ -404,6 +442,134 @@ export async function createHost(deps) {
   // token/retry logic — see that file's own header.
   const backendClientModule = await loadModule('src/shared/backend-client.js');
   const { callBackend, installToken } = backendClientModule.createBackendClient({ getTokenUrl: tokenUrl, diagLog });
+
+  // ── The learner's own adaptive profile, the local log by card type, and the anonymous pool ─────────────────────
+  // What each kind of card (ask, explain, repair, retention, probe, return_check, focus, session_recall) did for THIS
+  // learner is counted and sent to their ACCOUNT (src/shared/policy-profile.js), so what the system learns about how
+  // they like to be helped follows them to any device and shapes the intervention policy (intervention-policy.js
+  // setAdaptation). Counts only: no page, text or time. The same events go into the local decision log with the card
+  // type, and, when the SERVER says the evidence pool is on, into anonymous daily counters (pool-counters.js).
+  const QUICK_DISMISS_MS = 4000;
+  const cardsShown = new Map(); // interventionId -> { type, at, state, basis }
+  let lastCardId = null;
+  let policyProfileManager = null;
+  let styleModule = null;
+  let poolReporter = null;
+  let adaptationTimer = null;
+  let visibilityHandler = null;
+  const profileRecord = (e) => { try { policyProfileManager?.record(e); } catch (err) {} };
+  const poolAdd = (metric, dimension) => { try { poolReporter?.add(metric, dimension, 1); } catch (err) {} };
+  function noteCardShown(interventionId, type) {
+    if (!interventionId || !type) return;
+    const card = { type, at: Date.now(), state: null, basis: null, logged: false };
+    cardsShown.set(interventionId, card);
+    if (cardsShown.size > 60) cardsShown.delete(cardsShown.keys().next().value);
+    lastCardId = interventionId;
+    profileRecord({ scope: 'card', key: type, shown: 1 });
+    poolAdd('card_shown', type);
+    // A detector-triggered card is logged once, by orchestrator.js's own 'shown' entry (which carries the detector's side),
+    // and gets its card type from here. Any other card (a review, a quick check, a focus card) has no such entry, so it is
+    // logged here once that has had its chance to arrive.
+    setTimeout(() => { if (!card.logged) { card.logged = true; try { decisionLog.record({ kind: 'shown', cardType: type }); } catch (err) {} } }, 0);
+  }
+  function noteCardAnswered(record) {
+    const c = cardsShown.get(record?.interventionId);
+    if (!c) return;
+    const correct = record.correct === true ? 1 : 0;
+    profileRecord({ scope: 'card', key: c.type, answered: 1, correct });
+    if (c.state) profileRecord({ scope: 'detector', key: `${c.state}:${c.basis ?? 'unknown'}`, answered: 1, correct });
+    poolAdd('card_answered', c.type);
+    cardsShown.delete(record.interventionId);
+    return c.type;
+  }
+  function noteCardDismissed(record) {
+    const c = cardsShown.get(record?.interventionId);
+    if (!c) return;
+    const quick = Date.now() - c.at < QUICK_DISMISS_MS ? 1 : 0;
+    profileRecord({ scope: 'card', key: c.type, dismissed: 1, quickDismissed: quick });
+    if (c.state) profileRecord({ scope: 'detector', key: `${c.state}:${c.basis ?? 'unknown'}`, dismissed: 1, quickDismissed: quick });
+    poolAdd('card_dismissed', c.type);
+    if (quick) poolAdd('card_quick_dismissed', c.type);
+    cardsShown.delete(record.interventionId);
+    return c.type;
+  }
+  // Called when a detector-triggered card has just been shown: ties it to the reading state that justified it.
+  function noteDetectorShown(state, basis) {
+    const c = cardsShown.get(lastCardId);
+    if (!c || !state) return;
+    c.state = state;
+    c.basis = basis ?? null;
+    profileRecord({ scope: 'detector', key: `${state}:${basis ?? 'unknown'}`, shown: 1 });
+  }
+  // The reader said they were struggling while the detector saw nothing: a missed detection (a proxy, not a measure).
+  function noteSelfReport(previousState) {
+    if (!previousState || ['on_pace', 'skimming', 'unknown'].includes(previousState)) profileRecord({ scope: 'detector', key: 'quiet', selfReports: 1 });
+  }
+  // WAYS OF EXPLAINING. Which style worked for this learner is learned from their own results: what they say ("Did this
+  // help?") and what happens next (a later question on the same passage, answered correctly or not). Counts go to their
+  // account profile and, anonymously, to the pool. Nothing is stored about the passage.
+  const styleFollow = new Map(); // paragraphKey -> 'mode:style' awaiting the next answered question on that passage
+  function pickExplanationStyle(mode) {
+    try {
+      const list = policyProfileManager?.getProfile?.().styles?.[mode];
+      return styleModule ? styleModule.chooseStyle(list) : null;
+    } catch (e) { return null; }
+  }
+  function noteStyleShown(mode, style, paragraphKey) {
+    const key = `${mode}:${style}`;
+    profileRecord({ scope: 'style', key, shown: 1 });
+    poolAdd('style_shown', key);
+    if (paragraphKey) {
+      styleFollow.set(paragraphKey, key);
+      if (styleFollow.size > 40) styleFollow.delete(styleFollow.keys().next().value);
+    }
+  }
+  function noteStyleFeedback(mode, style, helped) {
+    const key = `${mode}:${style}`;
+    profileRecord({ scope: 'style', key, [helped ? 'helped' : 'notHelped']: 1 });
+    poolAdd(helped ? 'style_helped' : 'style_not_helped', key);
+  }
+  function noteStyleFollowed(record) {
+    const key = record?.paragraphKey ? styleFollow.get(record.paragraphKey) : null;
+    if (!key) return;
+    styleFollow.delete(record.paragraphKey);
+    profileRecord({ scope: 'style', key, answered: 1, ...(record.correct === true ? { correct: 1 } : {}) });
+  }
+  // Generation that failed (a question, an explanation, a grading call), counted anonymously by kind.
+  function noteGenerationFailure(kind) { poolAdd('generation_failure', kind); }
+  try {
+    const sessionModule = await loadModule('src/shared/session.js');
+    const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
+    const profileModule = await loadModule('src/shared/policy-profile.js');
+    const poolModule = await loadModule('src/shared/pool-counters.js');
+    styleModule = await loadModule('src/shared/explanation-style.js');
+    const profileGetSession = getSession || sessionModule.createSessionManager().getSession;
+    policyProfileManager = profileModule.createPolicyProfileManager({
+      getSession: profileGetSession,
+      profileUrl: self.ALCOIA_CONFIG.LEARNER_POLICY_PROFILE_URL,
+      eventsUrl: self.ALCOIA_CONFIG.LEARNER_POLICY_EVENTS_URL,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
+      onChange: (p) => { try { orchestratorRef?.interventionPolicy.setAdaptation(p); } catch (err) {} },
+    });
+    poolReporter = poolModule.createPoolReporter({
+      callBackend,
+      fetchImpl: proxyFetchModule.backgroundFetchImpl,
+      statusUrl: self.ALCOIA_CONFIG.POOL_STATUS_URL,
+      countersUrl: self.ALCOIA_CONFIG.POOL_COUNTERS_URL,
+    });
+    // Counts left over from an earlier page are sent first, then the profile is read; neither blocks reading.
+    policyProfileManager.flush().then(() => policyProfileManager.load()).catch(() => {});
+    const flushAdaptation = () => { try { policyProfileManager.flush(); poolReporter.flush(); exposureReporter?.flush(); } catch (err) {} };
+    adaptationTimer = setInterval(flushAdaptation, 60_000);
+    visibilityHandler = () => { if (document.visibilityState === 'hidden') flushAdaptation(); };
+    try { document.addEventListener('visibilitychange', visibilityHandler); } catch (err) {}
+  } catch (e) { /* adaptation is an enhancement: without it the policy keeps its starting values */ }
+  function stopAdaptationSync() {
+    if (adaptationTimer) clearInterval(adaptationTimer);
+    adaptationTimer = null;
+    try { if (visibilityHandler) document.removeEventListener('visibilitychange', visibilityHandler); } catch (err) {}
+    visibilityHandler = null;
+  }
 
   // Item 38: bug backstop, not entitlement enforcement — see the project notes'
   // "Client-side AI-call rate limiting" section for the full reasoning.
@@ -490,7 +656,8 @@ export async function createHost(deps) {
   }
 
   async function fetchSummary(text, mode = 'tldr', context = '', opts = {}) {
-    const cacheKey = `${mode}:${text.slice(0, 80).trim()}`;
+    const style = typeof opts.style === 'string' && opts.style ? opts.style : null;
+    const cacheKey = `${mode}${style ? ':' + style : ''}:${text.slice(0, 80).trim()}`;
     if (_summaryCache.has(cacheKey)) {
       log(`Cache hit: ${mode}`);
       const cached = _summaryCache.get(cacheKey);
@@ -503,11 +670,13 @@ export async function createHost(deps) {
       log(`Fetching ${url} mode=${mode} len=${text.length}`);
       const body = { text: text.slice(0, 3500), mode };
       if (context) body.context = context.slice(0, 800);
+      if (style) body.style = style;
       const resp = await callBackend('summarize', url, body);
-      if (!resp.ok) { warn(`Server ${resp.status || ''} ${resp.error || ''}`); return null; }
+      if (!resp.ok) { warn(`Server ${resp.status || ''} ${resp.error || ''}`); if (resp.status !== 429) noteGenerationFailure(mode === 'repair' ? 'repair' : mode === 'relate' ? 'relate' : mode === 'explain_more' ? 'explain' : 'summarize'); return null; }
       const j = resp.data;
       if (!j) return null;
       const result = j.summary || j.result || null;
+      if (!result) noteGenerationFailure(mode === 'repair' ? 'repair' : mode === 'relate' ? 'relate' : mode === 'explain_more' ? 'explain' : 'summarize');
       if (result) {
         noteAssistance(text, opts.paragraphKey);
         _summaryCache.set(cacheKey, result);
@@ -548,6 +717,7 @@ export async function createHost(deps) {
     const resp = await callBackend('apiPost', questionsUrl(), body);
     if (!resp.ok) {
       log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
+      if (resp.status !== 429) noteGenerationFailure('questions');
       return [];
     }
     const j = resp.data;
@@ -573,7 +743,7 @@ export async function createHost(deps) {
   const gradingClientModule = await loadModule('src/shared/grading-client.js');
   const { fetchGrading } = gradingClientModule.createGradingClient({
     callBackend,
-    getGradeUrl: () => (s().backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/grade'),
+    getGradeUrl: () => (s().backendUrl || BACKEND_DEFAULT).replace(/\/api\/summarize\/?$/, '/api/check-answer'),
     checkBudget: checkAiCallBudget,
     log, warn,
   });
@@ -608,7 +778,10 @@ export async function createHost(deps) {
 
   // ── orchestrator reference — see this file's own header ───────────────
   let orchestratorRef = null;
-  function setOrchestrator(o) { orchestratorRef = o; }
+  function setOrchestrator(o) {
+    orchestratorRef = o;
+    try { o.interventionPolicy.setAdaptation(policyProfileManager?.getProfile()); } catch (e) {}
+  }
 
   // ── Self-report (item 13a) ──────────────────────────────────────────────
   // The "alcoia Evidence Base" research artifact's confusion/overload/
@@ -792,7 +965,11 @@ export async function createHost(deps) {
   // that decision, only supplies the merged history to decide it against.
   async function pickLevel(identity) {
     const quizEvidence = await readQuizEvidence(orchestratorRef?.documentKey?.() || null);
-    const wanted = engineModule.pickLevelForConcept(identity, [...responseSignals.history(), ...quizEvidence]);
+    let wanted = engineModule.pickLevelForConcept(identity, [...responseSignals.history(), ...quizEvidence]);
+    // Teaching Intent depth (assigned readings): the instructor can cap the ladder at recall or prefer scenario questions,
+    // but never lifts a learner past what their own answers earned (free_recall only becomes scenario).
+    if (focusLevelBias === 'recall' && (wanted === 'scenario' || wanted === 'adversarial')) wanted = 'free_recall';
+    else if (focusLevelBias === 'application' && wanted === 'free_recall') wanted = 'scenario';
     // Stage A: never ask the server for a level it has not said it can deliver. The ladder's own
     // decision is unchanged; only the request is clamped (see supportedQuestionLevels()).
     return supportedQuestionLevels().includes(wanted) ? wanted : 'recognition';
@@ -810,7 +987,16 @@ export async function createHost(deps) {
     fetchExplanation: (spanText) => fetchSummary(spanText, 'explain_more'),
     fetchGrading, // item 43 — free_recall/scenario only; question-card.js itself never calls this for recognition or adversarial
     onAnswered: (record) => {
-      try { decisionLog.record({ kind: 'answered', basis: lastShownBasis }); } catch (e) {}
+      let answeredCard = null;
+      try { answeredCard = noteCardAnswered(record); } catch (e) {}
+      try { noteStyleFollowed(record); } catch (e) {}
+      try {
+        // Only an independent correct answer counts for an idea (one given right after an explanation does not).
+        if (deviceConcepts && record.paragraphKey && !(record.correct === true && explanationPreceded(record.paragraphKey) !== false)) {
+          deviceConcepts.noteAnswer(record.paragraphKey, typeof record.correct === 'boolean' ? record.correct : null);
+        }
+      } catch (e) {}
+      try { decisionLog.record({ kind: 'answered', basis: lastShownBasis, cardType: answeredCard }); } catch (e) {}
       try { orchestratorRef?.pumpSignals(record); } catch (e) {}
       try { sessionTracker.recordSignal('response', record.subtype, record.span || ''); } catch (e) {}
       if (record.paragraphKey) sessionRecall.recordAnswered(record.paragraphKey, record.correct);
@@ -864,10 +1050,14 @@ export async function createHost(deps) {
         // occur in practice (dismiss() clears the record entirely) and for
         // any record produced before this item existed in a given session.
         interventionId: record.interventionId,
+        // Which rung of the ladder this answer was to, so recall and application evidence lands in its own dimension.
+        questionLevel: record.level,
       });
     },
-    onDismissed: () => {
-      try { decisionLog.record({ kind: 'dismissed', basis: lastShownBasis }); } catch (e) {}
+    onDismissed: (record) => {
+      let dismissedCard = null;
+      try { dismissedCard = noteCardDismissed(record); } catch (e) {}
+      try { decisionLog.record({ kind: 'dismissed', basis: lastShownBasis, cardType: dismissedCard }); } catch (e) {}
       try { orchestratorRef?.interventionPolicy.recordDismissal(); } catch (e) {}
     },
     onSnooze: (durationMs, label) => { startSnooze(durationMs, label); },
@@ -1137,7 +1327,8 @@ export async function createHost(deps) {
       // budget already refuses to ask about the same paragraph twice
       // automatically; a higher rung only comes up if this exact paragraph
       // was already tested via a review or the quiz earlier this session.
-      const level = await pickLevel(identity);
+      // A light check (the learner's own evidence on this concept says a short confirmation is enough) is one easy question.
+      const level = decision.light ? 'recognition' : await pickLevel(identity);
       const opts = level !== 'recognition' ? { level } : {};
 
       const questions = await fetchQuestions(text, opts);
@@ -1216,9 +1407,9 @@ export async function createHost(deps) {
    * the full duration of the generation call, released only in `finally`,
    * so a concurrent retrieval/explain/repair/retention generation can never
    * overlap this one. */
-  async function handleExplainOrRepair(kind, decision, state, target, paragraphIndex) {
-    const el = target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
-    const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
+  async function handleExplainOrRepair(kind, decision, state, target, paragraphIndex, textOverride) {
+    const el = textOverride ? null : (target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null));
+    const text = textOverride || (el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || ''));
     if (!text) return false;
 
     if (!automaticInterventionGuard.tryAcquire()) return false;
@@ -1228,7 +1419,10 @@ export async function createHost(deps) {
       // at how the ideas connect; any other explanation, and every repair, is unchanged.
       const relate = kind !== 'repair' && hasRelationCues(text);
       const mode = kind === 'repair' ? 'repair' : relate ? 'relate' : 'explain_more';
-      const generated = await fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey });
+      // The way of explaining is chosen from THIS learner's own results (their account profile), mostly the best so far and
+      // sometimes another so the order can change. Only explain and repair have styles; with no profile there is none.
+      const style = mode === 'relate' ? null : pickExplanationStyle(mode);
+      const generated = await fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey, style });
       if (!generated) return false;
 
       let anchorRect = null;
@@ -1246,7 +1440,9 @@ export async function createHost(deps) {
         knowledgeUnitId: identity.knowledgeUnitId,
         interventionId,
         ...(relate ? { badge: 'how the ideas connect' } : {}),
+        ...(style ? { onFeedback: (helped) => noteStyleFeedback(mode, style, helped) } : {}),
       });
+      if (shown && style) noteStyleShown(mode, style, identity.paragraphKey);
       if (shown) {
         // Step 12: same intervention-evidence contract as handleAsk, same
         // wire-level type 'ask' — interventions.type's own CHECK constraint
@@ -1308,8 +1504,22 @@ export async function createHost(deps) {
       paragraphKey: identity.paragraphKey,
       questionCardVisible: ui.hasVisibleQuestionCard(),
       kind: isFocus ? 'focus' : 'retention',
+      mode: isFocus ? focusKnowledgeUnits.get(identity.knowledgeUnitId) : undefined,
     });
     if (!decision.allow) return;
+
+    // A flagged concept the learner reliably does not know: help comes first (an explanation, or a direct correction
+    // when confident wrong answers dominate), through the same generation, guard and card as any other explanation.
+    if (isFocus && (decision.policyAction === 'explain' || decision.policyAction === 'repair')) {
+      const kind = decision.policyAction === 'repair' ? 'repair' : 'explain';
+      const shown = await handleExplainOrRepair(kind, decision, { signal: { text } }, null, paragraphIndex, text);
+      if (shown) {
+        orchestratorRef.interventionPolicy.record(decision);
+        focusKnowledgeUnits.delete(identity.knowledgeUnitId);
+        presentedRetentionUnits.add(identity.knowledgeUnitId);
+      }
+      return;
+    }
 
     // Step 12A: same shared guard handleAsk acquires — see that function's
     // own comment, and automatic-intervention-guard.js's header. This is
@@ -1320,7 +1530,8 @@ export async function createHost(deps) {
     // fetchQuestions() at once.
     if (!automaticInterventionGuard.tryAcquire()) return;
     try {
-      const level = await pickLevel(identity);
+      // A light check (a flagged idea the learner already knows) is one short, easy confirmation, never a stretch.
+      const level = decision.light ? 'recognition' : await pickLevel(identity);
       const opts = level !== 'recognition' ? { level } : {};
       const questions = await fetchQuestions(text, opts);
       if (!questions.length) return;
@@ -1345,7 +1556,7 @@ export async function createHost(deps) {
       if (shown) {
         orchestratorRef.interventionPolicy.record(decision);
         // A focus question is an ordinary 'ask': only a 'retention' answer moves a review schedule.
-        reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, isFocus ? 'ask' : 'retention', text);
+        reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, isFocus ? 'ask' : 'retention', text, undefined, isFocus ? 'focus' : 'retention');
         // Belt-and-suspenders alongside the policy's own paragraph-key dedup:
         // this specific knowledge unit has now been presented this session,
         // so it should not be attempted again even if a later paragraph
@@ -1398,7 +1609,11 @@ export async function createHost(deps) {
   );
   const probe = { words: 0, nextAt: PROBE_FIRST_WORDS, counted: new Set(), asked: 0, busy: false };
   const wordCount = (t) => (String(t || '').trim().match(/\S+/g) || []).length;
-  function probeCovered() { probe.words = 0; probe.nextAt = PROBE_EVERY_WORDS; }
+  // Quick checks are spaced by how THIS learner has responded to them (their profile on the account): a learner who keeps
+  // turning them away gets them further apart, one who engages gets them closer, and one who reliably turns them away
+  // gets none. Without a profile the spacing is the starting value.
+  const probeProfile = () => policyProfileManager?.getProfile?.().cards?.probe;
+  function probeCovered() { probe.words = 0; probe.nextAt = Math.round(PROBE_EVERY_WORDS * (probeProfile()?.cooldownFactor ?? 1)); }
 
   async function checkProbe(text, paragraphIndex) {
     if (!assignmentId || !getSession || !text) return;
@@ -1527,15 +1742,26 @@ export async function createHost(deps) {
     // Stage B: the server's estimate for the knowledge unit of this paragraph element, or null when there is
     // none (no assignment, no account, learner memory off, or simply no evidence yet).
     learnerEstimateFor: (el) => {
-      if (!learnerEstimates.size) return null;
       try {
         const text = el ? (el.innerText || el.textContent || '').trim() : '';
-        const id = text ? knowledgeUnitModule.computeKnowledgeUnitId(text) : null;
-        return (id && learnerEstimates.get(id)) || null;
+        if (learnerEstimates.size) {
+          const id = text ? knowledgeUnitModule.computeKnowledgeUnitId(text) : null;
+          if (id && learnerEstimates.get(id)) return learnerEstimates.get(id);
+        }
+        // No account estimate: on an ordinary page, what this device has seen of the paragraph's ideas.
+        if (deviceConcepts && text) return deviceConcepts.estimateFor(computeIdentity(text).paragraphKey);
+        return null;
       } catch (e) { return null; }
     },
     logDecision: (entry) => {
-      if (entry?.kind === 'shown') lastShownBasis = entry.basis ?? null;
+      if (entry?.kind === 'shown') {
+        lastShownBasis = entry.basis ?? null;
+        try { noteDetectorShown(entry.state, entry.basis); } catch (e) {}
+        const c = cardsShown.get(lastCardId);
+        if (c && !c.logged) { c.logged = true; entry = { ...entry, cardType: c.type }; }
+      }
+      if (entry?.kind === 'self_report') { try { noteSelfReport(entry.previousState); } catch (e) {} }
+      // The card's own 'shown' entry (with its kind) is written when the card is reported; this one adds the detector's side.
       decisionLog.record(entry);
     },
     getCurrentParagraph: () => currentParagraph,
@@ -1558,6 +1784,8 @@ export async function createHost(deps) {
       // file. orchestrator.js calls onParagraphRead synchronously,
       // unawaited (see its own comment on this call site), so this must
       // not become async from the caller's own point of view either.
+      try { if (deviceConcepts) deviceConcepts.noteRead(computeIdentity(text).paragraphKey, text); } catch (e) {}
+      try { if (exposureReporter) { const id = computeIdentity(text).knowledgeUnitId; if (id) exposureReporter.note(id); } } catch (e) {}
       checkRetentionCandidate(text, paragraphIndex).catch(() => {});
       checkProbe(text, paragraphIndex).catch(() => {});
     },
@@ -1649,6 +1877,7 @@ export async function createHost(deps) {
     // called anywhere today — the content script lives as long as the
     // page, same as that one.
     stopRetentionRefresh,
+    stopAdaptationSync,
     fetchSummary,
     fetchQuestions,
     fetchGrading,
