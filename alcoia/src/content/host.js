@@ -370,6 +370,7 @@ export async function createHost(deps) {
   // retain), 'support' (an explanation first) or 'repair' (a direct correction). The server decides the mode from what
   // THIS learner has shown on the concept across every reading; nothing here ever sees the instructor's wording.
   const focusKnowledgeUnits = new Map();
+  let focusLevelBias = null; // 'recall' | 'application' | null, from the instructor's depth
   if (assignmentId && getSession) {
     const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
     const focusModule = await loadModule('src/shared/teaching-focus.js');
@@ -380,7 +381,10 @@ export async function createHost(deps) {
     });
     try {
       const result = await focusManager.getFocus();
-      if (result.ok) for (const u of result.units) focusKnowledgeUnits.set(u.unitId, u.mode);
+      if (result.ok) {
+        for (const u of result.units) focusKnowledgeUnits.set(u.unitId, u.mode);
+        focusLevelBias = result.levelBias || null;
+      }
     } catch (e) {}
   }
 
@@ -906,7 +910,11 @@ export async function createHost(deps) {
   // that decision, only supplies the merged history to decide it against.
   async function pickLevel(identity) {
     const quizEvidence = await readQuizEvidence(orchestratorRef?.documentKey?.() || null);
-    const wanted = engineModule.pickLevelForConcept(identity, [...responseSignals.history(), ...quizEvidence]);
+    let wanted = engineModule.pickLevelForConcept(identity, [...responseSignals.history(), ...quizEvidence]);
+    // Teaching Intent depth (assigned readings): the instructor can cap the ladder at recall or prefer scenario questions,
+    // but never lifts a learner past what their own answers earned (free_recall only becomes scenario).
+    if (focusLevelBias === 'recall' && (wanted === 'scenario' || wanted === 'adversarial')) wanted = 'free_recall';
+    else if (focusLevelBias === 'application' && wanted === 'free_recall') wanted = 'scenario';
     // Stage A: never ask the server for a level it has not said it can deliver. The ladder's own
     // decision is unchanged; only the request is clamped (see supportedQuestionLevels()).
     return supportedQuestionLevels().includes(wanted) ? wanted : 'recognition';
