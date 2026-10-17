@@ -11,7 +11,7 @@ Alcoia is a browser extension that notices when a reader has stopped following a
 short question about the passage instead of summarizing it. It does not use a camera, does not
 track eye movement, and does not build a profile of what you read. It is for anyone reading long
 material online who wants to retain it: students, researchers, habitual skimmers. The client is
-open source so the privacy claim above can be checked against the code, not taken on trust.
+open source so the privacy claim above can be checked against the code.
  
 ## Install 
 
