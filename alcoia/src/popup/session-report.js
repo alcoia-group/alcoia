@@ -55,7 +55,7 @@ function renderReport(session) {
           ${txt}
         </div>`;
       }).join('')
-    : '<p style="color:var(--muted);font-style:italic;font-size:12px">No struggle signals this session. Nice reading.</p>';
+    : '<p style="color:var(--muted);font-style:italic;font-size:12px">No struggle signals this session.</p>';
 
   const dateStr = session.startedAt ? new Date(session.startedAt).toLocaleString([], { dateStyle:'medium', timeStyle:'short' }) : '—';
   const pageTitle = (session.title || session.url || '').slice(0, 80);
