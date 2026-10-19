@@ -50,19 +50,25 @@ alcoia watches how you read (pace against text difficulty and your own baseline,
 selection, tab focus) using only browser reading signals, no camera, and asks a retrieval question when
 it detects struggling or dense-text skimming. A wrong answer gets an explanation with 2-4 key terms
 highlighted; a correct one gets confirmation and nothing else. It can also generate on-demand
-summaries, speak paragraphs aloud, and adapt its visual presentation.
+summaries and adapt its visual presentation (dark mode, dyslexia mode).
 
 The extension supports:
 - **Ordinary web pages** (articles, documentation, Wikipedia, etc.): full detection, questions,
   the quiz, coverage tracking.
-- **Local PDF and PPTX files**, opened from your computer: text extraction and the manual `Alt+S`
-  summary work. **Detection, retrieval questions, and the quiz do not reach these formats yet**;
-  they run on a separate paragraph model the signal pipeline can't see. See
-  `src/content/pdf-handler.js` and `src/content/pptx-handler.js`.
+- **PDF files** (local files, and PDFs linked from the web if you turn that on) open in alcoia's
+  own viewer, where the same detection and question pipeline runs through
+  `src/pdf-viewer/reading-bridge.js`.
+- **Local PPTX files**: text extraction and the manual `Alt+S` summary work. Detection and
+  questions do not run in the PowerPoint viewer. See `src/content/pptx-handler.js`.
+- **Assigned readings and class invites** (Word, PowerPoint and PDF documents from an instructor)
+  open on the workspace site (`workspace.alcoia.app`), where the extension runs on the page like on
+  any article. The popup's Assignments page lists them and starts the handoff.
 
 Passage text is sent to a backend server (a separate repository, not part of this one) to generate
-questions, explanations and summaries. Nothing else: no gaze data, because there is none, and no
-reading history stored server-side. See [Privacy](#privacy).
+questions, explanations and summaries. In an assigned reading, answers are also reported to the
+server as class outcomes, and a signed-in account has learner memory switched on unless it is
+turned off. There is no gaze data, because there is none, and the server keeps no browsing history.
+See [Privacy](#privacy) and the published privacy policy for the exact data flows.
 
 ---
 
@@ -120,32 +126,32 @@ above is a plain, inspectable rule over measured values.
 |---|---|
 | **Dark Mode** | Themes the popup UI and in-page overlays. Toggle in the popup header |
 | **Reading Map** | Collapsible sidebar: progress, a heading minimap, an event log. `Alt+M` |
-| **Focus Ruler** | Dims everything above and below a band that follows your cursor, falling back to a fixed reading-line heuristic when the cursor hasn't moved recently. `Alt+F` |
 | **Paragraph highlight** | The paragraph that triggered an action is briefly outlined |
-
-### Reading personas
-Four presets that set several toggles at once, from the popup's **Reading Mode** section:
-
-| Persona | What it sets |
-|---|---|
-| **Research** | selection, paragraph highlight, comprehension, focus ruler, pin popups open |
-| **Study** | comprehension, read-aloud, autohide after 10s |
-| **Casual** | selection only, autohide after 6s |
-| **Speed** | focus ruler, autohide after 4s, comprehension off |
 
 ### Accessibility
 | Feature | Description |
 |---|---|
 | **Dyslexia Mode** | Verdana/Arial, 2x line height, wider letter/word spacing, left alignment, optional colour overlay |
-| **Bionic Reading** | Bolds the first ~45% of each word as a visual anchor |
-| **Read Aloud (TTS)** | Web Speech API, sentence by sentence, current word highlighted. `Alt+T` |
+
+Text-to-speech, the focus ruler, bionic reading and the reading-mode presets were removed from the
+product. They are not in the code and have no shortcut.
+
+### Learning features (signed-in accounts and assigned readings)
+| Feature | Description |
+|---|---|
+| **Explanation styles** | Explanations and repairs come in a closed set of layouts (example first, analogy, step by step, scenario, plain definition, contrast). The extension tries them, an optional "Did this help?" tap and the next answer feed a per-account preference (`src/shared/explanation-style.js`, `policy-profile.js`) |
+| **Learner estimates and retention** | For assigned readings, the server's per-passage estimate can hold back or re-type a question, and passages due for review come back later (`learner-estimates.js`, `retention.js`) |
+| **Return check** | After a long absence from a passage the extension offers one quick question instead of treating the absence as struggle |
+| **Ideas on ordinary web pages (device only)** | A capped list of up to 400 idea labels with right/wrong counts, kept in local storage, never sent anywhere, clearable on the diagnostics page (`src/shared/device-concepts.js`) |
+| **Decision log (device only)** | A capped, content-free log of what the policy decided, used for the diagnostics summary. Never sent (`src/shared/decision-log.js`) |
+| **Evidence-pool counters** | Anonymous counters about how cards were received, sent for signed-in accounts by the server's evidence pool (`pool-counters.js`; see the server's `docs/evidence-pool-design.md`) |
 
 ### Document support
 | Format | What works |
 |---|---|
 | **Web pages** | Everything above |
-| **Local PDF** | `file://*.pdf` is redirected to a bundled PDF.js viewer; text extraction and `Alt+S` summaries work. No detection or questions, see [Overview](#overview) |
-| **Local PPTX** | Same shape as PDF, via a bundled JSZip-based viewer |
+| **PDF** | Local `file://*.pdf` files (and, if enabled in Settings, PDFs linked from the web) open in a bundled PDF.js viewer with detection and questions |
+| **Local PPTX** | Opens in a bundled JSZip-based viewer. Text extraction and `Alt+S` summaries work; no detection or questions |
 
 ---
 
@@ -171,9 +177,9 @@ cannot measure, and were the previously-removed camera classifier's vocabulary.
   faster than their difficulty warrants; the personal baseline adapts to a naturally fast
   professional reading pace so it doesn't false-trigger.
 - **Students**: reading calibration sets a personal WPM baseline; the quiz and receipt give
-  something to review after the fact; Dyslexia Mode and bionic reading are available if needed.
-- **Dyslexic readers**: turn on Dyslexia Mode in the Accessibility tab, font, spacing and colour
-  overlay adjust immediately; Focus Ruler helps with losing a line; TTS gives a parallel channel.
+  something to review after the fact; Dyslexia Mode is available if needed.
+- **Dyslexic readers**: turn on Dyslexia Mode in Settings (Reading aids); font, spacing and colour
+  overlay adjust immediately.
 - **Non-native speakers / language learners**: AI responses come back in the same language as the
   passage; backtrack detection catches sentences that needed a second read.
 - **Researchers / academics**: difficulty scoring accounts for genuinely dense material rather than
@@ -243,10 +249,16 @@ calls:
 
 ```
 POST /api/token          issues the opaque per-install token every other call must carry
-POST /api/summarize      { text, mode, context? } -> { summary }
-POST /api/questions      { text, count } -> { questions: [...] }
+POST /api/summarize      { text, mode, context?, style? } -> { summary }
+POST /api/questions      { text, count, level?, ... } -> { questions: [...] }
+POST /api/check-answer   judges free-text answers for the free_recall and scenario levels
 POST /api/receipt/sign   signs a reader-built receipt
 ```
+
+Signed-in accounts and assigned readings also use the account, class, outcome, retention, policy
+profile and evidence-pool routes. `src/shared/config.js` lists every URL the extension calls, and
+the server repository's route files are the contract. `QUESTION_LEVELS_SUPPORTED` in that file
+names the question levels the extension will request.
 
 **Every AI call carries the install token** (`X-Alcoia-Install-Token` header) issued by
 `/api/token` and stored locally; a 401/403 clears it and a fresh one is requested on the next call.
@@ -256,23 +268,20 @@ See `../docs/ARCHITECTURE.md`'s Access control section for the full mechanism.
 
 ```
 POST /api/auth/magic-link                      { email, kind: 'extension' } -> sends the email
-POST /api/auth/extension-session/exchange       { code } -> { token, email, expires }
+POST /api/auth/extension-session/exchange       { code } -> { sessionToken, email, kind, expiresAt }
 ```
 
-The install token above is unrelated to this and unaffected by it — free features never need an
-account. `POST /api/auth/magic-link`'s exact request shape is ASSUMED (see
-`src/shared/session.js`'s own header); the exchange endpoint's path is the one thing
-`SERVER-ARCHITECTURE.md` §4 names explicitly.
+The install token above is unrelated to this and unaffected by it. Free features never need an
+account.
 
-The reader never types a code into this extension. The Phase 1 landing page (`alcoiaWeb`, a
-separate repo) verifies the emailed link, gets a one-time code from the exchange flow above, and
-hands it to this extension via `chrome.runtime.sendMessage(EXTENSION_ID, { code })` —
+The reader never types a code into this extension. The sign-in page on the marketing site
+(`alcoiaWeb`, a separate repo) verifies the emailed link, gets a one-time code from the server and
+hands it to this extension via `chrome.runtime.sendMessage(EXTENSION_ID, { code })`.
 `background.js`'s `chrome.runtime.onMessageExternal` listener is the only thing that can receive
 that, and only from the origin declared in `manifests/base.json`'s `externally_connectable`
-(currently a **dev value**, `http://localhost:8080` — see `build.mjs`'s own comment on that entry
-and `src/shared/config.js`'s `WEB_APP_ORIGIN` for what has to change together before a real
-launch. `alcoia.app` itself is live as of this writing, so this is now a matter of pointing the
-existing constant and manifest entry at it, not waiting on the domain.)
+(`https://alcoia.app/*`). `src/shared/config.js`'s `WEB_APP_ORIGIN` must match that manifest entry;
+see `build.mjs` for why they are not wired together. A developer testing sign-in against a local
+marketing site changes both by hand.
 
 ---
 
@@ -285,9 +294,11 @@ existing constant and manifest entry at it, not waiting on the domain.)
 
 ### Optional: reading calibration
 
-In the popup's **Reading** tab, **Measure my reading speed** shows a passage blurred until you
-start; read it at your natural pace and press the button when you finish. This sets your personal
-WPM baseline, kept per language, and persists until you run it again. No camera involved.
+The content script can run a self-paced calibration (`startReadingCalibration`,
+`src/content/reading-calibration.js`): a passage blurred until you start, read at your natural
+pace. It sets a personal WPM baseline, kept per language. No camera involved. **Nothing in the
+popup currently sends that message, so there is no button for it**; the baseline otherwise builds
+from ordinary reading.
 
 ### Day-to-day
 
@@ -313,11 +324,10 @@ WPM baseline, kept per language, and persists until you run it again. No camera 
 | Shortcut | Action |
 |---|---|
 | `Alt+S` | Summarise the paragraph at the viewport centre |
-| `Alt+T` | Toggle Read Aloud (TTS) |
-| `Alt+F` | Toggle Focus Ruler |
 | `Alt+M` | Toggle Reading Map sidebar |
 | `Alt+N` | Open Saved Notes page |
 | `Alt+G` | Open Session Report page |
+| `Alt+C` | Self-report how reading is going |
 | `Alt+I` | Show the reading receipt |
 | `Alt+R` | Review what you've read this session |
 | `Esc` | Close the active popup |
@@ -327,7 +337,7 @@ WPM baseline, kept per language, and persists until you run it again. No camera 
 | `Alt+4` | Simulate: skimming state |
 | `Alt+5` | Simulate: on-pace state |
 
-All shortcuts are listed in the popup for discoverability.
+Shortcuts are handled in `src/content/content.js`.
 
 ---
 
@@ -335,7 +345,7 @@ All shortcuts are listed in the popup for discoverability.
 
 Settings live in `chrome.storage.local` under `sra_*` keys and survive browser restarts, changed
 from the popup. Rather than duplicate the full list here (the drift risk that made this file stale
-the first time), **the diagnostics page** (popup > Developer section) shows every local `sra_*`
+the first time), **the diagnostics page** (popup Settings > Diagnostics) shows every local `sra_*`
 setting live, plus install-token status and a capped log of silently-failed AI calls. A few of the
 more load-bearing keys: `sra_enabled` (master on/off), `sra_backend_url`, `sra_comprehension`,
 `sra_baseline_wpm_by_lang` (per-language WPM baseline), `sra_snooze_until`, `sra_install_token`.
@@ -347,18 +357,6 @@ more load-bearing keys: `sra_enabled` (master on/off), `sra_backend_url`, `sra_c
 ### Dyslexia Mode
 Self-declared toggle in the **Accessibility** tab. Applies a high-legibility font, 2.0 line height,
 wider letter/word spacing, left alignment, and an optional colour overlay.
-
-### Bionic Reading
-Sub-option under Dyslexia Mode. Bolds the first ~45% of each word as a visual anchor.
-
-### Focus Ruler
-A dim-band follows your cursor position when it's moved recently and is over body text; otherwise
-it falls back to a fixed reading-line heuristic, the same anchor the paragraph tracker uses to
-decide which paragraph is active. Off by default. `Alt+F`.
-
-### Read Aloud (TTS)
-Web Speech API, browser-native, works offline. Speaks the triggered paragraph sentence by sentence
-with the current word highlighted. `Alt+T`.
 
 ### Dark Mode
 Themes the popup UI and every in-page overlay. Preference persists across sessions.
@@ -406,10 +404,6 @@ Goes in `src/content/signals/`, exporting `{ update(), signal() }`.
 
 ### Changing the AI model
 Lives entirely in the separate backend repository. The extension is model-agnostic.
-
-### Adding a new reading persona
-In `popup.js`, add a key to the `MODES` constant with the desired toggle values, then a
-corresponding `<button class="mode-btn" data-persona="...">` in `popup.html`.
 
 ### Extension permissions explained
 
