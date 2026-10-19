@@ -468,7 +468,7 @@ export function createQuestionCard(deps = {}) {
 
     const badgeText = typeof context.badge === 'string' && context.badge.trim()
       ? context.badge.trim().slice(0, 40)
-      : (isRepair ? "let's clear this up" : 'a closer look');
+      : (isRepair ? 'clearing this up' : 'a closer look');
     const evidenceHtml = context.evidence && context.evidence.length
       ? `<div class="sra-q-evidence">${esc(context.evidence[0])}.</div>`
       : '';
