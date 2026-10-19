@@ -77,7 +77,6 @@ Commits in alcoia (extension):
 Philosophy: a comparison is for noticing, not for judging. It uses the same coarse bands and small-group rules as everything else, says plainly that the two runs are different students, and shows learners only their own history.
 
 ## Agreed but not built yet (so nothing is claimed that does not exist)
-- A struggle profile that carries *how* a student struggles across readings, and a concept layer that links ideas between readings.
 - A passive "drifting" signal (private to the policy, never shown to an instructor).
-- Scenario or application questions inline (they need a new validity rule that is not a quote).
-- Making the teaching-recommendations switch follow the instructor's account instead of one browser.
+- Making the teaching-recommendations switch follow the instructor's account instead of one browser (still stored in the browser).
+(Built since this report was written, so removed from this list: the struggle profile and concept layer in learner analytics, and inline free recall, scenario and adversarial questions with their own validity rules; see the project notes in the server repository.)

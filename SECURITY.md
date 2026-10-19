@@ -1,7 +1,6 @@
 # Security Policy
 
-This repository is public for transparency and verification (see the "About this repository"
-section of `README.md`). It does not solicit external contributions, but a private channel to
+This repository is public for transparency and verification (see `README.md`). It does not solicit external contributions, but a private channel to
 report a security issue is needed regardless — filing a vulnerability as a public GitHub issue is
 not appropriate for a product that handles reading data and is sold to institutions.
 
@@ -32,8 +31,7 @@ committed to one. Do not invent a number here.
 
 ## What is out of scope
 
-- The API server. It lives in a separate private repository — see `the project notes`'s "Scope" section —
+- The API server. It lives in a separate private repository — see the Scope table in `docs/ARCHITECTURE.md` —
   and a report about it should go through that repository's own channel once one exists, not this
   file.
-- Findings that require the AGPL-3.0-licensed the project notes defect list already published in this repo
-  — those are known and tracked, not undisclosed vulnerabilities.
+- Findings that are already described as known limitations in this repository's documentation.
