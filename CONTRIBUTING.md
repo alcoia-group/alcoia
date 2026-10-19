@@ -5,7 +5,7 @@ Read this before opening an issue or a pull request — it will save you time ei
 ## The honest starting point
 
 This repository is public for transparency and verification, not because it's actively looking
-for contributors (see [`README.md`](README.md#why-only-the-extension-is-public)). Issues and pull
+for contributors (the API server is a separate private repository; see the Scope table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)). Issues and pull
 requests are read, but they are not actively triaged on a schedule, and an unsolicited pull
 request — even a good one — is not likely to be merged quickly, if at all. That's not a
 reflection on the contribution; it's a statement about how much maintainer time exists right now.
@@ -29,8 +29,7 @@ Open a GitHub Issue. Include:
 
 Also a GitHub Issue, labelled as a feature request if that label exists. State the problem you're
 trying to solve before the solution you have in mind — the product has fairly specific opinions
-about what it will and won't do (see [`the project notes`](the project notes) §1, "Decisions — do not
-re-litigate"), so a suggestion that lands on an already-settled question will likely be closed
+about what it will and won't do (see the hard invariants in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)), so a suggestion that lands on an already-settled question will likely be closed
 with a pointer to that section rather than a lengthy debate.
 
 ## Submitting a pull request
@@ -52,10 +51,10 @@ with a pointer to that section rather than a lengthy debate.
 
 ## Code style
 
-[`the project notes`](the project notes) is the actual style guide and repository map for this project — read it
-before writing code, not after review comments ask you to. It covers module conventions, the
-signal/detector registration pattern, storage-key naming, and the product's hard invariants
-(§4), several of which are enforced by tests, not just convention.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the repository map and lists the product's hard
+invariants and conventions; read it before writing code. Several invariants are enforced by tests. (The
+maintainers also keep a longer internal engineering file, `the project notes`, which is not published in this
+repository.)
 
 ## What happens to your contribution
 
@@ -66,7 +65,7 @@ your contribution is offered under that license. There is no separate CLA.
 ## What not to contribute
 
 A few things will be declined regardless of how well they're implemented, because they conflict
-with hard product invariants (see `the project notes` §4):
+with hard product invariants (see the hard invariants in `docs/ARCHITECTURE.md`):
 
 - **Anything that reintroduces camera or webcam access.** The gaze-tracking path was removed
   deliberately, not left unfinished — no `getUserMedia` call belongs anywhere in this codebase,
@@ -77,7 +76,7 @@ with hard product invariants (see `the project notes` §4):
   generate a question or explanation — is documented everywhere it applies; a new one needs the
   same treatment, not a quiet addition.
 - **Any accuracy claim, percentage, or benchmark figure**, anywhere — code, comments, UI copy, or
-  docs. See `the project notes` §6 for why; the short version is that every figure that has ever existed
+  docs. See the Claims discipline section of `docs/ARCHITECTURE.md` for why; the short version is that every figure that has ever existed
   for this project came from synthetic data and has since been retracted.
 - **Covert or silent monitoring of any kind** — no hidden mode, no admin override that observes a
   reader without an action of theirs triggering it.
