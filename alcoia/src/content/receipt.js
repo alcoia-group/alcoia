@@ -207,7 +207,7 @@ export function createReceiptPanel(deps = {}) {
 
         ${substantive ? '' : `<div class="sra-r-warn">
           <strong>This receipt shows coverage but no recall.</strong> You have not answered any
-          questions this session, so it records only that pages were scrolled through — which is
+          questions this session, so it records only that pages were scrolled through, which is
           not evidence of reading. Answer a few questions first if you intend to share it.</div>`}
 
         <h3>Recall</h3>

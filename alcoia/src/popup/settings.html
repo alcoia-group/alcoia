@@ -128,7 +128,7 @@
     <label class="toggle-row" for="assistantToggle">
       <div class="toggle-info">
         <span class="toggle-name">Extension on</span>
-        <span class="toggle-desc">Off is like uninstalling alcoia on every page, without uninstalling it. Also shown in the popup itself.</span>
+        <span class="toggle-desc">Off stops alcoia on every page without uninstalling it. Also in the popup.</span>
       </div>
       <label class="pill"><input type="checkbox" id="assistantToggle" checked><span class="pill-track"></span></label>
     </label>
@@ -156,7 +156,7 @@
         <span class="toggle-desc">
           Off hides question and explanation cards (and the nudge cue) even when difficulty is
           detected. Detection, the instructor view, and your learner memory keep working exactly
-          as before — this only stops a card from appearing on the page.
+          as before. This only stops cards from appearing on the page.
         </span>
       </div>
       <label class="pill"><input type="checkbox" id="showInterventionsToggle" checked><span class="pill-track"></span></label>
@@ -166,8 +166,8 @@
         <span class="toggle-name">Show the self-report button</span>
         <span class="toggle-desc">
           The small "?" in the corner of the page, for reporting how your reading is going
-          yourself. Independent of the switch above — it's reader-initiated, not automatic, so it
-          stays available even with intervention popups off, unless you turn it off here too.
+          yourself. It is reader-initiated, so it stays available with intervention popups
+          off, unless you turn it off here too.
         </span>
       </div>
       <label class="pill"><input type="checkbox" id="showSelfReportToggle" checked><span class="pill-track"></span></label>
@@ -185,7 +185,7 @@
     <label class="toggle-row" for="autohideToggle">
       <div class="toggle-info">
         <span class="toggle-name">Clear cards automatically</span>
-        <span class="toggle-desc">Off while "Keep cards until I close them" is on — the two contradict, and keeping wins.</span>
+        <span class="toggle-desc">Has no effect while "Keep cards until I close them" is on.</span>
       </div>
       <label class="pill"><input type="checkbox" id="autohideToggle"><span class="pill-track"></span></label>
     </label>
@@ -212,7 +212,7 @@
           <span class="toggle-cell-name">Explain text I select</span>
           <label class="pill"><input type="checkbox" id="selToggle" checked><span class="pill-track"></span></label>
         </div>
-        <span class="toggle-cell-desc">Look up a word, explain an image, or summarise a passage — on selection or Ctrl+hover. Uses one assist each time.</span>
+        <span class="toggle-cell-desc">Look up a word, explain an image, or summarise a passage on selection or Ctrl+hover. Uses one assist each time.</span>
       </label>
       <label class="toggle-cell" for="highlightToggle">
         <div class="toggle-cell-top">
@@ -226,14 +226,14 @@
           <span class="toggle-cell-name">Highlight colour</span>
           <label class="pill"><input type="checkbox" id="highlightColorToggle" checked><span class="pill-track"></span></label>
         </div>
-        <span class="toggle-cell-desc">Ctrl+drag to mark a passage in colour. Costs nothing — stays on your device.</span>
+        <span class="toggle-cell-desc">Ctrl+drag to mark a passage in colour. Costs nothing and stays on your device.</span>
       </label>
       <label class="toggle-cell" for="highlightPersistToggle">
         <div class="toggle-cell-top">
           <span class="toggle-cell-name">Keep highlights when I leave the page</span>
           <label class="pill"><input type="checkbox" id="highlightPersistToggle" checked><span class="pill-track"></span></label>
         </div>
-        <span class="toggle-cell-desc">On: saved, and there when you come back. Off: lasts only for this visit.</span>
+        <span class="toggle-cell-desc">On: saved for when you come back. Off: lasts only for this visit.</span>
       </label>
       <label class="toggle-cell" for="highlightSummarizeToggle">
         <div class="toggle-cell-top">
@@ -297,7 +297,7 @@
     <label class="toggle-row" for="webPdfTakeoverToggle">
       <div class="toggle-info">
         <span class="toggle-name">Also open PDFs linked from the web</span>
-        <span class="toggle-desc">Off by default. On means a PDF opened from a website, not just a file on your computer, opens in alcoia too.</span>
+        <span class="toggle-desc">Off by default. On: a PDF opened from a website opens in alcoia too, not only files on your computer.</span>
       </div>
       <label class="pill"><input type="checkbox" id="webPdfTakeoverToggle"><span class="pill-track"></span></label>
     </label>
@@ -318,7 +318,7 @@
   <div class="settings-card">
     <div class="settings-group-title">Account</div>
     <div id="accountSignedOut">
-      <p class="section-note">Sign in for the paid features — your own documents, portable receipts, sync.</p>
+      <p class="section-note">Sign in for the paid features: your own documents, portable receipts, sync.</p>
       <div class="btn-row"><button class="btn btn-ghost" id="signInBtn">Sign in</button></div>
     </div>
     <div id="accountSignedIn" hidden>
@@ -434,7 +434,7 @@
       <label class="pill"><input type="checkbox" id="debugToggle"><span class="pill-track"></span></label>
     </label>
     <p class="section-note">
-      More developer tools — a backend URL override and a state simulator, for local testing —
+      More developer tools (a backend URL override and a state simulator, for local testing)
       live on the Diagnostics page once this is on.
     </p>
     <div class="btn-row" style="padding-top:4px 0 12px"><button class="btn btn-ghost" id="diagnosticsBtn">Diagnostics</button></div>
