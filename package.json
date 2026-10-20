@@ -16,7 +16,7 @@
     "build:firefox": "node build.mjs firefox"
   },
   "devDependencies": {
-    "eslint": "^10.8.0",
+    "eslint": "^10.13.0",
     "globals": "^17.9.0",
     "jsdom": "^30.0.1",
     "playwright": "^1.62.1",
