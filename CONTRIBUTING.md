@@ -1,17 +1,6 @@
 # Contributing
 
-Read this before opening an issue or a pull request — it will save you time either way.
-
-## The honest starting point
-
-This repository is public for transparency and verification, not because it's actively looking
-for contributors (the API server is a separate private repository; see the Scope table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)). Issues and pull
-requests are read, but they are not actively triaged on a schedule, and an unsolicited pull
-request — even a good one — is not likely to be merged quickly, if at all. That's not a
-reflection on the contribution; it's a statement about how much maintainer time exists right now.
-
-If that's fine with you, the rest of this file is real and current. If you were hoping for an
-actively-maintained-by-committee project, this isn't quite that yet.
+Issues and pull requests are welcome. Maintainer time is limited, so review can be slow, and a pull request may be declined if it conflicts with the product's design (see "What not to contribute"). The API server is a separate private repository (see the Scope table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)).
 
 ## Reporting bugs
 
@@ -20,28 +9,23 @@ Open a GitHub Issue. Include:
 - What you expected to happen and what actually happened
 - Browser and version (`chrome://version`)
 - Steps to reproduce, ideally on a real page you can name or link
-- Whether it reproduces with a fresh, unmodified profile — narrows down whether another
-  extension or a local setting is involved
+- Whether it reproduces with a fresh, unmodified profile, which rules out another
+  extension or a local setting
 
-**Do not** file a security vulnerability as a public issue — see [`SECURITY.md`](SECURITY.md).
+Do not file a security vulnerability as a public issue. See [`SECURITY.md`](SECURITY.md).
 
 ## Suggesting features
 
-Also a GitHub Issue, labelled as a feature request if that label exists. State the problem you're
-trying to solve before the solution you have in mind — the product has fairly specific opinions
-about what it will and won't do (see the hard invariants in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)), so a suggestion that lands on an already-settled question will likely be closed
-with a pointer to that section rather than a lengthy debate.
+Open a GitHub issue with the feature request template. Describe the problem before the solution. Some questions are already settled by the hard invariants in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), and a suggestion that conflicts with them will be closed with a link to that section.
 
 ## Submitting a pull request
 
 1. **Branch naming**: `fix/short-description` or `feature/short-description`. Doesn't need to be
    clever, needs to be findable in a branch list six months from now.
-2. **Commit messages**: describe *why*, not just *what* — a message that says "fix bug" is not
-   useful in `git log` a year later. Look at recent commit history in this repo for the tone.
-3. **Tests**: a behavior change needs a test that would have failed before it and passes after.
-   Run the full suite before opening the PR:
+2. **Commit messages**: describe *why*, not just *what*. "Fix bug" tells a future reader nothing. Look at recent commit history in this repo for the tone.
+3. **Tests**: a behavior change needs a test that fails without it. Run the suite before opening the PR:
    ```bash
-   npm run lint && npm test
+   npx eslint . && npm test
    npm run test:browser            # if you touched anything user-facing
    ```
    A change that reduces the passing test count needs an explanation in the PR description, not
@@ -51,10 +35,7 @@ with a pointer to that section rather than a lengthy debate.
 
 ## Code style
 
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the repository map and lists the product's hard
-invariants and conventions; read it before writing code. Several invariants are enforced by tests. (The
-maintainers also keep a longer internal engineering file, `the project notes`, which is not published in this
-repository.)
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the repository map and lists the product's hard invariants and conventions. Read it before writing code. Several invariants are enforced by tests. Run `npx eslint .` before opening a pull request.
 
 ## What happens to your contribution
 
@@ -64,23 +45,9 @@ your contribution is offered under that license. There is no separate CLA.
 
 ## What not to contribute
 
-A few things will be declined regardless of how well they're implemented, because they conflict
-with hard product invariants (see the hard invariants in `docs/ARCHITECTURE.md`):
+These conflict with the hard invariants in `docs/ARCHITECTURE.md` and will be declined however well they are implemented:
 
-- **Anything that reintroduces camera or webcam access.** The gaze-tracking path was removed
-  deliberately, not left unfinished — no `getUserMedia` call belongs anywhere in this codebase,
-  and `npm run test:browser` (`tests/browser/smoke.mjs`) guards against it coming back with a
-  real trip-wire on `getUserMedia` in a live browser, not just a source-text grep.
-- **Anything that sends reading content, user data, or usage data off-device without explicit,
-  visible disclosure at the point it happens.** The one existing exception — passage text sent to
-  generate a question or explanation — is documented everywhere it applies; a new one needs the
-  same treatment, not a quiet addition.
-- **Any accuracy claim, percentage, or benchmark figure**, anywhere — code, comments, UI copy, or
-  docs. See the Claims discipline section of `docs/ARCHITECTURE.md` for why; the short version is that every figure that has ever existed
-  for this project came from synthetic data and has since been retracted.
-- **Covert or silent monitoring of any kind** — no hidden mode, no admin override that observes a
-  reader without an action of theirs triggering it.
-
-An issue or PR proposing one of the above will likely be closed with a link to this section rather
-than a lengthy back-and-forth — not to be dismissive, but because these are already-settled
-questions, not open ones.
+- **Camera or webcam access.** No `getUserMedia` call belongs in this codebase. `npm run test:browser` (`tests/browser/smoke.mjs`) fails if one runs in a live browser.
+- **Sending reading content, user data or usage data off the device without visible disclosure at the point it happens.** Passage text sent to generate a question or explanation is documented wherever it applies. A new case needs the same documentation.
+- **Accuracy claims, percentages or benchmark figures** in code, comments, UI copy or docs. See "Claims discipline" in `docs/ARCHITECTURE.md`.
+- **Covert monitoring**: no hidden mode and no override that observes a reader without an action of theirs.

@@ -4,61 +4,77 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="License: AGPL-3.0"></a>
-  <img src="https://img.shields.io/badge/version-0.2.0--pre--release-lightgrey.svg" alt="Version 0.2.0 (pre-release)">
 </p>
 
-Alcoia is a browser extension that notices when a reader has stopped following a page and asks a
-short question about the passage instead of summarizing it. It does not use a camera, does not
-track eye movement, and does not build a profile of what you read. It is for anyone reading long
-material online who wants to retain it: students, researchers, habitual skimmers. The client is
-open source so the privacy claim above can be checked against the code.
- 
-## Install 
+Alcoia is a browser extension for Chrome and Firefox. It watches reading signals on the page you are reading, and when you slow down or re-read a passage it asks a short question about that passage. A correct answer ends the interaction. A wrong answer gets an explanation with the key terms highlighted.
 
-**Chrome Web Store:** not published yet.
+It works on web pages, PDFs and PowerPoint files opened from your computer, and on readings assigned through a class.
 
-**Load unpacked, for development or to inspect the code:**
+## Install
+
+Alcoia is in early access. To get an invitation, join the waitlist at [alcoia.app/waitlist](https://alcoia.app/waitlist).
+
+To run it from source:
 
 ```bash
-git clone <this repo>
+git clone https://github.com/alcoia-group/alcoia.git
 cd alcoia
-npm install
+npm ci
 ```
 
-Open `chrome://extensions`, enable Developer mode, and Load unpacked pointing at the `alcoia/`
-directory.
+- **Chrome:** open `chrome://extensions`, turn on Developer mode, choose Load unpacked and select the `alcoia/` directory.
+- **Firefox:** run `npm run build:firefox`, open `about:debugging`, choose Load Temporary Add-on and select `dist/firefox/manifest.json`.
+
+The AI features (questions, explanations, summaries) call the Alcoia server at `https://server.alcoia.app`. The server is a separate private project. To test against your own backend, set a Backend URL under developer tools in the extension settings.
 
 ## Build and test
 
 ```bash
-npm run lint && npm test
-npm run test:browser
-PAGE=zh npm run test:browser
-node build.mjs
+npm ci
+npx eslint .            # lint
+npm test                # unit tests (Vitest)
+npm run build           # builds dist/chrome and dist/firefox
+npm run test:browser    # runs the extension in a real Chromium; needs `npx playwright install chromium`
 ```
 
-## Architecture
+`npm run build:chrome` and `npm run build:firefox` build one target.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how detection, the state engine, and the
-interruption budget fit together.
+## Project layout
+
+```
+alcoia/              the extension (loaded unpacked as-is; no bundler)
+  background.js      service worker
+  src/content/       reading detection, the question card, the quiz
+  src/popup/         the popup and the extension's own pages
+  src/shared/        server clients and local storage helpers
+  src/pdf-viewer/    local PDF viewer
+  src/pptx-viewer/   local PowerPoint viewer
+  src/libs/          third-party code and fonts
+manifests/           manifest source for each browser
+tests/               Vitest suite and the browser smoke test
+tools/               build and review scripts
+docs/                architecture and licence notes
+```
+
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how detection, the state engine and the interruption budget fit together.
 
 ## Privacy
 
-Published at [alcoia.app/privacy](https://alcoia.app/privacy).
+- **Sent to the server:** the text of the passage, to generate a question or an explanation. Requests carry an install token (a random identifier created on first run) that is not derived from your device or network.
+- **Signed in with an Alcoia account:** your plan, your class membership and learning-memory settings are read from the server. With account-based learning on, answers to questions are stored on your account.
+- **In a class assignment:** answers and difficulty signals for that reading are reported to the class under the reporting mode (anonymous or identified) shown when you join.
+- **Anonymous counters:** a few daily counts, for example how often question generation failed, are sent only when the server turns this on. They contain no page, text or account.
+- **Stays on your device:** your reading speed baseline, settings, highlights, notes, quiz records, reading receipts and the list of ideas noticed on web pages.
+- **Not in the extension:** there is no camera or eye tracking code, and no analytics service. Fonts are bundled, and nothing is requested from third-party hosts.
 
-## Contributing
+The full policy is at [alcoia.app/legal/privacy-policy](https://alcoia.app/legal/privacy-policy). See also [`PRIVACY.md`](PRIVACY.md).
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+## Contributing, security, conduct
 
-## Security
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
-See [`SECURITY.md`](SECURITY.md).
+## Licence
 
-## Code of conduct
-
-See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
-
-## License
-
-The extension client is [AGPL-3.0](LICENSE). Third-party components are listed in
-[`docs/NOTICE.md`](docs/NOTICE.md).
+[AGPL-3.0](LICENSE). Third-party components are listed in [`docs/NOTICE.md`](docs/NOTICE.md).
