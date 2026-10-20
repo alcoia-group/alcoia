@@ -3471,7 +3471,7 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
       expect(host.isQuestionCardVisible()).toBe(false);
 
       const badge = queryAlcoia('.sra-explain-badge');
-      expect(badge.textContent.toLowerCase()).toContain("let's clear this up");
+      expect(badge.textContent.toLowerCase()).toContain('clearing this up');
       expect(queryAlcoia('.sra-explain-text').textContent).toContain('The correct idea, contrasted with the common mix-up.');
     });
 

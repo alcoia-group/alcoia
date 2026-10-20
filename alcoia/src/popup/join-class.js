@@ -149,13 +149,13 @@ function renderMembershipRow(m) {
 
   const gapNote = document.createElement('p');
   gapNote.className = 'member-gap-note';
-  gapNote.textContent = "(alcoia can't show the class's name here yet — only its id.)";
+  gapNote.textContent = "(alcoia can't show the class's name here yet, only its id.)";
   li.appendChild(gapNote);
 
   const consequence = document.createElement('div');
   consequence.className = 'leave-consequence';
   consequence.textContent = 'Leaving releases your seat immediately and reverts this class\'s access to free. '
-    + 'Your highlights, notes and quizzes stay on this device either way — leaving never deletes anything local.';
+    + 'Your highlights, notes and quizzes stay on this device either way. Leaving never deletes anything local.';
   li.appendChild(consequence);
 
   const leaveBtn = document.createElement('button');
@@ -186,7 +186,7 @@ async function showMemberships() {
 
 function joinErrorMessage(code) {
   switch (code) {
-    case 'invalid_invite':          return "That invite code isn't recognised. Double check the link or code.";
+    case 'invalid_invite':          return "That invite code isn't recognised. Check the link or code.";
     case 'invite_revoked':          return 'This invite has been cancelled by the instructor.';
     case 'invite_expired':          return 'This invite has expired. Ask your instructor for a new one.';
     case 'domain_mismatch':         return "This invite is limited to a specific email domain, and your account's email doesn't match.";

@@ -98,9 +98,8 @@
   <div class="card">
     <div class="card-title">Account</div>
     <div class="card-note">
-      Plan and assist usage are decided by the account server, which is not part of this
-      extension and is not reachable yet from this page — see it displayed here, never
-      guessed at, once that server exists.
+      Plan and assist usage are decided by the account server, which this page does not
+      reach yet. They will appear here once it does, and are never guessed.
     </div>
     <div class="kv-grid">
       <div class="kv-row"><span class="kv-key">Plan</span><span class="kv-val unavailable" id="val-plan">Not available</span></div>
@@ -111,9 +110,9 @@
   <div class="card">
     <div class="card-title">Install token</div>
     <div class="card-note">
-      Identifies this install, not you — issued by the server, never derived from your
-      device or network. Only the last few characters are shown here on purpose, since
-      this page is meant to be safe to screenshot.
+      Identifies this install, not you. The server issues it, and it is never derived from your
+      device or network. Only the last few characters are shown here on purpose, so
+      this page is safe to screenshot.
     </div>
     <div class="kv-grid">
       <div class="kv-row"><span class="kv-key">Status</span><span class="kv-val" id="val-tokenStatus">—</span></div>
@@ -145,8 +144,8 @@
     <div class="card-title">How the tool has decided on this device</div>
     <div class="card-note">
       A short record kept only on this device of when alcoia chose to ask, chose to hold back, and what you did.
-      It holds labels and numbers, never what you read. These are rough counts, not a measure of accuracy:
-      turning a question away does not show you were not struggling.
+      It holds labels and numbers, never what you read. These are rough counts and not a measure of accuracy.
+      Turning a question away does not show you were not struggling.
     </div>
     <div class="kv-grid" id="decisionSummary"></div>
     <div class="card-actions">
@@ -179,7 +178,7 @@
   <div class="card" id="devCard" hidden>
     <div class="card-title">Developer</div>
     <div class="card-note">
-      Local testing tools. Shown because "Debug overlay" is on in the popup's Reading tab.
+      Local testing tools.
     </div>
     <div class="field-row" style="padding:4px 16px 13px">
       <span class="field-label">Backend URL</span>
@@ -187,7 +186,7 @@
     </div>
     <div class="card-note">
       Simulate a state on the active tab's page, forcing the matching intervention on the
-      paragraph in view — the same mechanism as the Alt+1 / Alt+3 / Alt+4 / Alt+5 shortcuts.
+      paragraph in view. This is the same mechanism as the Alt+1 / Alt+3 / Alt+4 / Alt+5 shortcuts.
     </div>
     <div class="btn-grid" style="padding:0 16px 15px">
       <button class="btn btn-ghost" id="simStrugglingBtn">Struggling <kbd>Alt+1</kbd></button>
