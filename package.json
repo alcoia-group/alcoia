@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "eslint": "^10.8.0",
-    "globals": "^17.9.0",
+    "globals": "^17.13.0",
     "jsdom": "^30.0.1",
     "playwright": "^1.62.1",
     "vitest": "^3.2.4"
