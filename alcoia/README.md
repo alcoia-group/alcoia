@@ -33,14 +33,13 @@ The top-level [`../README.md`](../README.md) covers the product pitch, privacy a
 6. [Multilingual Support](#multilingual-support)
 7. [Architecture](#architecture)
 8. [Installation](#installation)
-9. [Running the Backend Server](#running-the-backend-server)
-10. [Usage Guide](#usage-guide)
-11. [Keyboard Shortcuts](#keyboard-shortcuts)
-12. [Configuration](#configuration)
-13. [Accessibility](#accessibility)
-14. [Privacy](#privacy)
-15. [Security](#security)
-16. [Development Notes](#development-notes)
+9. [Usage Guide](#usage-guide)
+10. [Keyboard Shortcuts](#keyboard-shortcuts)
+11. [Configuration](#configuration)
+12. [Accessibility](#accessibility)
+13. [Privacy](#privacy)
+14. [Security](#security)
+15. [Development Notes](#development-notes)
 
 ---
 
@@ -233,55 +232,6 @@ install-token client; `background.js` is a thin message relay and the local-file
 
 On `chrome://extensions`, click **Details** next to alcoia and enable **Allow access to file
 URLs**. Required for the local-file viewers to fetch the file itself.
-
----
-
-## Running the Backend Server
-
-The extension calls a backend for question generation, explanations, summaries and receipt
-signing. That backend's source is not part of this repository, see `../docs/ARCHITECTURE.md`'s
-Scope table. Get its setup instructions from that repository.
-
-By default the extension points at the real production origin, `https://server.alcoia.app`
-(`src/shared/config.js`). Point it at your own instance from the popup's Settings > **Backend URL**
-field (stored as `sra_backend_url`), no code or manifest edit needed. The endpoints the extension
-calls:
-
-```
-POST /api/token          issues the opaque per-install token every other call must carry
-POST /api/summarize      { text, mode, context?, style? } -> { summary }
-POST /api/questions      { text, count, level?, ... } -> { questions: [...] }
-POST /api/check-answer   judges free-text answers for the free_recall and scenario levels
-POST /api/receipt/sign   signs a reader-built receipt
-```
-
-Signed-in accounts and assigned readings also use the account, class, outcome, retention, policy
-profile and evidence-pool routes. `src/shared/config.js` lists every URL the extension calls, and
-the server repository's route files are the contract. `QUESTION_LEVELS_SUPPORTED` in that file
-names the question levels the extension will request.
-
-**Every AI call carries the install token** (`X-Alcoia-Install-Token` header) issued by
-`/api/token` and stored locally; a 401/403 clears it and a fresh one is requested on the next call.
-See `../docs/ARCHITECTURE.md`'s Access control section for the full mechanism.
-
-### Magic-link sign-in (item S3, paid tier)
-
-```
-POST /api/auth/magic-link                      { email, kind: 'extension' } -> sends the email
-POST /api/auth/extension-session/exchange       { code } -> { sessionToken, email, kind, expiresAt }
-```
-
-The install token above is unrelated to this and unaffected by it. Free features never need an
-account.
-
-The reader never types a code into this extension. The sign-in page on the marketing site
-(`alcoiaWeb`, a separate repo) verifies the emailed link, gets a one-time code from the server and
-hands it to this extension via `chrome.runtime.sendMessage(EXTENSION_ID, { code })`.
-`background.js`'s `chrome.runtime.onMessageExternal` listener is the only thing that can receive
-that, and only from the origin declared in `manifests/base.json`'s `externally_connectable`
-(`https://alcoia.app/*`). `src/shared/config.js`'s `WEB_APP_ORIGIN` must match that manifest entry;
-see `build.mjs` for why they are not wired together. A developer testing sign-in against a local
-marketing site changes both by hand.
 
 ---
 
