@@ -61,11 +61,6 @@ appointed representative at an online or offline event.
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
 **hello@alcoia.app**.
-<!-- TODO(owner): hello@alcoia.app does not resolve yet — alcoia.app is a
-     placeholder domain, not a live one (see alcoia/src/shared/config.js's
-     own comment on WEB_APP_ORIGIN: "alcoia.app does not resolve yet; this
-     whole roadmap is designed to work without it"). Confirm or replace this
-     address before this file is relied on as a real reporting channel. -->
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
