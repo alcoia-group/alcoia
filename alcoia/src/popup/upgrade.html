@@ -148,6 +148,9 @@
       content: ''; position: absolute; left: 2px; top: 7px;
       width: 6px; height: 6px; border-radius: 50%; background: var(--sage);
     }
+    .tier-list li a { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
+    .tier-list li a:hover { color: var(--accent-2); }
+    .tier-list li span[title] { cursor: help; }
     .tier-list li.muted { color: var(--muted); }
     .tier-list li.muted::before { background: var(--border-2); }
 
@@ -209,7 +212,7 @@
   <div class="lede">
     <h1>Reading help that asks, instead of answering for you.</h1>
     <p>
-      Detection runs on how you read — no camera, no permission prompt — on every plan,
+      Detection runs on how you read, with no permission prompt, on every plan
       including the free one.
     </p>
   </div>
@@ -230,7 +233,7 @@
       <div class="tier-note">No account needed to install</div>
       <button class="btn btn-ghost" disabled>Installed</button>
       <ul class="tier-list">
-        <li>Difficulty scan on every paragraph</li>
+        <li><span title="Checks every paragraph for signs you are finding it hard">Difficulty scan</span></li>
         <li>Dyslexia mode</li>
         <li>15 AI assists a month</li>
         <li class="muted">Account required for assists only</li>
@@ -256,18 +259,18 @@
       <p class="plan-state-note" id="readerSeatNote" hidden></p>
       <ul class="tier-list">
         <li>Everything in Free, unlimited</li>
-        <li>Retrieval questions when you slow down</li>
-        <li>Session recall and reading receipts</li>
+        <li><span title="Questions about what you just read, asked when you slow down">Retrieval questions</span></li>
+        <li><span title="A short quiz on what you read this session">Session recall</span></li>
+        <li><a href="https://alcoia.app/guide-educators#receipts" target="_blank" rel="noopener" title="A signed record of a reading session that you can hand to an instructor">Reading receipts</a></li>
         <li>PDF and PPTX</li>
-        <li>Sync across your devices</li>
-        <li class="muted">Optional webcam presence, off by default</li>
+        <li>Sync</li>
       </ul>
     </div>
 
     <div class="tier">
       <div class="tier-flag">&nbsp;</div>
       <div class="tier-name">Teams &amp; classrooms</div>
-      <div class="tier-for">For a cohort, where students submit evidence rather than being watched.</div>
+      <div class="tier-for">For a cohort.</div>
       <div class="tier-price">$5<span class="unit">/seat/mo</span></div>
       <div class="tier-note">25 seats minimum · annual only</div>
       <!-- Item S6 follow-up: no self-serve checkout exists for this tier
@@ -281,10 +284,11 @@
       <p class="plan-state-note" id="teamsStateNote" hidden></p>
       <ul class="tier-list">
         <li>Everything in Reader</li>
-        <li>Which paragraphs the class struggled with, anonymous</li>
-        <li>Assigned readings</li>
-        <li>Receipt submission and export</li>
-        <li>Admin console and SSO</li>
+        <li><span title="Which paragraphs the class struggled with, anonymous">Class view</span></li>
+        <li><a href="https://alcoia.app/workspace" target="_blank" rel="noopener" title="Readings your instructor assigns, opened in the alcoia workspace">Assigned readings</a></li>
+        <li>Receipt submission</li>
+        <li>Admin console</li>
+        <li><span title="Single sign-on through your school or company account">SSO</span></li>
         <li>Data processing agreement</li>
       </ul>
     </div>
@@ -292,15 +296,15 @@
     <div class="tier">
       <div class="tier-flag">&nbsp;</div>
       <div class="tier-name">Institution</div>
-      <div class="tier-for">Site licence, procurement, and somewhere to host it yourself.</div>
+      <div class="tier-for">Site licence, procurement, self-hosting.</div>
       <div class="tier-price">Talk to us</div>
       <div class="tier-note">&nbsp;</div>
       <button class="btn btn-ghost" disabled>Contact</button>
       <ul class="tier-list">
         <li>Everything in Teams</li>
         <li>Site licence</li>
-        <li>Self-hosted backend option</li>
-        <li>Procurement paperwork and onboarding</li>
+        <li><a href="https://alcoia.app/docs#self-hosting" target="_blank" rel="noopener" title="Run the alcoia backend on your own servers">Self-hosting</a></li>
+        <li>Procurement and onboarding</li>
       </ul>
     </div>
 
@@ -309,17 +313,14 @@
   <div class="band">
     <h2>What we will never charge for</h2>
     <p>
-      Dyslexia mode stays free, permanently. It is a feature some people need in order to
-      read at all, and putting it behind a plan would be charging for access rather than
-      for help.
+      Dyslexia mode is free on every plan.
     </p>
   </div>
 
   <p class="note-row">
-    <strong>Students:</strong> 40% off Reader with an academic email address —
+    <strong>Students:</strong> 40% off Reader with an academic email address:
     <button class="link-btn" id="studentBtn" type="button">start checkout</button>.
-    Regional pricing is available for Africa, South Asia and Latin America — the cost of a year
-    should not be a week's income.
+    Regional pricing is available for Africa, South Asia and Latin America.
   </p>
   <!-- Item E3 follow-up: same entitlement as Reader (CLAUDE.md,
        ALCOIA-PLATFORM-SPEC.md — "never a feature difference"), so once
@@ -332,39 +333,27 @@
     <h2>Questions</h2>
 
     <details>
-      <summary>Do I need a webcam?</summary>
+      <summary>What leaves my device?</summary>
       <p>
-        No. Detection runs on how you move through the text — pace against difficulty, re-reading,
-        where you stop — and none of that needs a camera or a permission prompt. The webcam is an
-        optional extra that adds only whether you are at the screen, and it is off until you turn
-        it on.
-      </p>
-    </details>
-
-    <details>
-      <summary>Is my video uploaded?</summary>
-      <p>
-        Never. No frame, image or video ever leaves your machine — with the camera on, everything
-        is processed locally and only aggregates are kept. The text of the passage you are reading
-        <em>is</em> sent to a server to generate a question or an explanation. That is the one
-        thing that leaves your device, and we would rather say so here than let you find out later.
+        The text of the passage you are reading is sent to a server to generate a question or an
+        explanation. Nothing else leaves your device.
       </p>
     </details>
 
     <details>
       <summary>Can my school see my reading?</summary>
       <p>
-        Only what you choose to submit. Receipts are built on your machine, shown to you in full
-        before they go anywhere, and never sent in the background. There is no mode that lets
-        anyone watch you read without your action, and there will not be one.
+        It depends on the class. In an anonymous class, your instructor sees class aggregates
+        only. In an identified class, your instructor sees individual results. A receipt is shown
+        to you in full and reaches an instructor only if you give it to them.
       </p>
     </details>
 
     <details>
       <summary>What happens if I cancel?</summary>
       <p>
-        You keep the free plan, and everything saved on your device — notes, highlights, receipts —
-        stays where it is. Nothing is deleted and nothing is held hostage.
+        You keep the free plan. Everything saved on your device (notes, highlights, receipts)
+        stays where it is. Nothing is deleted.
       </p>
     </details>
 

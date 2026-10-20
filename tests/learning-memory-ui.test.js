@@ -65,10 +65,10 @@ describe('Account-based learning card', () => {
   it('explains the setting up front: on by default, purpose, not surveillance, who can see it', () => {
     const text = card.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
     expect(text).toMatch(/It is on by default for your account/);
-    expect(text).toMatch(/not used by Alcoia for advertising, sold to third parties, or used to build profiles about you for unrelated purposes/);
-    expect(text).toMatch(/learning state, not a surveillance history of your reading/);
+    expect(text).toMatch(/Alcoia does not use it for advertising, sell it to third parties, or use it to build profiles about you for unrelated purposes/);
+    expect(text).toMatch(/It keeps learning state only, not a history of your reading/);
     expect(text).toMatch(/instructors cannot see it as your private learning memory/);
-    expect(text).toMatch(/some class features may use aggregated learning information/);
+    expect(text).toMatch(/Some class features may use aggregated learning information/);
     expect(text).not.toMatch(/Cross-document|analytics|Exam Mode|upgrade|premium|unlock/i);
   });
 

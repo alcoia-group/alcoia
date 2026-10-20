@@ -1265,7 +1265,7 @@ async function boot() {
     if (!summary) {
       renderPopup(anchorRect,
         `<div class="sra-error">Could not reach the AI backend.<br>
-         Is the server running? Run:<br>
+         If you run it locally, start it with:<br>
          <code style="font-size:11px;font-family:monospace">cd server &amp;&amp; node index.js</code></div>`,
         { text: selected, source: 'selection', mode });
       return;

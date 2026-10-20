@@ -34,7 +34,7 @@ wrong for this product regardless of how well it would perform.
 | Reading detection, interruptions | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Retrieval questions | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Confidence capture | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Quiz (local, per document) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Quiz (local, per document; assignment-linked quiz *outcomes* — never quiz content — may also report anonymously/aggregately under the same class-join disclosure as inline questions, §3) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Highlights, notes, session recall (local) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Reading guide, dark mode, dyslexia tint, snooze | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **PDF / PPTX / DOCX assistance** | ❌ | ✅ | ✅ | ✅ | ✅ |
@@ -46,7 +46,8 @@ wrong for this product regardless of how well it would perform.
 | Admin console | ❌ | ❌ | ✅ | ✅ | ✅ |
 | SSO | ❌ | ❌ | ✅ | ❌ | ✅ |
 | DPA | ❌ | ❌ | ✅ | ❌ | ✅ |
-| LTI / LMS integration | ❌ | ❌ | ❌ | ❌ | ✅ |
+| LTI / LMS integration (Pilot excluded) | ❌ | ❌ | ✅ | ❌ | ✅ |
+| Teaching recommendations (written suggestions on top of the heatmap and confidence view, which every class view keeps) | ❌ | ❌ | ✅ | ❌ | ✅ |
 | Self-hosted backend, procurement, onboarding | ❌ | ❌ | ❌ | ❌ | ✅ |
 
 **Reader and Student are one entitlement.** Student is a price verified at checkout, not a
@@ -86,8 +87,22 @@ need for paywall handling on the document surface.
 | **B** | **Accounts, entitlements, tokens, counters, assignment aggregates** | **Current** |
 | C | Above plus per-reader reading history | **Not approved** |
 
-**The server never holds a record of what an individual read.** Highlights, notes, quizzes and
+**The server never holds a record of what an individual read.** Highlights, notes, quiz content and
 reading history live on the reader's device and are never transmitted.
+
+**One narrow, explicit carve-out, added when the outcomes schema grew a `source` field
+(`migrations/*_add-substate-self-reported-source-to-outcomes.sql`, see CLAUDE.md §11 "Outcome
+substate, self-report, and source" for the full reasoning):** a quiz taken **on an assignment's own
+document** may report its *outcome* — anonymously, aggregately, through the exact same pseudonym
+mechanism (§8 below) already covering inline retrieval-question outcomes, under the same
+reporting-mode disclosure a student already saw at class join (§6). This is not a new consent
+category — it is the same retrieval-question-outcome category that disclosure already covers,
+arriving through a second UI surface, not a new kind of data leaving the device. The quiz's own
+content — its questions, a reader's answers as notes — still never leaves the device; only this one
+aggregate/anonymous outcome signal does, and only for a quiz an assignment actually issued.
+**Non-assignment quiz use — ordinary web or local reading, with no assignment and no salt to derive
+a pseudonym from — remains completely unaffected: fully local, never transmitted**, exactly as this
+section already said before this carve-out.
 
 This forbids, and these keep returning under new names:
 
@@ -136,7 +151,8 @@ private. The diagnostics page is the one place the number appears.
 |---|---|
 | `alcoia.app` | Marketing site |
 | `console.alcoia.app` | Admin console — instructors and admins, all tiers |
-| `api.alcoia.app` | The API |
+| `workspace.alcoia.app` | The workspace app — students and general users |
+| `server.alcoia.app` | The API (production host; `api.alcoia.app` was the planned name) |
 
 Separate subdomains, not paths on one host: cookies scope per subdomain so a console session cannot
 reach the marketing site, each deploys independently, and the extension declares one clean origin in
@@ -326,7 +342,7 @@ motor impairment, assistive technology, a trackpad, a phone.
 
 ---
 
-## 10. LMS integration — Institution tier
+## 10. LMS integration — Teams and Institution tiers (never Pilot)
 
 **LTI 1.3, Canvas first** (roughly a third of the North American higher-education market). alcoia is
 the *tool*; the LMS is the *platform*.
