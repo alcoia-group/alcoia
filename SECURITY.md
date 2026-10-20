@@ -1,37 +1,19 @@
-# Security Policy
+# Security policy
 
-This repository is public for transparency and verification (see `README.md`). It does not solicit external contributions, but a private channel to
-report a security issue is needed regardless — filing a vulnerability as a public GitHub issue is
-not appropriate for a product that handles reading data and is sold to institutions.
+Report vulnerabilities privately. Do not open a public issue.
 
-## Reporting a vulnerability
+## How to report
 
-<!-- TODO(owner): fill in a real reporting contact before this file is relied on. Do not report a
-     vulnerability to any address below until this TODO is resolved — none of it is live yet. -->
+1. Use GitHub's private vulnerability reporting: go to the repository's **Security** tab and choose **Report a vulnerability**.
+2. If you cannot use GitHub, email hello@alcoia.app with "Security" in the subject line.
 
-**Report to:** TODO — a security contact email or a private reporting form.
+Include the affected file or feature, the browser and version, steps to reproduce, and what an attacker could do with it.
 
-**Scope:** see "What is in scope" / "What is out of scope" below.
+## Scope
 
-**Response time:** TODO — an acknowledgement SLA (e.g. "within N business days") once the owner has
-committed to one. Do not invent a number here.
+In scope: the browser extension in this repository (Chrome and Firefox builds).
 
-**Disclosure:** TODO — the owner's preferred coordinated-disclosure timeline, if any.
+Out of scope:
 
-## Recommendation for the owner
-
-<!-- TODO(owner): consider enabling GitHub's private vulnerability reporting for this repository
-     (Settings → Security → Private vulnerability reporting). It gives reporters a structured,
-     private channel without requiring a separate email address to staff, and integrates with
-     GitHub Security Advisories for coordinated disclosure. -->
-
-## What is in scope
-
-- The browser extension client in this repository (Chrome MV3 / Firefox build targets).
-
-## What is out of scope
-
-- The API server. It lives in a separate private repository — see the Scope table in `docs/ARCHITECTURE.md` —
-  and a report about it should go through that repository's own channel once one exists, not this
-  file.
-- Findings that are already described as known limitations in this repository's documentation.
+- The API server, which is a separate private project. If you find a server issue, send it through the same channels above and we will route it.
+- Issues in third-party code under `alcoia/src/libs/`. Report those upstream (see [`docs/NOTICE.md`](docs/NOTICE.md)).
