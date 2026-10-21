@@ -78,7 +78,7 @@ Reading-signal detectors (scroll, pace, selection, copy, blur, cursor)
                     |
      comprehension-monitor.js (pace vs. difficulty vs. your baseline)
                     |
-        state-engine.js  ->  on_pace / skimming / struggling / drifting / absent / unknown
+        state-engine.js  ->  on_pace / skimming / struggling / drifting / away / unknown
                     |
       intervention-policy.js (interruption budget, dismissal-aware backoff)
                     |
@@ -94,8 +94,8 @@ Reading-signal detectors (scroll, pace, selection, copy, blur, cursor)
 3. **`state-engine.js`** fuses the signals into one of six states. `unknown` is a valid, common
    answer and never interrupts.
 4. **`intervention-policy.js`** decides whether a state earns an interruption: at most one every
-   three minutes, a session cap that scales with how much has actually been read, and a backoff
-   that kicks in after repeated dismissals.
+   three minutes, no repeat on the same paragraph, and a backoff that kicks in after repeated
+   dismissals.
 5. **The action** is almost always a retrieval question (`question-card.js`), with the sentence the
    answer came from quoted underneath so the reader can check the evidence. A `drifting` state
    gets a nudge instead. Explaining is the failure path, reached only after a wrong answer.
@@ -164,7 +164,7 @@ Six states, each naming an **observation**, not a feeling:
 | `skimming` | Moving faster than this text usually takes to read | A question, but only on difficult text (skimming easy prose is a choice) |
 | `struggling` | Slower than your usual pace here, or going back over it | A question; an explanation if the answer is wrong |
 | `drifting` | Movement on the page has stalled without you leaving it | A nudge on the current paragraph |
-| `absent` | Nothing to read from; you are away from the page | Nothing |
+| `away` | The tab was hidden or the window unfocused with no input for a minute, or nothing was touched for ten | Nothing. Time away is not counted as reading, and it is never treated as struggle |
 | `unknown` | The signals do not agree, or there is no signal | **Nothing, ever.** This is a valid and common answer |
 
 There is deliberately no `confused` and no `overloaded`. Those named an internal state a browser

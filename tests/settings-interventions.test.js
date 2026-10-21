@@ -96,7 +96,7 @@ describe('content.js — reads both keys live and threads them into host.js', ()
   });
 
   it('the settings() getter passed to createHost includes showInterventions', () => {
-    expect(contentJs).toMatch(/settings:\s*\(\)\s*=>\s*\(\{\s*assistantEnabled,\s*backendUrl,\s*showInterventions\s*\}\)/);
+    expect(contentJs).toMatch(/settings:\s*\(\)\s*=>\s*\(\{\s*assistantEnabled,\s*backendUrl,\s*showInterventions(?:,\s*showConnections)?\s*\}\)/);
   });
 
   it('the storage defaults block reads both new keys', () => {
@@ -140,7 +140,7 @@ describe('reading-bridge.js — the PDF/document-viewer boot path wires the same
   });
 
   it('threads showInterventions into createHost\'s own settings() getter', () => {
-    expect(readingBridgeJs).toMatch(/settings:\s*\(\)\s*=>\s*\(\{\s*assistantEnabled,\s*backendUrl,\s*showInterventions\s*\}\)/);
+    expect(readingBridgeJs).toMatch(/settings:\s*\(\)\s*=>\s*\(\{\s*assistantEnabled,\s*backendUrl,\s*showInterventions(?:,\s*showConnections)?\s*\}\)/);
   });
 
   it('SETTINGS_DEFAULTS includes both new storage keys', () => {
