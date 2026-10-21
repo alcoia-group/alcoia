@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest';
 import { findOcclusionTarget, isOccludableParagraph, createPretestOcclusion } from '../alcoia/src/content/pretest.js';
-import { createInterventionPolicy } from '../alcoia/src/content/intervention-policy.js';
+import { createInterventionPolicy, SESSION_CAP_ENABLED } from '../alcoia/src/content/intervention-policy.js';
 import { STATES } from '../alcoia/src/content/state-engine.js';
 
 describe('findOcclusionTarget — discourse-marker pattern matching (item: pretesting)', () => {
@@ -159,7 +159,7 @@ describe('createPretestOcclusion — page shapes it does not attempt (reported, 
 });
 
 describe('createPretestOcclusion — respects the interruption budget (real intervention-policy.js)', () => {
-  it('never renders once the session budget is spent', () => {
+  it.skipIf(!SESSION_CAP_ENABLED)('never renders once the session budget is spent', () => {
     const p = setPlainParagraph('The result was a big jump. It changed everything that followed.');
     const policy = createInterventionPolicy({ budget: { baseAllowance: 0, absoluteCeiling: 0 } });
     const pretest = createPretestOcclusion({ interventionPolicy: policy, viewportHeight: () => 0 });

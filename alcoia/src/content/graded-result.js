@@ -17,18 +17,21 @@
  * used — never the grader's own echoed span.
  */
 import { renderHighlightedExplanation } from './keyword-highlight.js';
+import { t } from '../shared/i18n.js';
 
-export function gradedResultMarkup({ verdict, level, question, esc }) {
+const escText = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+export function gradedResultMarkup({ verdict, level, question, esc, lang = 'en' }) {
   if (verdict === 'correct') {
     return {
       className: 'sra-q-result sra-q-result-correct',
-      innerHTML: `<span class="sra-q-check" aria-hidden="true">✓</span><strong>That looks right.</strong>`,
+      innerHTML: `<span class="sra-q-check" aria-hidden="true">✓</span><strong>${esc(t('res.looksRight', lang))}</strong>`,
     };
   }
   if (verdict === 'incorrect') {
     return {
       className: 'sra-q-result sra-q-result-wrong',
-      innerHTML: `<strong>Not quite.</strong>${question.explanation ? ` ${renderHighlightedExplanation(question.explanation, esc)}` : ''}
+      innerHTML: `<strong>${esc(t('res.notQuite', lang))}</strong>${question.explanation ? ` ${renderHighlightedExplanation(question.explanation, esc)}` : ''}
          ${question.span ? `<div class="sra-q-span">“${esc(question.span)}”</div>` : ''}`,
     };
   }
@@ -36,17 +39,17 @@ export function gradedResultMarkup({ verdict, level, question, esc }) {
   return {
     className: 'sra-q-result sra-q-result-unknown',
     innerHTML: level === 'scenario'
-      ? `<strong>Couldn't confirm that one either way.</strong> Here's the principle it was about:${spanLine}`
-      : `<strong>Couldn't confirm that one.</strong>${spanLine}`,
+      ? `<strong>${esc(t('res.cantConfirmEither', lang))}</strong> ${esc(t('res.principle', lang))}${spanLine}`
+      : `<strong>${esc(t('res.cantConfirm', lang))}</strong>${spanLine}`,
   };
 }
 
 /* adversarial's whole reveal. No verdict, no correct/wrong styling — fixed
  * copy only, since there is nothing to grade and nothing was sent anywhere
  * to grade it. */
-export function respondedResultMarkup() {
+export function respondedResultMarkup(lang = 'en') {
   return {
     className: 'sra-q-result sra-q-result-responded',
-    innerHTML: `<strong>This one isn't graded.</strong> The point was making the argument.`,
+    innerHTML: `<strong>${escText(t('res.notGraded', lang))}</strong> ${escText(t('res.pointIsArgue', lang))}`,
   };
 }

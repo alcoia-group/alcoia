@@ -20,6 +20,7 @@
 */
 
 import { createShadowHost } from './shadow-host.js';
+import { t, uiLang } from '../shared/i18n.js';
 
 const MAP_ID    = 'sra-reading-map';
 const TAB_ID    = 'sra-reading-map-tab';
@@ -44,6 +45,7 @@ export function createReadingMap(deps = {}) {
   let visible  = false;
   let headings = [];
   let events   = [];   // { pct, type, label }
+  let connections = []; // { title, href, label, idea } — the reader's own documents this page connects to
   let shadowHostEl = null;
   let shadowRoot   = null;
 
@@ -85,6 +87,14 @@ export function createReadingMap(deps = {}) {
         z-index: 2147483636; box-shadow: -2px 0 8px rgba(0,0,0,0.12);
       }
       #${TAB_ID}.open { transform: translateY(-50%) translateX(-${WIDTH_PX}px); }
+      #${TAB_ID}.has-connections::after {
+        content: ''; display: block; width: 6px; height: 6px; border-radius: 50%;
+        background: #fff; margin: 6px auto 0;
+      }
+      .sra-map-conn { display: block; padding: 5px 12px; text-decoration: none; color: #333333; font-size: 11px; line-height: 1.35; }
+      .sra-map-conn:hover { background: rgba(126,96,174,0.06); }
+      .sra-map-conn-title { display: block; font-weight: 700; color: #5F4589; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sra-map-conn-idea { display: block; color: #666; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
       .sra-map-progress-bar {
         height: 3px; background: rgba(126,96,174,0.15); flex-shrink: 0;
@@ -224,6 +234,35 @@ export function createReadingMap(deps = {}) {
       });
     }
 
+    // Connections to the reader's own documents: a quiet entry, never a card.
+    if (connections.length) {
+      const lang = uiLang();
+      const connSection = document.createElement('div');
+      connSection.className = 'sra-map-events';
+      const connLabel = document.createElement('div');
+      connLabel.className = 'sra-map-events-label';
+      connLabel.textContent = t('conn.header', lang);
+      connSection.appendChild(connLabel);
+      for (const c of connections) {
+        const a = document.createElement('a');
+        a.className = 'sra-map-conn';
+        a.href = c.href;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.title = t('conn.open', lang);
+        const title = document.createElement('span');
+        title.className = 'sra-map-conn-title';
+        title.textContent = t('conn.connectsTo', lang, { title: c.title });
+        const idea = document.createElement('span');
+        idea.className = 'sra-map-conn-idea';
+        idea.textContent = t('conn.idea', lang, { label: c.label });
+        a.appendChild(title);
+        a.appendChild(idea);
+        connSection.appendChild(a);
+      }
+      body.appendChild(connSection);
+    }
+
     // Event log
     if (events.length) {
       const div = document.createElement('div');
@@ -277,6 +316,22 @@ export function createReadingMap(deps = {}) {
     if (visible) renderBody();
   }
 
+  /* A quiet entry for each of the reader's own documents this page connects to, and a small dot on the tab. An empty
+   * list removes both. Never opens the sidebar and never takes focus. */
+  function setConnections(list) {
+    connections = Array.isArray(list) ? list.slice(0, 3) : [];
+    if (!connections.length && !shadowRoot) return;
+    ensureDOM();
+    const tab = shadowRoot?.getElementById(TAB_ID);
+    if (tab) {
+      tab.classList.toggle('has-connections', connections.length > 0);
+      tab.title = connections.length
+        ? `Toggle reading map (Alt+M) · ${t('conn.header', uiLang())}: ${connections.length}`
+        : 'Toggle reading map (Alt+M)';
+    }
+    if (visible) renderBody();
+  }
+
   /* The master-switch hard-off teardown counterpart to ensureDOM() above.
    * Removes the shadow host (tab, sidebar and its own <style> all go with
    * it in one call) and its own scroll listener, and resets internal state
@@ -291,7 +346,8 @@ export function createReadingMap(deps = {}) {
     visible  = false;
     headings = [];
     events   = [];
+    connections = [];
   }
 
-  return { toggle, recordEvent, destroy };
+  return { toggle, recordEvent, setConnections, destroy };
 }
