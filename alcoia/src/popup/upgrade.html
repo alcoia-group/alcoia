@@ -17,7 +17,7 @@
     Item E3: checkout IS wired up now, for the Reader tier only — the
     server (src/http/routes/billing.js) validates exactly 'reader' or
     'student' as a plan key, but this page has never had a separate
-    Student button (see the "Students: 40% off" note-row below; that
+    Student button (see the "Students" note-row below; that
     reads as an on-request discount, not a second self-serve checkout).
     Teams/classrooms and Institution stay inert — there is no self-serve
     checkout for either on the server today.
@@ -210,16 +210,14 @@
 <div class="wrap">
 
   <div class="lede">
-    <h1>Reading help that asks, instead of answering for you.</h1>
+    <h1>Reading help that asks you questions.</h1>
     <p>
-      Detection runs on how you read, with no permission prompt, on every plan
-      including the free one.
+      Difficulty detection is on every plan, including Free.
     </p>
   </div>
 
   <div class="billing" role="group" aria-label="Billing period">
     <button class="billing-opt active" id="annualBtn" aria-pressed="true">Annual</button>
-    <span class="save-tag">2 months free</span>
     <button class="billing-opt" id="monthlyBtn" aria-pressed="false">Monthly</button>
   </div>
 
@@ -228,22 +226,25 @@
     <div class="tier">
       <div class="tier-flag">&nbsp;</div>
       <div class="tier-name">Free</div>
-      <div class="tier-for">Everything that helps you read, with nothing to sign up for.</div>
+      <div class="tier-for">For trying it out.</div>
       <div class="tier-price">$0</div>
-      <div class="tier-note">No account needed to install</div>
+      <div class="tier-note">No account needed</div>
       <button class="btn btn-ghost" disabled>Installed</button>
       <ul class="tier-list">
+        <li>Works on every page</li>
         <li><span title="Checks every paragraph for signs you are finding it hard">Difficulty scan</span></li>
+        <li><span title="Questions about what you just read, asked when you slow down">Retrieval questions</span></li>
+        <li><span title="A short quiz on what you read this session">Session recall</span></li>
+        <li><a href="https://alcoia.app/guide-educators#receipts" target="_blank" rel="noopener" title="A signed record of a reading session that you can hand to an instructor">Reading receipts</a></li>
+        <li>PDF and PowerPoint files</li>
         <li>Dyslexia mode</li>
-        <li>15 AI assists a month</li>
-        <li class="muted">Account required for assists only</li>
       </ul>
     </div>
 
     <div class="tier featured">
       <div class="tier-flag">Most people want this</div>
       <div class="tier-name">Reader</div>
-      <div class="tier-for">For anyone who finishes long things and wants to keep them.</div>
+      <div class="tier-for">For regular readers.</div>
       <div class="tier-price" id="readerPrice">$4.92<span class="unit">/mo</span></div>
       <div class="tier-note" id="readerNote">$59 billed annually</div>
       <button class="btn btn-primary" id="readerBtn">Subscribe</button>
@@ -258,12 +259,12 @@
            active" rather than hiding that fact). -->
       <p class="plan-state-note" id="readerSeatNote" hidden></p>
       <ul class="tier-list">
-        <li>Everything in Free, unlimited</li>
-        <li><span title="Questions about what you just read, asked when you slow down">Retrieval questions</span></li>
-        <li><span title="A short quiz on what you read this session">Session recall</span></li>
-        <li><a href="https://alcoia.app/guide-educators#receipts" target="_blank" rel="noopener" title="A signed record of a reading session that you can hand to an instructor">Reading receipts</a></li>
-        <li>PDF and PPTX</li>
-        <li>Sync</li>
+        <li>Everything in Free</li>
+        <li><span title="Connects what you read to your other documents">Cross-document intelligence</span></li>
+        <li><span title="What you have learned, by idea and by document">Reading analytics</span></li>
+        <li><span title="Upload your own PDF, Word and PowerPoint files to the workspace">File upload</span></li>
+        <li><span title="Practice questions on your readings and files">Exam Mode</span></li>
+        <li>Same plan on every device</li>
       </ul>
     </div>
 
@@ -271,7 +272,7 @@
       <div class="tier-flag">&nbsp;</div>
       <div class="tier-name">Teams &amp; classrooms</div>
       <div class="tier-for">For a cohort.</div>
-      <div class="tier-price">$5<span class="unit">/seat/mo</span></div>
+      <div class="tier-price">$4<span class="unit">/seat/mo</span></div>
       <div class="tier-note">25 seats minimum · annual only</div>
       <!-- Item S6 follow-up: no self-serve checkout exists for this tier
            (upgrade.js's own header, confirmed against billing.js) — this
@@ -318,7 +319,7 @@
   </div>
 
   <p class="note-row">
-    <strong>Students:</strong> 40% off Reader with an academic email address:
+    <strong>Students:</strong> Reader for $29 a year or $3.99 a month with an academic email address:
     <button class="link-btn" id="studentBtn" type="button">start checkout</button>.
     Regional pricing is available for Africa, South Asia and Latin America.
   </p>
