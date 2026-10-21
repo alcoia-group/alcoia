@@ -32,7 +32,7 @@ describe('manifest targets', () => {
     const m = buildManifest('firefox');
     // config.js must load before background.js — it defines self.ALCOIA_CONFIG,
     // which background.js reads at top level.
-    expect(m.background.scripts).toEqual(['src/shared/config.js', 'background.js']);
+    expect(m.background.scripts).toEqual(['src/shared/config.js', 'src/shared/account-sync.js', 'background.js']);
     expect(m.background.service_worker).toBeUndefined();
   });
 

@@ -59,8 +59,12 @@ Some signed-in features send more:
 - With account-based learning on, answers to questions are stored on the account, as tallies per passage and idea, never as page text or addresses.
 - For a class assignment, answers and difficulty signals are reported under the reporting mode (anonymous or identified) shown when the student joins.
 - Anonymous daily counters (for example failed question generations) are sent only when the server enables them.
+- Signed in, eleven reading settings (on/off, which cards to show, dyslexia overlay and tint, dark cards, auto-hide and its delay, explain on highlight, colour highlights, document links) are saved on the account, so the same choices apply in every browser and in the alcoia workspace (`src/shared/account-sync.js`, run by the background script).
+- Signed in with account-based learning on, the reading-speed baseline (words per minute, overall and per language) is saved on the account, so detection starts from the reader's own pace on a new device. Numbers only.
 
-Settings, the reading-speed baseline, UI preferences, the reading receipt, colour highlights, notes and completed quiz records stay in local browser storage (`chrome.storage.local` / IndexedDB) and are never uploaded.
+Other UI preferences, the reading receipt, colour highlights, notes and completed quiz records stay in local browser storage (`chrome.storage.local` / IndexedDB) and are never uploaded. Signed out, settings and the baseline stay local too.
+
+The alcoia workspace (workspace.alcoia.app) runs this extension's detection code itself on assigned readings and on the reader's own files, so a student needs no install there. A workspace page that does so carries `<meta name="alcoia-detection" content="workspace">`; on the workspace origin only, the content script then does nothing, so a reader never gets two detectors.
 
 ## Access control
 

@@ -6,7 +6,24 @@
 // Firefox's event page instead loads it as a preceding <script> via
 // manifests/firefox.json's `background.scripts` array, which already runs
 // in the same global scope — importScripts does not exist there.
-if (typeof importScripts === 'function') importScripts('src/shared/config.js');
+if (typeof importScripts === 'function') importScripts('src/shared/config.js', 'src/shared/account-sync.js');
+
+// ── Account settings sync ───────────────────────────────────────────────────
+// Signed in, the reading settings and the reading-speed baseline follow the account (src/shared/account-sync.js
+// has what is sent and why). Pulled when the worker starts, on sign-in, and when a page boots (at most every few
+// minutes); local changes are sent up shortly after they are made. Signed out, nothing is sent.
+const accountSync = (typeof self !== 'undefined' && self.AlcoiaAccountSync)
+  ? self.AlcoiaAccountSync.create({
+    storage: chrome.storage.local,
+    fetchImpl: (...a) => fetch(...a),
+    backendOrigin: self.ALCOIA_CONFIG.BACKEND_ORIGIN,
+    sessionKey: self.ALCOIA_CONFIG.SESSION_STORAGE_KEY,
+  })
+  : null;
+if (accountSync) {
+  try { chrome.storage.onChanged.addListener((changes, area) => { accountSync.onStorageChanged(changes, area); }); } catch (e) { /* no storage */ }
+  accountSync.pull({ force: true }).catch(() => {});
+}
 
 // ── Local PDF redirect ─────────────────────────────────────────────────────────
 // Chrome's native PDF viewer runs in a sandboxed renderer that content scripts
@@ -307,6 +324,12 @@ function normaliseSessionExpiry(raw) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.action) return;
+
+  if (msg.action === 'accountSync') {
+    if (accountSync) accountSync.pull().catch(() => {});
+    sendResponse({ status: 'ok' });
+    return;
+  }
 
   if (msg.action === 'openTab') {
     chrome.tabs.create({ url: msg.url });
