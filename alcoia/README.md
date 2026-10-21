@@ -94,8 +94,8 @@ Reading-signal detectors (scroll, pace, selection, copy, blur, cursor)
 3. **`state-engine.js`** fuses the signals into one of six states. `unknown` is a valid, common
    answer and never interrupts.
 4. **`intervention-policy.js`** decides whether a state earns an interruption: at most one every
-   three minutes, a session cap that scales with how much has actually been read, and a backoff
-   that kicks in after repeated dismissals.
+   three minutes, no repeat on the same paragraph, and a backoff that kicks in after repeated
+   dismissals.
 5. **The action** is almost always a retrieval question (`question-card.js`), with the sentence the
    answer came from quoted underneath so the reader can check the evidence. A `drifting` state
    gets a nudge instead. Explaining is the failure path, reached only after a wrong answer.

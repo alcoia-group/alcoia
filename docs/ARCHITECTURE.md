@@ -96,8 +96,8 @@ These are architectural commitments the codebase is built to enforce, not config
 ## Interruption budget
 
 Reader attention is treated as the scarcest resource in the product. The policy: at most one
-interruption per three minutes; the per-session cap scales with content actually read rather than
-with wall-clock session length, with an absolute ceiling so a pathological loop cannot spiral;
+interruption per three minutes; a per-session cap that scales with content read exists in the
+code (`SESSION_CAP_ENABLED` in `intervention-policy.js`) and is switched off for now;
 consecutive dismissals raise the bar for the next one; the same paragraph is never interrupted on
 twice; interruptions require a measured minimum confidence; and every interruption shows the reader
 the specific evidence that triggered it (e.g. "you slowed down a lot here"), converting an inference
