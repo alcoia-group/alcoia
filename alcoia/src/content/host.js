@@ -29,6 +29,8 @@
  *   observe the `null` state in practice.
  */
 
+import { t, uiLang, isRtl } from '../shared/i18n.js';
+
 const AI_CALL_BURST_LIMIT       = 6;        // calls
 const AI_CALL_BURST_WINDOW_MS   = 10_000;   // per 10s
 const AI_CALL_CEILING_LIMIT     = 30;       // calls
@@ -76,6 +78,9 @@ export async function createHost(deps) {
     // own fetchSummary chokepoint (see assistedKeys below), so the absence of this dependency no longer means
     // "unknown": every explanation surface in this host goes through that chokepoint.
     wasParagraphExplained = () => false,
+    // Ordinary pages only: called with the list of the reader's own workspace documents that the ideas on this page
+    // connect to (possibly empty). The caller shows it quietly (reading map entry and badge), never as a card.
+    onConnections = null,
   } = deps;
 
   const s = () => settings() || {};
@@ -421,6 +426,54 @@ export async function createHost(deps) {
   if (!assignmentId) {
     try { deviceConcepts = (await loadModule('src/shared/device-concepts.js')).createDeviceConcepts(); deviceConcepts.load(); } catch (e) { deviceConcepts = null; }
   }
+  // Connections to the reader's own workspace documents (ordinary pages only). Matching is done here, on this device,
+  // from the ideas device-concepts.js detected on this page; the only request is the account's own document idea list
+  // (see shared/document-connections.js). It never interrupts: it hands a list to onConnections and nothing else.
+  let documentConnections = null;
+  if (!assignmentId && onConnections) {
+    try {
+      const sessionModule = await loadModule('src/shared/session.js');
+      const entitlementsModule = await loadModule('src/shared/entitlements.js');
+      const proxyFetchModule = await loadModule('src/shared/proxy-fetch.js');
+      const connectionsModule = await loadModule('src/shared/document-connections.js');
+      const sessionManager = sessionModule.createSessionManager({ fetchImpl: proxyFetchModule.backgroundFetchImpl });
+      const entitlements = entitlementsModule.createEntitlementsManager({
+        getSession: sessionManager.getSession,
+        entitlementsUrl: self.ALCOIA_CONFIG.ENTITLEMENTS_URL,
+        fetchImpl: proxyFetchModule.backgroundFetchImpl,
+      });
+      documentConnections = connectionsModule.createDocumentConnections({
+        getSession: sessionManager.getSession,
+        hasFeature: entitlements.hasFeature,
+        fetchImpl: proxyFetchModule.backgroundFetchImpl,
+        url: self.ALCOIA_CONFIG.DOCUMENT_CONCEPTS_URL,
+        workspaceOrigin: self.ALCOIA_CONFIG.READER_ORIGIN,
+      });
+    } catch (e) { documentConnections = null; }
+  }
+  let lastConnectionsKey = '';
+  let lastConnectionsAt = 0;
+  let connectionsBusy = false;
+  const CONNECTIONS_MIN_GAP_MS = 15000;
+  async function checkConnections() {
+    if (!documentConnections || !deviceConcepts || !onConnections) return;
+    if (s().showConnections === false || !s().assistantEnabled) return;
+    if (connectionsBusy || Date.now() - lastConnectionsAt < CONNECTIONS_MIN_GAP_MS) return;
+    const ideas = deviceConcepts.pageIdeas();
+    if (!ideas.length) return;
+    const key = ideas.map((i) => i.key).sort().join('|');
+    if (key === lastConnectionsKey) return;
+    connectionsBusy = true;
+    lastConnectionsAt = Date.now();
+    try {
+      const list = await documentConnections.find(ideas);
+      lastConnectionsKey = key;
+      // A snooze keeps even this quiet entry away until it ends; the next new idea asks again.
+      if (list.length && await snoozeControl.isActive()) { lastConnectionsKey = ''; return; }
+      onConnections(list);
+    } finally { connectionsBusy = false; }
+  }
+
   // The basis of the detection behind the most recently shown card, so a later dismissal or answer can be
   // attributed to it. Short internal tags only, never content.
   let lastShownBasis = null;
@@ -828,17 +881,19 @@ export async function createHost(deps) {
   function showSelfReportCard() {
     const root = reservePopup(SELF_REPORT_FINGERPRINT);
     if (!root) return false;
+    const lang = uiLang();
+    if (isRtl(lang)) root.setAttribute('dir', 'rtl');
 
     root.innerHTML = `
       <div class="sra-controls">
-        <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
+        <button class="sra-ctrl-btn sra-close-btn" title="${esc(t('card.dismiss', lang))}">✕</button>
       </div>
       <div class="sra-popup-body">
-        <div class="sra-state-badge sra-self-report-badge">How's this going?</div>
+        <div class="sra-state-badge sra-self-report-badge">${esc(t('sr.title', lang))}</div>
         <div class="sra-self-report-options">
-          <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.OVERLOAD}">Too much at once</button>
-          <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.CONFUSION}">I'm stuck / don't get it</button>
-          <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.DISENGAGED}">Not interested / lost focus</button>
+          <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.OVERLOAD}">${esc(t('sr.overload', lang))}</button>
+          <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.CONFUSION}">${esc(t('sr.confusion', lang))}</button>
+          <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.DISENGAGED}">${esc(t('sr.disengaged', lang))}</button>
         </div>
       </div>`;
 
@@ -847,7 +902,7 @@ export async function createHost(deps) {
       btn.onclick = () => {
         reportSelfState(btn.dataset.selfReport);
         for (const b of root.querySelectorAll('[data-self-report]')) b.disabled = true;
-        btn.textContent = 'Thanks, noted.';
+        btn.textContent = t('sr.thanks', lang);
         // Bug found verifying this in real Chromium (tests/browser/smoke.mjs):
         // stored on root._hideT, the SAME property closePopup() already
         // clearTimeout()s on every close path — Escape, the ✕ button, or
@@ -1490,7 +1545,7 @@ export async function createHost(deps) {
     const isDue = dueKnowledgeUnits.has(identity.knowledgeUnitId);
     // A due review comes first. An instructor focus is only a preference among moments the policy
     // already allows, and never while the reader is struggling or drifting: it must not add friction.
-    const isFocus = !isDue && focusKnowledgeUnits.has(identity.knowledgeUnitId) && lastCogState !== 'struggling' && lastCogState !== 'drifting';
+    const isFocus = !isDue && focusKnowledgeUnits.has(identity.knowledgeUnitId) && lastCogState !== 'struggling' && lastCogState !== 'drifting' && lastCogState !== 'away';
     if (!isDue && !isFocus) return;
 
     if (await snoozeControl.isActive()) return;
@@ -1605,7 +1660,7 @@ export async function createHost(deps) {
   const probeBlocked = () => (
     ui.hasVisibleQuestionCard()
     || (lastNormalCardAt !== 0 && Date.now() - lastNormalCardAt < PROBE_QUIET_MS)
-    || lastCogState === 'struggling' || lastCogState === 'drifting'
+    || lastCogState === 'struggling' || lastCogState === 'drifting' || lastCogState === 'away'
   );
   const probe = { words: 0, nextAt: PROBE_FIRST_WORDS, counted: new Set(), asked: 0, busy: false };
   const wordCount = (t) => (String(t || '').trim().match(/\S+/g) || []).length;
@@ -1784,7 +1839,9 @@ export async function createHost(deps) {
       // file. orchestrator.js calls onParagraphRead synchronously,
       // unawaited (see its own comment on this call site), so this must
       // not become async from the caller's own point of view either.
-      try { if (deviceConcepts) deviceConcepts.noteRead(computeIdentity(text).paragraphKey, text); } catch (e) {}
+      try {
+        if (deviceConcepts) Promise.resolve(deviceConcepts.noteRead(computeIdentity(text).paragraphKey, text)).then(() => checkConnections()).catch(() => {});
+      } catch (e) {}
       try { if (exposureReporter) { const id = computeIdentity(text).knowledgeUnitId; if (id) exposureReporter.note(id); } } catch (e) {}
       checkRetentionCandidate(text, paragraphIndex).catch(() => {});
       checkProbe(text, paragraphIndex).catch(() => {});

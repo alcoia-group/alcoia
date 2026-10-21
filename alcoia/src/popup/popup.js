@@ -31,6 +31,7 @@ const STATE_UI = {
   skimming:   { name: 'Skimming',     dot: 'live', why: 'Moving faster than this text usually takes to read.' },
   struggling: { name: 'Struggling',   dot: 'attn', why: 'Slower than your usual pace here, or going back over it.' },
   drifting:   { name: 'Drifting',     dot: 'attn', why: 'You told the assistant you lost focus or are not interested.' },
+  away:       { name: 'Away',        dot: '',     why: 'You are away from the page. Time away is not counted and nothing interrupts you.' },
   unknown:    { name: 'Not sure yet', dot: '',     why: 'The signals do not agree. Nothing interrupts you on this.' },
 };
 

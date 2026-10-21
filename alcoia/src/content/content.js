@@ -99,6 +99,10 @@ async function boot() {
   // other setting here, so a change takes effect without a page reload.
   let highlightColorEnabled     = true;
   let highlightSummarizeEnabled = false;
+  // Show the explanation popup for a selection the reader just highlighted (Ctrl+drag). On by default.
+  let explainOnHighlightEnabled = true;
+  // Show the reader's own workspace documents that this page connects to, as a quiet reading-map entry. On by default.
+  let showConnections = true;
   // "Keep highlights when I leave the page" — on by default, since silently
   // losing a deliberate highlight is the surprising behaviour. Off does not
   // delete anything already saved; it only stops applyTextHighlight() below
@@ -195,6 +199,7 @@ async function boot() {
   const { runSelfPacedCalibration } = readCalModule;
   const dyslexiaModule  = await loadModule('src/content/dyslexia-utils.js');
   const segmentation     = await loadModule('src/content/signals/segmentation.js');
+  const i18n             = await loadModule('src/shared/i18n.js');
   const mapModule       = await loadModule('src/content/reading-map.js');
   const hlSidebarModule = await loadModule('src/content/highlights-sidebar.js');
   // Item DC-2 — see that file's own header for why this isn't a signals/
@@ -278,7 +283,8 @@ async function boot() {
     warn: _warn,
     // Read live: the storage listener reassigns these at runtime. A
     // deliberately small surface — only what host.js's own code reads.
-    settings: () => ({ assistantEnabled, backendUrl, showInterventions }),
+    settings: () => ({ assistantEnabled, backendUrl, showInterventions, showConnections }),
+    onConnections: (list) => readingMap.setConnections(showConnections ? list : []),
     // Item DC-2's passive prerequisite-gap flag — see host.js's own
     // submitOutcome call sites for where this is actually read.
     wasParagraphExplained: selectionExplain.wasParagraphExplained,
@@ -376,6 +382,8 @@ async function boot() {
     sra_baseline_wpm: null, sra_dark_mode: false,
     sra_highlight_color: true, sra_highlight_summarize: false,
     sra_highlight_persist: true,
+    sra_explain_on_highlight: true,
+    sra_show_connections: true,
     sra_show_interventions: true, sra_show_self_report: true,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
@@ -384,6 +392,8 @@ async function boot() {
     highlightEnabled   = res.sra_highlight_para !== false;
     highlightColorEnabled     = res.sra_highlight_color !== false;
     highlightSummarizeEnabled = !!res.sra_highlight_summarize;
+    explainOnHighlightEnabled = res.sra_explain_on_highlight !== false;
+    showConnections = res.sra_show_connections !== false;
     highlightPersistEnabled   = res.sra_highlight_persist !== false;
     autohideEnabled    = !!res.sra_autohide;
     autohideTimeoutSec = res.sra_autohide_timeout || 12;
@@ -546,7 +556,7 @@ async function boot() {
     });
 
     const label = document.createElement('span');
-    label.textContent = 'Highlight:';
+    label.textContent = i18n.t('card.highlightLabel', i18n.uiLang());
     label.style.cssText = 'font-size:10px;color:#888;font-style:italic;white-space:nowrap;';
     picker.appendChild(label);
 
@@ -718,7 +728,10 @@ async function boot() {
     // want the colour mark without spending an assist on every one of them.
     // Read live at the point of action, not a captured copy, same as every
     // other flag in this file.
-    if (highlightSummarizeEnabled) {
+    // "Explain on highlight" (on by default) shows the same explanation the plain
+    // select path shows, right after the highlight is made. "Save an explanation
+    // with each highlight" keeps that explanation with the highlight as well.
+    if (highlightSummarizeEnabled || explainOnHighlightEnabled) {
       let anchorRect = null;
       try { const r = mark.getBoundingClientRect(); if (r.width || r.height) anchorRect = r; } catch (e) {}
       const mode = isLikelyCode(text) ? 'explain_code' : 'tldr';
@@ -727,7 +740,7 @@ async function boot() {
         renderPopup(anchorRect, `<div>${esc(summary)}</div>`, { text, source: 'highlight', mode });
         // Item 36: persisted alongside the highlight, not just shown once —
         // only meaningful if the highlight itself was persisted above.
-        if (highlightPersistEnabled) saveHighlightExplanation(urlKey, hlId, summary);
+        if (highlightSummarizeEnabled && highlightPersistEnabled) saveHighlightExplanation(urlKey, hlId, summary);
       }
       // A failed fetch degrades to silence here, same as every other AI call
       // in this file (invariant 9) — the colour mark itself already landed
@@ -810,14 +823,14 @@ async function boot() {
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
-    removeBtn.textContent = 'Remove highlight';
+    removeBtn.textContent = i18n.t('card.removeHighlight', i18n.uiLang());
     removeBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:#a33;font-size:11px;padding:2px 4px;white-space:nowrap;';
     removeBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteTextHighlight(hlId, mark); }, { signal });
     chip.appendChild(removeBtn);
 
     const viewLink = document.createElement('a');
     viewLink.href = '#';
-    viewLink.textContent = 'All highlights →';
+    viewLink.textContent = i18n.t('card.allHighlights', i18n.uiLang());
     viewLink.style.cssText = 'color:#888;font-size:10px;text-decoration:underline;cursor:pointer;white-space:nowrap;';
     viewLink.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); highlightsSidebar.open(); }, { signal });
     chip.appendChild(viewLink);
@@ -1264,9 +1277,7 @@ async function boot() {
 
     if (!summary) {
       renderPopup(anchorRect,
-        `<div class="sra-error">Could not reach the AI backend.<br>
-         If you run it locally, start it with:<br>
-         <code style="font-size:11px;font-family:monospace">cd server &amp;&amp; node index.js</code></div>`,
+        `<div class="sra-error">${esc(i18n.t('card.noBackend', i18n.uiLang()))}</div>`,
         { text: selected, source: 'selection', mode });
       return;
     }
@@ -1379,6 +1390,8 @@ async function boot() {
       if (msg.highlightPara !== undefined) highlightEnabled   = !!msg.highlightPara;
       if (msg.highlightColor     !== undefined) highlightColorEnabled     = !!msg.highlightColor;
       if (msg.highlightSummarize !== undefined) highlightSummarizeEnabled = !!msg.highlightSummarize;
+      if (msg.explainOnHighlight !== undefined) explainOnHighlightEnabled = !!msg.explainOnHighlight;
+      if (msg.showConnections !== undefined) { showConnections = !!msg.showConnections; if (!showConnections) readingMap.setConnections([]); }
       if (msg.highlightPersist   !== undefined) highlightPersistEnabled   = !!msg.highlightPersist;
       if (msg.autohide      !== undefined) autohideEnabled    = !!msg.autohide;
       if (msg.autohideTimeout !== undefined) autohideTimeoutSec = Number(msg.autohideTimeout) || 12;
@@ -1722,8 +1735,20 @@ async function boot() {
    * unwrapping them is out of scope here (their interaction listeners —
    * dblclick to delete, the hover/focus removal chip — go with everything
    * else above since they share this same AbortSignal). */
+  // The settings page lives in its own tab, so its broadcast never reaches this one; storage does.
+  const onLiveSettings = (changes, area) => {
+    if (area !== 'local') return;
+    if (changes.sra_explain_on_highlight) explainOnHighlightEnabled = changes.sra_explain_on_highlight.newValue !== false;
+    if (changes.sra_show_connections) {
+      showConnections = changes.sra_show_connections.newValue !== false;
+      if (!showConnections) readingMap.setConnections([]);
+    }
+  };
+  try { chrome.storage.onChanged.addListener(onLiveSettings); } catch (e) { /* no storage here */ }
+
   teardownBoot = function teardown() {
     bootController.abort();
+    try { chrome.storage.onChanged.removeListener(onLiveSettings); } catch (e) {}
     try { orchestrator.stop(); } catch (e) {}
     try { hidePopup(true); } catch (e) { /* nothing open */ }
     try { ui.clearHighlight(); } catch (e) { /* nothing highlighted */ }

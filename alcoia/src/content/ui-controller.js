@@ -21,6 +21,7 @@
  */
 
 import { createShadowHost, setDarkMode as setShadowDarkMode } from './shadow-host.js';
+import { t, uiLang, isRtl } from '../shared/i18n.js';
 
 const POPUP_MARGIN = 14;
 const MAX_POPUPS   = 5;      // hard cap before the oldest unpinned is evicted
@@ -363,22 +364,25 @@ export function createUIController(deps = {}) {
     const root = reservePopup(fingerprint);
     if (!root) return;
 
+    const lang = uiLang();
+    const L = (key) => t(key, lang);
     const badge = meta.trigger
       ? `<div class="sra-state-badge">${esc(meta.triggerLabel || meta.trigger)}</div>`
       : meta.source === 'selection'
-        ? '<div class="sra-state-badge">selected text</div>'
+        ? `<div class="sra-state-badge">${esc(L('badge.selected'))}</div>`
         : '';
+    if (isRtl(lang)) root.setAttribute('dir', 'rtl');
 
     root.innerHTML = `
       <div class="sra-controls">
-        <button class="sra-ctrl-btn sra-pin-btn" title="Pin">📌</button>
-        <button class="sra-ctrl-btn sra-close-btn" title="Close">✕</button>
+        <button class="sra-ctrl-btn sra-pin-btn" title="${esc(L('card.keepOpen'))}">📌</button>
+        <button class="sra-ctrl-btn sra-close-btn" title="${esc(L('card.close'))}">✕</button>
       </div>
       <div class="sra-popup-body" dir="auto">${badge}${html}</div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
-        <button class="sra-btn sra-btn-primary  sra-explain-btn">Explain More</button>
-        <button class="sra-btn sra-btn-secondary sra-note-btn">Save Note</button>
+        <button class="sra-btn sra-btn-primary  sra-explain-btn">${esc(L('card.explainMore'))}</button>
+        <button class="sra-btn sra-btn-secondary sra-note-btn">${esc(L('card.saveNote'))}</button>
       </div>`;
 
     root.querySelector('.sra-close-btn').onclick = () => closePopup(root, fingerprint);
@@ -401,11 +405,11 @@ export function createUIController(deps = {}) {
 
     root.querySelector('.sra-explain-btn').onclick = async () => {
       const btn = root.querySelector('.sra-explain-btn');
-      btn.disabled = true; btn.textContent = 'Thinking…';
+      btn.disabled = true; btn.textContent = L('card.thinking');
       const s = await fetchSummary(meta.text || '', 'explain_more');
       const body = root.querySelector('.sra-popup-body');
       if (body && s) body.innerHTML = badge + `<div>${esc(s)}</div>`;
-      btn.textContent = 'Explain More'; btn.disabled = false;
+      btn.textContent = L('card.explainMore'); btn.disabled = false;
       // Give the reader time to read the expanded content.
       resetAutohide(root, fingerprint);
     };
@@ -413,7 +417,7 @@ export function createUIController(deps = {}) {
     root.querySelector('.sra-note-btn').onclick = () => {
       chrome.runtime.sendMessage({ action: 'saveNote', note: { text: meta.text || '', meta } });
       const btn = root.querySelector('.sra-note-btn');
-      btn.textContent = 'Saved ✓'; btn.disabled = true;
+      btn.textContent = L('card.saved'); btn.disabled = true;
     };
 
     showPopup(root, anchorRect);
@@ -498,7 +502,7 @@ export function createUIController(deps = {}) {
     const el = document.createElement('div');
     el.id = 'sra-select-tooltip';
     el.className = 'sra-select-tooltip';
-    el.innerHTML = `<button type="button" class="sra-select-tooltip-btn">Explain this →</button>`;
+    el.innerHTML = `<button type="button" class="sra-select-tooltip-btn">${esc(t('card.explainThis', uiLang()))}</button>`;
     shadow.appendChild(el);
 
     const vw = window.innerWidth, vh = window.innerHeight;
