@@ -1545,7 +1545,7 @@ export async function createHost(deps) {
     const isDue = dueKnowledgeUnits.has(identity.knowledgeUnitId);
     // A due review comes first. An instructor focus is only a preference among moments the policy
     // already allows, and never while the reader is struggling or drifting: it must not add friction.
-    const isFocus = !isDue && focusKnowledgeUnits.has(identity.knowledgeUnitId) && lastCogState !== 'struggling' && lastCogState !== 'drifting';
+    const isFocus = !isDue && focusKnowledgeUnits.has(identity.knowledgeUnitId) && lastCogState !== 'struggling' && lastCogState !== 'drifting' && lastCogState !== 'away';
     if (!isDue && !isFocus) return;
 
     if (await snoozeControl.isActive()) return;
@@ -1660,7 +1660,7 @@ export async function createHost(deps) {
   const probeBlocked = () => (
     ui.hasVisibleQuestionCard()
     || (lastNormalCardAt !== 0 && Date.now() - lastNormalCardAt < PROBE_QUIET_MS)
-    || lastCogState === 'struggling' || lastCogState === 'drifting'
+    || lastCogState === 'struggling' || lastCogState === 'drifting' || lastCogState === 'away'
   );
   const probe = { words: 0, nextAt: PROBE_FIRST_WORDS, counted: new Set(), asked: 0, busy: false };
   const wordCount = (t) => (String(t || '').trim().match(/\S+/g) || []).length;

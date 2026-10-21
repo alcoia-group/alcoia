@@ -17,14 +17,15 @@ import { STATE_COLORS, STATE_LABELS } from '../alcoia/src/popup/session-report-s
 const engineStates = Object.values(STATES);
 
 describe('session-report state vocabulary', () => {
-  it('the engine actually exports the five states this test relies on', () => {
-    // Sanity check on the derivation itself — if state-engine.js's export
+  it('the engine actually exports the states this test relies on', () => {
+    // Sanity check on the derivation itself: if state-engine.js's export
     // shape ever changes, this fails loudly instead of engineStates
-    // silently becoming an empty or wrong array. (Was six; ABSENT was
-    // removed from STATES once the intelligence-architecture audit
-    // confirmed nothing ever produced it — see state-engine.js.)
-    expect(engineStates.length).toBeGreaterThanOrEqual(5);
+    // silently becoming an empty or wrong array.
+    expect(engineStates.length).toBeGreaterThanOrEqual(6);
     expect(engineStates).toContain('unknown');
+    expect(engineStates).toContain('away');
+    expect(STATE_LABELS.away).toBe('Away');
+    expect(STATE_COLORS.away).toBeTruthy();
   });
 
   it('every STATE_COLORS key is a state the engine can actually emit', () => {

@@ -51,6 +51,7 @@ export const STATE_ACTIONS = Object.freeze({
   [STATES.DRIFTING]:   'nudge',
   [STATES.SKIMMING]:   'ask',
   [STATES.ON_PACE]:    'none',
+  [STATES.AWAY]:       'none',
   [STATES.UNKNOWN]:    'none',
 });
 
@@ -477,6 +478,8 @@ export function createInterventionPolicy(config = {}) {
 
     if (!state || !state.label) return deny('no state');
     if (state.label === STATES.UNKNOWN) return deny('state is unknown');
+    // The reader is not at the page: nothing is shown, and nothing is spent.
+    if (state.label === STATES.AWAY) return deny('reader is away');
 
     let action = STATE_ACTIONS[state.label] || 'none';
     // Step 23: the new 8-value vocabulary, derived from `action` and refined

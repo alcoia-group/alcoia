@@ -195,6 +195,12 @@ export function createParagraphTracker(opts = {}) {
 
   function signal() { const s = pending; pending = null; return s; }
 
+  /* Move the active paragraph's start forward by time the reader was away, so
+   * its dwell counts only time at the page. */
+  function shiftTime(ms) {
+    if (active && Number.isFinite(ms) && ms > 0) active.enteredAt += ms;
+  }
+
   /* Discard in-flight tracking state without producing a transition — a
    * genuine SPA route change swaps the DOM out from under `paragraphs`, and
    * without this the next `update()` would report the OLD document's active
@@ -213,7 +219,7 @@ export function createParagraphTracker(opts = {}) {
 
   return {
     update,
-    signal,
+    signal, shiftTime,
     rescan: scan,
     reset,
     getActive: () => (active ? { ...active } : null),
