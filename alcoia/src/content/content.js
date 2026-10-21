@@ -4,7 +4,18 @@
 */
 
 // ── Double-injection guard ─────────────────────────────────────────────────
-if (!window.__sra_content_loaded) {
+// The alcoia workspace (workspace.alcoia.app) runs this extension's own detection code itself on its readings, so
+// a student needs no install there. A workspace page says so with <meta name="alcoia-detection"
+// content="workspace">; on such a page, on the workspace's own origin only, this script does nothing at all, so
+// the reader never gets two detectors (two sets of cards) at once. Any other site is unaffected by the tag.
+function __sra_workspace_detects() {
+  try {
+    const meta = document.querySelector('meta[name="alcoia-detection"]');
+    return !!meta && meta.getAttribute('content') === 'workspace'
+      && !!self.ALCOIA_CONFIG && window.location.origin === self.ALCOIA_CONFIG.READER_ORIGIN;
+  } catch (e) { return false; }
+}
+if (!window.__sra_content_loaded && !__sra_workspace_detects()) {
   window.__sra_content_loaded = true;
   __sra_main();
 }
@@ -1790,4 +1801,8 @@ try {
 chrome.storage.local.get({ sra_enabled: true }, (res) => {
   if (res.sra_enabled !== false) boot();
 });
+
+// Signed in, settings and the reading baseline follow the account; the background script pulls them (it
+// throttles this itself, so a page load is cheap).
+try { chrome.runtime.sendMessage({ action: 'accountSync' }, () => { void chrome.runtime.lastError; }); } catch (e) { /* no runtime here */ }
 } // end __sra_main
