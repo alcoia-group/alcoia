@@ -9,9 +9,8 @@
      are harder for dyslexic readers to track)
    - Optional colour overlay (some readers benefit from a warm tint over white)
 
-   Classifier threshold note: dyslexic readers naturally have higher regression
-   rates and longer fixation times. content.js scales regression_rate tolerance
-   when dyslexia mode is active to avoid false "confused" triggers.
+   It changes how the page looks only. It does not change when or how often
+   alcoia interrupts.
 */
 
 const CSS_ID     = 'sra-dyslexia-css';
