@@ -79,6 +79,9 @@
     // is the only authority on consent; src/shared/learning-memory.js keeps
     // no consent state of its own.
     LEARNING_MEMORY_URL: BACKEND_ORIGIN + '/api/account/learning-memory',
+    // GET -> { documents: [{ kind, id, title, url_path, concepts: [{ label, description }] }] }. The account's own
+    // workspace documents and their ideas, for matching against the page on this device. Capability-gated by the server.
+    DOCUMENT_CONCEPTS_URL: BACKEND_ORIGIN + '/api/account/document-concepts',
     INVITE_ACCEPT_URL: BACKEND_ORIGIN + '/api/invites/accept',
     INVITE_PREVIEW_URL: BACKEND_ORIGIN + '/api/invites/preview',
     SEATS_URL: BACKEND_ORIGIN + '/api/seats',

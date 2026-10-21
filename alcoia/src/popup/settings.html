@@ -194,9 +194,20 @@
       <input class="field-input field-input-sm" id="autohideTimeout" type="number" min="3" max="120" value="12">
     </div>
     <p class="section-note">
-      However these are set, you are interrupted at most once every three minutes, never twice on
-      the same paragraph, and the more you read the more of a cushion you earn.
+      Cards appear at most once every three minutes and never twice on the same paragraph.
     </p>
+  </div>
+
+  <!-- ════════════════════ Session ════════════════════
+       The same two actions as Alt+R and Alt+I, for the page you were last reading.
+       This page opens in its own tab, so they go to that page, not to this one. -->
+  <div class="settings-card">
+    <div class="settings-group-title">Session</div>
+    <div class="btn-row">
+      <button class="btn btn-ghost" id="recallBtn" type="button">Recall</button>
+      <button class="btn btn-ghost" id="receiptBtn" type="button">Receipt</button>
+    </div>
+    <p class="section-note" id="sessionToolsNote">Alt+R and Alt+I do the same on the page.</p>
   </div>
 
   <!-- ════════════════════ Explain & Highlight ════════════════════
@@ -212,7 +223,7 @@
           <span class="toggle-cell-name">Explain text I select</span>
           <label class="pill"><input type="checkbox" id="selToggle" checked><span class="pill-track"></span></label>
         </div>
-        <span class="toggle-cell-desc">Look up a word, explain an image, or summarise a passage on selection or Ctrl+hover. Uses one assist each time.</span>
+        <span class="toggle-cell-desc">Look up a word, explain an image, or summarise a passage on selection or Ctrl+hover.</span>
       </label>
       <label class="toggle-cell" for="highlightToggle">
         <div class="toggle-cell-top">
@@ -226,7 +237,7 @@
           <span class="toggle-cell-name">Highlight colour</span>
           <label class="pill"><input type="checkbox" id="highlightColorToggle" checked><span class="pill-track"></span></label>
         </div>
-        <span class="toggle-cell-desc">Ctrl+drag to mark a passage in colour. Costs nothing and stays on your device.</span>
+        <span class="toggle-cell-desc">Ctrl+drag to mark a passage in colour. Marks stay on your device.</span>
       </label>
       <label class="toggle-cell" for="highlightPersistToggle">
         <div class="toggle-cell-top">
@@ -240,7 +251,21 @@
           <span class="toggle-cell-name">Save an explanation with each highlight</span>
           <label class="pill"><input type="checkbox" id="highlightSummarizeToggle"><span class="pill-track"></span></label>
         </div>
-        <span class="toggle-cell-desc">Asks the AI to explain what you highlighted. Uses one assist each time.</span>
+        <span class="toggle-cell-desc">Keeps the explanation on the Highlights page.</span>
+      </label>
+      <label class="toggle-cell" for="explainOnHighlightToggle">
+        <div class="toggle-cell-top">
+          <span class="toggle-cell-name">Explain on highlight</span>
+          <label class="pill"><input type="checkbox" id="explainOnHighlightToggle" checked><span class="pill-track"></span></label>
+        </div>
+        <span class="toggle-cell-desc">Ctrl+drag a passage and its explanation opens right away.</span>
+      </label>
+      <label class="toggle-cell" for="showConnectionsToggle">
+        <div class="toggle-cell-top">
+          <span class="toggle-cell-name">Show connections to my documents</span>
+          <label class="pill"><input type="checkbox" id="showConnectionsToggle" checked><span class="pill-track"></span></label>
+        </div>
+        <span class="toggle-cell-desc">When a page covers an idea from one of your workspace documents, a quiet entry in the reading map links to it. Needs the Reader or Student plan. The matching happens on this device.</span>
       </label>
     </div>
   </div>
@@ -266,7 +291,7 @@
     <label class="toggle-row" for="dyslexiaToggle">
       <div class="toggle-info">
         <span class="toggle-name">Dyslexia mode</span>
-        <span class="toggle-desc">Cleaner face, wider spacing, and a slower hand on interruptions</span>
+        <span class="toggle-desc">Cleaner face and wider spacing</span>
       </div>
       <label class="pill"><input type="checkbox" id="dyslexiaToggle"><span class="pill-track"></span></label>
     </label>
@@ -289,7 +314,7 @@
     <div class="settings-group-title">Documents</div>
     <label class="toggle-row" for="pdfTakeoverToggle">
       <div class="toggle-info">
-        <span class="toggle-name">Open local PDF/PPTX files in alcoia</span>
+        <span class="toggle-name">Open local PDF and PowerPoint files in alcoia</span>
         <span class="toggle-desc">Off leaves them to your browser's own handling instead, with no alcoia detection.</span>
       </div>
       <label class="pill"><input type="checkbox" id="pdfTakeoverToggle" checked><span class="pill-track"></span></label>
@@ -318,7 +343,7 @@
   <div class="settings-card">
     <div class="settings-group-title">Account</div>
     <div id="accountSignedOut">
-      <p class="section-note">Sign in for the paid features: your own documents, portable receipts, sync.</p>
+      <p class="section-note">Sign in to use your plan on every device.</p>
       <div class="btn-row"><button class="btn btn-ghost" id="signInBtn">Sign in</button></div>
     </div>
     <div id="accountSignedIn" hidden>
@@ -459,7 +484,7 @@
         <kbd>Alt+N</kbd><span class="kbd-desc">Notes</span>
         <kbd>Alt+G</kbd><span class="kbd-desc">Session report</span>
         <kbd>Alt+C</kbd><span class="kbd-desc">Self-report how reading is going</span>
-        <kbd>Ctrl+drag</kbd><span class="kbd-desc">Highlight the selection</span>
+        <kbd>Ctrl+drag</kbd><span class="kbd-desc">Highlight the selection and explain it</span>
         <kbd>Ctrl+hover</kbd><span class="kbd-desc">Define a word in context</span>
         <kbd>Esc</kbd><span class="kbd-desc">Close open cards</span>
       </div>

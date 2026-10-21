@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInterventionPolicy, STATE_ACTIONS } from '../alcoia/src/content/intervention-policy.js';
+import { createInterventionPolicy, STATE_ACTIONS, SESSION_CAP_ENABLED } from '../alcoia/src/content/intervention-policy.js';
 import { STATES } from '../alcoia/src/content/state-engine.js';
 
 function fixedClock(start = 1_000_000) {
@@ -127,7 +127,7 @@ describe('budget', () => {
     expect(p.evaluate(struggling({ signal: { text: 'b' } })).allow).toBe(true);
   });
 
-  it('stops after five in a session', () => {
+  it.skipIf(!SESSION_CAP_ENABLED)('stops after five in a session', () => {
     const clock = fixedClock();
     const p = createInterventionPolicy({ now: clock.now });
 
@@ -141,6 +141,21 @@ describe('budget', () => {
     const sixth = p.evaluate(struggling({ signal: { text: 'para 6' } }));
     expect(sixth.allow).toBe(false);
     expect(sixth.reason).toMatch(/session budget/);
+  });
+
+  it('has no per-session cap while SESSION_CAP_ENABLED is off: many interruptions, still one per gap', () => {
+    expect(SESSION_CAP_ENABLED).toBe(false);
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    for (let i = 0; i < 40; i++) {
+      const d = take(p, struggling({ signal: { text: `para ${i}` } }));
+      expect(d.allow).toBe(true);
+      // the 3 minute gap still applies
+      clock.advance(60_000);
+      expect(p.evaluate(struggling({ signal: { text: `soon ${i}` } })).reason).toMatch(/since the last interruption/);
+      clock.advance(121_000);
+    }
+    expect(p.stats().count).toBe(40);
   });
 
   it('never interrupts twice on the same paragraph', () => {
@@ -189,7 +204,7 @@ describe('budget', () => {
   });
 });
 
-describe('the session cap scales with content read', () => {
+describe.skipIf(!SESSION_CAP_ENABLED)('the session cap scales with content read', () => {
   it('starts at the base allowance with nothing read yet', () => {
     const p = createInterventionPolicy({ now: fixedClock().now });
     expect(p.stats().cap).toBe(5);
@@ -497,7 +512,7 @@ describe('evaluateRetentionCandidate (step 7)', () => {
     expect(d.reason).toMatch(/since the last interruption/);
   });
 
-  it('respects the session cap, shared with every other path', () => {
+  it.skipIf(!SESSION_CAP_ENABLED)('respects the session cap, shared with every other path', () => {
     const clock = fixedClock();
     const p = createInterventionPolicy({ now: clock.now, budget: { baseAllowance: 1, minGapMs: 0 } });
     const first = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
@@ -567,7 +582,7 @@ describe('evaluateRetentionCandidate (step 7)', () => {
     expect(next.allow).toBe(false);
   });
 
-  it('a denied decision is never recorded against the budget (record() no-ops on allow: false)', () => {
+  it.skipIf(!SESSION_CAP_ENABLED)('a denied decision is never recorded against the budget (record() no-ops on allow: false)', () => {
     const clock = fixedClock();
     const p = createInterventionPolicy({ now: clock.now, budget: { baseAllowance: 0, minGapMs: 0 } });
     const denied = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
@@ -1238,7 +1253,7 @@ describe('evaluateRetentionCandidate with kind "probe" (scheduled quick check)',
     expect(d.policyAction).toBe('retrieve');
     expect(d.evidence[0]).toMatch(/quick check/i);
   });
-  it('can never take the last free slot of the session budget, which stays for real help', () => {
+  it.skipIf(!SESSION_CAP_ENABLED)('can never take the last free slot of the session budget, which stays for real help', () => {
     const p = createInterventionPolicy({ now: fixedClock().now, budget: { baseAllowance: 2, minGapMs: 0 } });
     p.record(p.evaluateRetentionCandidate({ paragraphKey: 'a', kind: 'retention' })); // 1 of 2 used
     const probe = p.evaluateRetentionCandidate({ paragraphKey: 'b', kind: 'probe' });

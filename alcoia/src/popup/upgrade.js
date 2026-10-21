@@ -113,7 +113,7 @@ async function getLocalClassId() {
 
 const PRICES = {
   annual:  { amount: '$4.92', unit: '/mo', note: '$59 billed annually' },
-  monthly: { amount: '$9',    unit: '/mo', note: 'Billed monthly, cancel any time' },
+  monthly: { amount: '$6.99', unit: '/mo', note: 'Billed monthly, cancel any time' },
 };
 
 const session = createSessionManager();

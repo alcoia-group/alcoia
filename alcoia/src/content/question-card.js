@@ -47,6 +47,12 @@ import { calibratedLine } from './calibration-copy.js';
 import { SNOOZE_OPTIONS } from './snooze.js';
 import { renderHighlightedExplanation } from './keyword-highlight.js';
 import { gradedResultMarkup, respondedResultMarkup } from './graded-result.js';
+import { t, tr, uiLang, isRtl } from '../shared/i18n.js';
+
+/* One closing full stop on the "why now" line, unless the sentence already ends in punctuation. */
+function evidenceSentence(text) {
+  return /[.。!?…]$/.test(text) ? text : `${text}.`;
+}
 
 const GRADED_LEVELS = ['free_recall', 'scenario'];
 const FREE_TEXT_LEVELS = ['free_recall', 'scenario', 'adversarial'];
@@ -125,6 +131,9 @@ export function createQuestionCard(deps = {}) {
       return false;
     }
 
+    // The fixed words on the card follow the language of the page.
+    const lang = uiLang();
+    const L = (key, vars) => t(key, lang, vars);
     const fingerprint = 'q-' + (question.span || question.q).slice(0, 80).trim();
     // Step 9A: tags this popup as a genuine question card — the ONE thing
     // ui-controller.js's hasVisibleQuestionCard() looks for, so the policy
@@ -154,8 +163,9 @@ export function createQuestionCard(deps = {}) {
     responseSignals.present(question, { ...context, questionId: fingerprint });
 
     const evidence = context.evidence && context.evidence.length
-      ? `<div class="sra-q-evidence">${esc(context.evidence[0])}.</div>`
+      ? `<div class="sra-q-evidence">${esc(evidenceSentence(tr(context.evidence[0], lang)))}</div>`
       : '';
+    if (isRtl(lang)) root.setAttribute('dir', 'rtl');
 
     const bodyInner = level === 'recognition'
       ? `<div class="sra-q-options">
@@ -163,7 +173,7 @@ export function createQuestionCard(deps = {}) {
             `<button class="sra-q-option" data-index="${i}">${esc(opt)}</button>`).join('')}
         </div>`
       : `<div class="sra-q-freetext">
-          <textarea class="sra-q-answer-input" maxlength="${MAX_ANSWER_CHARS}" rows="3" placeholder="Type your answer…"></textarea>
+          <textarea class="sra-q-answer-input" maxlength="${MAX_ANSWER_CHARS}" rows="3" placeholder="${esc(L('card.typeAnswer'))}"></textarea>
           <div class="sra-q-answer-count"><span class="sra-q-answer-count-num">0</span>/${MAX_ANSWER_CHARS}</div>
         </div>`;
 
@@ -174,21 +184,21 @@ export function createQuestionCard(deps = {}) {
     // separate signals about two separate things.
     const selfReport = context.showSelfReport && onSelfReport
       ? `<div class="sra-self-report-inline">
-          <div class="sra-self-report-prompt">Not sure how to describe this?</div>
+          <div class="sra-self-report-prompt">${esc(L('sr.prompt'))}</div>
           <div class="sra-self-report-options">
-            <button type="button" class="sra-self-report-btn" data-self-report="overload">Too much at once</button>
-            <button type="button" class="sra-self-report-btn" data-self-report="confusion">I'm stuck / don't get it</button>
-            <button type="button" class="sra-self-report-btn" data-self-report="disengaged">Not interested / lost focus</button>
+            <button type="button" class="sra-self-report-btn" data-self-report="overload">${esc(L('sr.overload'))}</button>
+            <button type="button" class="sra-self-report-btn" data-self-report="confusion">${esc(L('sr.confusion'))}</button>
+            <button type="button" class="sra-self-report-btn" data-self-report="disengaged">${esc(L('sr.disengaged'))}</button>
           </div>
         </div>`
       : '';
 
     root.innerHTML = `
       <div class="sra-controls">
-        <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
+        <button class="sra-ctrl-btn sra-close-btn" title="${esc(L('card.dismiss'))}">✕</button>
       </div>
       <div class="sra-popup-body">
-        <div class="sra-state-badge sra-q-badge">${esc(context.badge || 'quick check')}</div>
+        <div class="sra-state-badge sra-q-badge">${esc(tr(context.badge || 'quick check', lang))}</div>
         ${evidence}
         <div class="sra-q-text">${esc(question.q)}</div>
         ${bodyInner}
@@ -196,8 +206,8 @@ export function createQuestionCard(deps = {}) {
       </div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
-        <button class="sra-btn sra-btn-secondary sra-q-skip">Skip this</button>
-        ${onSnooze ? '<button type="button" class="sra-q-snooze-toggle">Snooze reminders</button>' : ''}
+        <button class="sra-btn sra-btn-secondary sra-q-skip">${esc(L('card.skip'))}</button>
+        ${onSnooze ? `<button type="button" class="sra-q-snooze-toggle">${esc(L('card.snooze'))}</button>` : ''}
       </div>`;
 
     if (selfReport) {
@@ -205,7 +215,7 @@ export function createQuestionCard(deps = {}) {
         btn.onclick = () => {
           onSelfReport(btn.dataset.selfReport);
           for (const b of root.querySelectorAll('[data-self-report]')) b.disabled = true;
-          btn.textContent = 'Thanks, noted.';
+          btn.textContent = L('sr.thanks');
         };
       }
     }
@@ -240,8 +250,8 @@ export function createQuestionCard(deps = {}) {
         const panel = document.createElement('div');
         panel.className = 'sra-q-snooze-options';
         panel.innerHTML = `
-          <span class="sra-q-snooze-label">Pause reminders for:</span>
-          ${SNOOZE_OPTIONS.map((o) => `<button type="button" data-snooze="${o.id}">${esc(o.label)}</button>`).join('')}`;
+          <span class="sra-q-snooze-label">${esc(L('card.pauseFor'))}</span>
+          ${SNOOZE_OPTIONS.map((o) => `<button type="button" data-snooze="${o.id}">${esc(L('snooze.' + o.id))}</button>`).join('')}`;
         // Appended to the body, not .sra-actions — that row is a non-wrapping
         // flex row and this needs its own line underneath it.
         body.appendChild(panel);
@@ -262,11 +272,11 @@ export function createQuestionCard(deps = {}) {
       const step = document.createElement('div');
       step.className = 'sra-q-confidence';
       step.innerHTML = `
-        <div class="sra-q-confidence-label">How sure are you?</div>
+        <div class="sra-q-confidence-label">${esc(L('card.howSure'))}</div>
         <div class="sra-q-confidence-options">
-          <button type="button" class="sra-q-conf-btn" data-conf="low">Not sure</button>
-          <button type="button" class="sra-q-conf-btn" data-conf="high">Pretty sure</button>
-          <button type="button" class="sra-q-conf-skip">Rather not say</button>
+          <button type="button" class="sra-q-conf-btn" data-conf="low">${esc(L('card.notSure'))}</button>
+          <button type="button" class="sra-q-conf-btn" data-conf="high">${esc(L('card.prettySure'))}</button>
+          <button type="button" class="sra-q-conf-skip">${esc(L('card.ratherNot'))}</button>
         </div>`;
       body.appendChild(step);
       step.querySelector('[data-conf="low"]').onclick = () => onCommit('low');
@@ -276,7 +286,7 @@ export function createQuestionCard(deps = {}) {
 
     function finish() {
       const skip = root.querySelector('.sra-q-skip');
-      if (skip) { skip.textContent = 'Close'; skip.onclick = () => ui.closePopup(root, fingerprint); }
+      if (skip) { skip.textContent = L('card.close'); skip.onclick = () => ui.closePopup(root, fingerprint); }
     }
 
     if (level === 'recognition') {
@@ -289,10 +299,10 @@ export function createQuestionCard(deps = {}) {
         const record = responseSignals.answer(selected, question, confidence, interventionId);
         if (record && onAnswered) onAnswered(record);
 
-        revealAnswer(root, question, selected, confidence, esc);
+        revealAnswer(root, question, selected, confidence, esc, lang);
 
         if (record && !record.correct) {
-          offerExplanation(root, question, fetchExplanation, esc);
+          offerExplanation(root, question, fetchExplanation, esc, lang);
         }
 
         finish();
@@ -318,7 +328,7 @@ export function createQuestionCard(deps = {}) {
       const submitBtn = document.createElement('button');
       submitBtn.type = 'button';
       submitBtn.className = 'sra-btn sra-btn-primary sra-q-submit-text';
-      submitBtn.textContent = 'Submit';
+      submitBtn.textContent = L('card.submit');
       submitBtn.disabled = true;
       root.querySelector('.sra-actions').prepend(submitBtn);
 
@@ -344,14 +354,14 @@ export function createQuestionCard(deps = {}) {
           // correct/gradingMethod stay fixed at null/'none' by design.
           const record = responseSignals.respond(answerText, confidence, interventionId);
           if (record && onAnswered) onAnswered(record);
-          revealResponded(root);
+          revealResponded(root, lang);
           finish();
           return;
         }
 
         const working = document.createElement('div');
         working.className = 'sra-q-explain';
-        working.textContent = 'Checking your answer…';
+        working.textContent = L('card.checking');
         body.appendChild(working);
 
         // Every failure here — no fetchGrading wired up, a thrown error, a
@@ -387,7 +397,7 @@ export function createQuestionCard(deps = {}) {
         const record = responseSignals.answerGraded(answerText, verdict, confidence, interventionId);
         if (record && onAnswered) onAnswered(record);
 
-        revealGraded(root, question, verdict, level, esc);
+        revealGraded(root, question, verdict, level, esc, lang);
 
         // Only free_recall can ever reach here with subtype 'incorrect' —
         // fetchGrading() structurally cannot return "incorrect" for
@@ -396,7 +406,7 @@ export function createQuestionCard(deps = {}) {
         // so this condition is never true there in the first place, not merely
         // guarded against being acted on.
         if (record && record.subtype === 'incorrect') {
-          offerExplanation(root, question, fetchExplanation, esc);
+          offerExplanation(root, question, fetchExplanation, esc, lang);
         }
 
         finish();
@@ -457,6 +467,8 @@ export function createQuestionCard(deps = {}) {
     if (!text || typeof text !== 'string' || !text.trim()) return false;
 
     const isRepair = kind === 'repair';
+    const lang = uiLang();
+    const L = (key, vars) => t(key, lang, vars);
     const fingerprint = (isRepair ? 'r-' : 'x-') + text.slice(0, 80).trim();
     // Tagged a kind other than 'question' deliberately — ui-controller.js's
     // hasVisibleQuestionCard() exists specifically to mean "a retrieval
@@ -469,23 +481,25 @@ export function createQuestionCard(deps = {}) {
     const badgeText = typeof context.badge === 'string' && context.badge.trim()
       ? context.badge.trim().slice(0, 40)
       : (isRepair ? 'clearing this up' : 'a closer look');
+    const badgeShown = tr(badgeText, lang);
     const evidenceHtml = context.evidence && context.evidence.length
-      ? `<div class="sra-q-evidence">${esc(context.evidence[0])}.</div>`
+      ? `<div class="sra-q-evidence">${esc(evidenceSentence(tr(context.evidence[0], lang)))}</div>`
       : '';
+    if (isRtl(lang)) root.setAttribute('dir', 'rtl');
 
     root.innerHTML = `
       <div class="sra-controls">
-        <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
+        <button class="sra-ctrl-btn sra-close-btn" title="${esc(L('card.dismiss'))}">✕</button>
       </div>
       <div class="sra-popup-body">
-        <div class="sra-state-badge sra-explain-badge">${esc(badgeText)}</div>
+        <div class="sra-state-badge sra-explain-badge">${esc(badgeShown)}</div>
         ${evidenceHtml}
         <div class="sra-q-explain sra-explain-text">${renderHighlightedExplanation(text, esc)}</div>
       </div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
-        ${typeof context.onFeedback === 'function' ? '<span class="sra-q-helped"><span class="sra-q-helped-label">Did this help?</span> <button class="sra-btn sra-btn-secondary sra-q-helped-yes">Yes</button> <button class="sra-btn sra-btn-secondary sra-q-helped-no">Not really</button></span>' : ''}
-        <button class="sra-btn sra-btn-secondary sra-q-skip">Close</button>
+        ${typeof context.onFeedback === 'function' ? `<span class="sra-q-helped"><span class="sra-q-helped-label">${esc(L('card.helpQ'))}</span> <button class="sra-btn sra-btn-secondary sra-q-helped-yes">${esc(L('card.yes'))}</button> <button class="sra-btn sra-btn-secondary sra-q-helped-no">${esc(L('card.notReally'))}</button></span>` : ''}
+        <button class="sra-btn sra-btn-secondary sra-q-skip">${esc(L('card.close'))}</button>
       </div>`;
 
     const dismiss = () => ui.closePopup(root, fingerprint);
@@ -497,7 +511,7 @@ export function createQuestionCard(deps = {}) {
     if (helpedBox) {
       const answer = (helped) => {
         try { context.onFeedback(helped); } catch (e) { /* feedback is optional */ }
-        helpedBox.textContent = 'Thanks.';
+        helpedBox.textContent = L('card.thanks');
       };
       root.querySelector('.sra-q-helped-yes').onclick = () => answer(true);
       root.querySelector('.sra-q-helped-no').onclick = () => answer(false);
@@ -528,7 +542,7 @@ export function createQuestionCard(deps = {}) {
  * emphasis. See keyword-highlight.js for why this never runs on the
  * correct-answer branch: it is only ever called from the `!correct` half
  * below. */
-function revealAnswer(root, question, chosen, confidence, esc) {
+function revealAnswer(root, question, chosen, confidence, esc, lang = 'en') {
   for (const btn of root.querySelectorAll('.sra-q-option')) {
     const i = Number(btn.dataset.index);
     btn.disabled = true;
@@ -543,13 +557,13 @@ function revealAnswer(root, question, chosen, confidence, esc) {
   const correct = chosen === question.answerIndex;
   // A reader who committed without rating confidence gets the bare path —
   // confidence rating is skippable and must not gate grading on anything.
-  const calibrated = calibratedLine(correct, confidence);
+  const calibrated = calibratedLine(correct, confidence, lang);
 
   const note = document.createElement('div');
   note.className = correct ? 'sra-q-result sra-q-result-correct' : 'sra-q-result sra-q-result-wrong';
   note.innerHTML = correct
-    ? `<span class="sra-q-check" aria-hidden="true">✓</span><strong>${esc(calibrated || "That's right.")}</strong>`
-    : `<strong>${esc(calibrated || 'Not quite.')}</strong>${question.explanation ? ` ${renderHighlightedExplanation(question.explanation, esc)}` : ''}
+    ? `<span class="sra-q-check" aria-hidden="true">✓</span><strong>${esc(calibrated || t('res.thatsRight', lang))}</strong>`
+    : `<strong>${esc(calibrated || t('res.notQuite', lang))}</strong>${question.explanation ? ` ${renderHighlightedExplanation(question.explanation, esc)}` : ''}
        ${question.span ? `<div class="sra-q-span">“${esc(question.span)}”</div>` : ''}`;
   body.appendChild(note);
 }
@@ -569,10 +583,10 @@ function revealAnswer(root, question, chosen, confidence, esc) {
  * nothing, never a false correction (the project notes, item 43's whole reason to
  * exist). free_recall's "unknown" copy is worded the same way, for the same
  * reason — an inconclusive grade is not evidence of a wrong answer either. */
-function revealGraded(root, question, verdict, level, esc) {
+function revealGraded(root, question, verdict, level, esc, lang = 'en') {
   const body = root.querySelector('.sra-popup-body');
   if (!body) return;
-  const { className, innerHTML } = gradedResultMarkup({ verdict, level, question, esc });
+  const { className, innerHTML } = gradedResultMarkup({ verdict, level, question, esc, lang });
   const note = document.createElement('div');
   note.className = className;
   note.innerHTML = innerHTML;
@@ -581,24 +595,24 @@ function revealGraded(root, question, verdict, level, esc) {
 
 /* Item 43: adversarial's whole reveal — see graded-result.js's
  * respondedResultMarkup(), shared with quiz.js. */
-function revealResponded(root) {
+function revealResponded(root, lang = 'en') {
   const body = root.querySelector('.sra-popup-body');
   if (!body) return;
-  const { className, innerHTML } = respondedResultMarkup();
+  const { className, innerHTML } = respondedResultMarkup(lang);
   const note = document.createElement('div');
   note.className = className;
   note.innerHTML = innerHTML;
   body.appendChild(note);
 }
 
-async function offerExplanation(root, question, fetchExplanation, esc) {
+async function offerExplanation(root, question, fetchExplanation, esc, lang = 'en') {
   if (!fetchExplanation) return;
   const body = root.querySelector('.sra-popup-body');
   if (!body) return;
 
   const holder = document.createElement('div');
   holder.className = 'sra-q-explain';
-  holder.textContent = 'Working through it…';
+  holder.textContent = t('card.working', lang);
   body.appendChild(holder);
 
   try {

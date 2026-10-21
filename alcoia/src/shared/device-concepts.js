@@ -164,6 +164,17 @@ export function createDeviceConcepts(opts = {}) {
     return rows.length ? paragraphEstimate(rows) : null;
   }
 
+  /* The ideas that have qualified on THIS page load so far, as { key, label }. Read from memory only; nothing is
+   * stored or sent. Used to match the page against the reader's own documents on this device. */
+  function pageIdeas() {
+    const out = [];
+    for (const [key, ids] of seen) {
+      if (ids.size < minParagraphs) continue;
+      out.push({ key, label: cache?.[key]?.label ?? key });
+    }
+    return out;
+  }
+
   /* What is kept, for the diagnostics page: labels and counts only. */
   async function list() {
     await load();
@@ -178,5 +189,5 @@ export function createDeviceConcepts(opts = {}) {
     await chain;
   }
 
-  return { noteRead, noteAnswer, estimateFor, list, clear, load };
+  return { noteRead, noteAnswer, estimateFor, pageIdeas, list, clear, load };
 }

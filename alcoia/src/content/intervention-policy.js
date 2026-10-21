@@ -7,9 +7,11 @@
  *
  * Rules are from the project notes and are not tunable at runtime:
  *   - at most one interruption per 3 minutes
- *   - the session cap scales with content read, not with "session" — a
- *     textbook chapter earns more than a news article because it is more
+ *   - the session cap (SESSION_CAP_ENABLED, currently off) scales with content
+ *     read, not with "session" — a textbook chapter earns more than a news
+ *     article because it is more
  *   - an absolute per-session ceiling so a pathological loop still terminates
+ *     (also part of the switched-off cap)
  *   - never twice on the same paragraph
  *   - never on `unknown`
  *   - consecutive dismissals raise the bar — three in a row is the reader
@@ -49,6 +51,7 @@ export const STATE_ACTIONS = Object.freeze({
   [STATES.DRIFTING]:   'nudge',
   [STATES.SKIMMING]:   'ask',
   [STATES.ON_PACE]:    'none',
+  [STATES.AWAY]:       'none',
   [STATES.UNKNOWN]:    'none',
 });
 
@@ -277,6 +280,12 @@ export const POLICY_ACTIONS = Object.freeze({
   DELAYED_RETRIEVE: 'delayed_retrieve',
 });
 
+/* Per-session cap on interruptions (base allowance growing with reading, up to absoluteCeiling).
+ * Switched off for now: set this to true to bring it back. Everything else that limits
+ * interruptions (the gap between them, dismissal and failure back-off, one per paragraph,
+ * no second card while one is open) stays on either way. */
+export const SESSION_CAP_ENABLED = false;
+
 export const DEFAULT_BUDGET = Object.freeze({
   minGapMs:          180000,  // 3 minutes
   // The cap for a session that has read nothing yet — and the floor under
@@ -440,6 +449,7 @@ export function createInterventionPolicy(config = {}) {
   }
 
   function sessionCap() {
+    if (!SESSION_CAP_ENABLED) return Infinity;
     const paragraphUnits = Math.floor(paragraphsRead / budget.paragraphsPerUnit);
     const minuteUnits = Math.floor(msRead / (budget.minutesPerUnit * 60000));
     const earned = budget.baseAllowance + Math.max(paragraphUnits, minuteUnits);
@@ -468,6 +478,8 @@ export function createInterventionPolicy(config = {}) {
 
     if (!state || !state.label) return deny('no state');
     if (state.label === STATES.UNKNOWN) return deny('state is unknown');
+    // The reader is not at the page: nothing is shown, and nothing is spent.
+    if (state.label === STATES.AWAY) return deny('reader is away');
 
     let action = STATE_ACTIONS[state.label] || 'none';
     // Step 23: the new 8-value vocabulary, derived from `action` and refined
@@ -953,7 +965,7 @@ export function createInterventionPolicy(config = {}) {
       count, lastAt,
       cap: sessionCap(),
       absoluteCeiling: budget.absoluteCeiling,
-      remaining: Math.max(0, sessionCap() - count),
+      remaining: sessionCap() === Infinity ? Infinity : Math.max(0, sessionCap() - count),
       paragraphsRead, msRead,
       consecutiveDismissals,
       // Step 8.

@@ -11,15 +11,16 @@
  * substitutes a plausible-looking state for missing data.
  */
 
-/* ABSENT existed here until the intelligence-architecture audit (see the
- * repo's gap-analysis report) confirmed no detector, self-report, or signal
- * anywhere in this file — or anywhere downstream — ever produced it.
- * intervention-policy.js and focus-ruler.js both carried a permanently-dead
- * branch for it. Removed rather than kept as an unreachable placeholder: a
- * state nothing can produce is worse than no state, because it reads as
- * "handled" to anyone skimming the consumer code. If a real passive
- * absence detector (e.g. sustained tab-blur with no return) is built later,
- * re-add it then, backed by that detector, not before.
+/* ABSENT existed here until the intelligence-architecture audit confirmed
+ * nothing ever produced it, and it was removed rather than kept as an
+ * unreachable placeholder. AWAY is its replacement, added together with the
+ * real detector that backs it (signals/away-detector.js: the tab hidden or
+ * the window unfocused with no input, or a long stretch with no input).
+ *
+ * AWAY says the reader is not at the page. It is not a reading state, never a
+ * struggle signal, and never earns an interruption: people step away for
+ * innocent reasons. Its only effects are that dwell and pace timers do not
+ * count the time away and that nothing is shown while it lasts.
  *
  * DRIFTING stays. It is real and reachable today, but only through the
  * explicit self-report "not interested / lost focus" path below (see
@@ -32,6 +33,7 @@ export const STATES = Object.freeze({
   SKIMMING:   'skimming',
   STRUGGLING: 'struggling',
   DRIFTING:   'drifting',
+  AWAY:       'away',
   UNKNOWN:    'unknown',
 });
 
@@ -94,6 +96,11 @@ const RESPONSE_CONFIDENCE = Object.freeze({
  * update() call, and immediately overrides whatever substate would
  * otherwise have been inferred. */
 const SELF_REPORT_CONFIDENCE = 1.0;
+
+/* Away is measured directly from visibility, focus and input, not inferred
+ * from behaviour. While it lasts it must win over any reading signal that
+ * happens to be batched with it. */
+const AWAY_CONFIDENCE = 0.97;
 
 /* Item 43: grading authority degrades as the difficulty ladder climbs.
  * recognition is deterministic (unchanged, uses RESPONSE_CONFIDENCE above).
@@ -202,6 +209,17 @@ function fromSignal(sig) {
    * always lower). A signal that never says gradingMethod is treated as
    * deterministic — every response-signal record made before this item
    * looked like that, and still does. */
+  /* Passive absence (signals/away-detector.js). Not a reading state and not
+   * evidence about comprehension: the reader is simply not at the page. */
+  if (sig.type === 'away') {
+    return {
+      label: STATES.AWAY,
+      confidence: AWAY_CONFIDENCE,
+      evidence: ['You were away from the page'],
+      signal: sig,
+    };
+  }
+
   if (sig.type === 'response') {
     const isModelGraded = sig.gradingMethod === 'model';
 
@@ -448,6 +466,10 @@ function applyReliability(proposal, sig) {
 
 /* Pick the strongest thing a signal is willing to assert. */
 function strongestAssertion(signals) {
+  // Being away overrides everything else in the batch: nothing measured about
+  // reading counts while the reader is not there.
+  const away = signals.find((sig) => sig && sig.type === 'away');
+  if (away) return fromSignal(away);
   let best = null;
   for (const sig of signals) {
     const proposal = fromSignal(sig);

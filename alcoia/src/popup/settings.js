@@ -26,6 +26,7 @@ import { createSessionManager } from '../shared/session.js';
 import { createLearningMemoryManager } from '../shared/learning-memory.js';
 import { mountLearningMemory } from './learning-memory-ui.js';
 import * as popupHistory from '../shared/popup-history.js';
+import { sendToReadingTab } from '../shared/reading-tab.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -46,6 +47,8 @@ const highlightToggle          = $('highlightToggle');
 const highlightColorToggle     = $('highlightColorToggle');
 const highlightPersistToggle   = $('highlightPersistToggle');
 const highlightSummarizeToggle = $('highlightSummarizeToggle');
+const explainOnHighlightToggle = $('explainOnHighlightToggle');
+const showConnectionsToggle    = $('showConnectionsToggle');
 const autohideToggle           = $('autohideToggle');
 const autohideTimeout          = $('autohideTimeout');
 const timeoutRow               = $('timeoutRow');
@@ -63,6 +66,8 @@ const DEFAULTS = {
   sra_selection: true, sra_highlight_para: true,
   sra_highlight_color: true, sra_highlight_summarize: false,
   sra_highlight_persist: true,
+  sra_explain_on_highlight: true,
+  sra_show_connections: true,
   sra_autohide: false, sra_autohide_timeout: 12,
   sra_pin_default: false, sra_debug: false, sra_enabled: true,
   sra_comprehension: true,
@@ -83,6 +88,8 @@ function paint(res) {
   highlightColorToggle.checked     = res.sra_highlight_color !== false;
   highlightPersistToggle.checked   = res.sra_highlight_persist !== false;
   highlightSummarizeToggle.checked = !!res.sra_highlight_summarize;
+  explainOnHighlightToggle.checked = res.sra_explain_on_highlight !== false;
+  showConnectionsToggle.checked    = res.sra_show_connections !== false;
   autohideToggle.checked      = !!res.sra_autohide;
   autohideTimeout.value       = res.sra_autohide_timeout;
   timeoutRow.style.display    = res.sra_autohide ? 'flex' : 'none';
@@ -118,6 +125,8 @@ function saveAndBroadcast() {
     sra_highlight_color:      highlightColorToggle.checked,
     sra_highlight_persist:    highlightPersistToggle.checked,
     sra_highlight_summarize:  highlightSummarizeToggle.checked,
+    sra_explain_on_highlight: explainOnHighlightToggle.checked,
+    sra_show_connections:     showConnectionsToggle.checked,
     sra_autohide:         autohideToggle.checked,
     sra_autohide_timeout: Number(autohideTimeout.value) || 12,
     sra_pin_default:      pinDefaultToggle.checked,
@@ -153,6 +162,8 @@ function saveAndBroadcast() {
         highlightColor: s.sra_highlight_color,
         highlightPersist: s.sra_highlight_persist,
         highlightSummarize: s.sra_highlight_summarize,
+        explainOnHighlight: s.sra_explain_on_highlight,
+        showConnections: s.sra_show_connections,
         autohide: s.sra_autohide, autohideTimeout: s.sra_autohide_timeout,
         pinDefault: s.sra_pin_default, debug: s.sra_debug,
         comprehension: s.sra_comprehension,
@@ -220,11 +231,29 @@ highlightPersistToggle.addEventListener('change', () => {
   });
 });
 [selToggle, highlightToggle, highlightColorToggle, highlightSummarizeToggle,
+ explainOnHighlightToggle, showConnectionsToggle,
  debugToggle, comprehensionToggle, darkModeToggle,
  showInterventionsToggle, showSelfReportToggle]
   .forEach((el) => el.addEventListener('change', saveAndBroadcast));
 [autohideTimeout, dyslexiaColorSelect]
   .forEach((el) => el.addEventListener('change', saveAndBroadcast));
+
+// ── Session tools: Recall and Receipt ─────────────────────────────────────
+// Same messages the popup sends and the same functions Alt+R and Alt+I call
+// (content.js: 'sessionRecall' -> runSessionRecall, 'showReceipt' -> showReceipt).
+// This page is its own tab, so the target is the page the reader was last on.
+const sessionNote = $('sessionToolsNote');
+const SESSION_NOTE_DEFAULT = sessionNote.textContent;
+async function runOnReadingPage(button, message) {
+  button.disabled = true;
+  const result = await sendToReadingTab(chrome, message);
+  button.disabled = false;
+  sessionNote.textContent = result.ok
+    ? SESSION_NOTE_DEFAULT
+    : 'Open a page you are reading first, then try again.';
+}
+$('recallBtn').addEventListener('click', () => runOnReadingPage($('recallBtn'), { action: 'sessionRecall' }));
+$('receiptBtn').addEventListener('click', () => runOnReadingPage($('receiptBtn'), { action: 'showReceipt' }));
 
 // ── Account (item S3 pattern, reused not reimplemented) ───────────────────
 const session = createSessionManager();
