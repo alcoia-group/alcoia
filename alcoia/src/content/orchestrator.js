@@ -37,6 +37,9 @@ export async function createOrchestrator(deps) {
     // 30b), passed straight through. Omitted, behaviour is unchanged: the
     // DOM scan stays the default, exactly as before this option existed.
     paragraphTrackerOpts,
+    // Passed to away-detector.js (thresholds and clock). Omitted, the
+    // provisional defaults and the real clock apply.
+    awayOpts,
   } = deps;
 
   const s = () => settings() || {};
@@ -65,7 +68,7 @@ export async function createOrchestrator(deps) {
   // paragraph tracking in particular used to hang off a webcam gaze point,
   // so none of this fired unless a camera was running. It no longer does.
   const [paraTrackModule, regressionModule, interactionModule,
-         dynamicsModule, cursorModule, entropyModule, kinematicsTrackerModule] = await Promise.all([
+         dynamicsModule, cursorModule, entropyModule, kinematicsTrackerModule, awayModule] = await Promise.all([
     loadModule('src/content/signals/paragraph-tracker.js'),
     loadModule('src/content/signals/scroll-regression.js'),
     loadModule('src/content/signals/interaction-signals.js'),
@@ -75,6 +78,7 @@ export async function createOrchestrator(deps) {
     // Not a signals/ detector despite the neighbouring path — see its own
     // header for why (item DC-1a): it feeds nothing into state-engine.js.
     loadModule('src/content/scroll-kinematics-tracker.js'),
+    loadModule('src/content/signals/away-detector.js'),
   ]);
 
   const paragraphTracker   = paraTrackModule.createParagraphTracker({ minWords: 20, ...(paragraphTrackerOpts || {}) });
@@ -84,6 +88,33 @@ export async function createOrchestrator(deps) {
   const cursorTracker      = cursorModule.createCursorTracker();
   const progressionEntropy = entropyModule.createProgressionEntropy();
   const scrollKinematicsTracker = kinematicsTrackerModule.createScrollKinematicsTracker();
+  const awayDetector       = awayModule.createAwayDetector(awayOpts || {});
+
+  /* Away: the reader is not at the page (tab hidden or window unfocused with no
+   * input, or a long stretch with no input). It is not a reading state and never
+   * a struggle signal. While it lasts nothing is measured and nothing is shown;
+   * when it ends the dwell and pace timers are moved forward by the time away. */
+  let awayActive = false;
+  function handleAway(tr) {
+    if (!tr) return;
+    if (tr.type === 'away_start') {
+      if (awayActive) return;
+      awayActive = true;
+      // Detector output gathered before the reader left is stale now.
+      try { scrollRegression.signal(); scrollDynamics.signal(); progressionEntropy.signal(); cursorTracker.signal(); interactionSignals.signal(); } catch (e) {}
+      stateEngine.update({ reading: [{ type: 'away', assertable: true, since: tr.since }] });
+    } else if (tr.type === 'away_end') {
+      if (!awayActive) return;
+      awayActive = false;
+      try { paragraphTracker.shiftTime(tr.awayMs); } catch (e) {}
+      try { comprehensionMonitor.shiftTime?.(tr.awayMs); } catch (e) {}
+      stateEngine.update({ reading: [] });
+    }
+  }
+  const noteAway = (kind) => {
+    if (!s().comprehensionCheckEnabled) return;
+    try { handleAway(awayDetector.event(kind)); } catch (e) {}
+  };
 
   let idleTimer = null;
   let interventionInFlight = false;
@@ -94,6 +125,11 @@ export async function createOrchestrator(deps) {
   function pumpSignals(extra) {
     // The master switch. Nothing accrues while the assistant is off.
     if (s().assistantEnabled === false) return;
+    // Nothing measured while the reader is away reaches the state engine.
+    if (awayActive) {
+      try { scrollRegression.signal(); scrollDynamics.signal(); progressionEntropy.signal(); cursorTracker.signal(); interactionSignals.signal(); } catch (e) {}
+      return;
+    }
     const batch = [];
     for (const sig of [scrollRegression.signal(), scrollDynamics.signal(), progressionEntropy.signal(), cursorTracker.signal()]) {
       if (sig) batch.push(sig);
@@ -115,6 +151,8 @@ export async function createOrchestrator(deps) {
    * reading-rate maths and the regression detector's paragraph indices. */
   function syncParagraph() {
     if (!s().comprehensionCheckEnabled) return;
+    // Dwell is not measured while the reader is away.
+    if (awayActive) return;
     // Every call, not just on a transition — a reader stopped at the end
     // produces no further transition, and the idle tick catches that case.
     quizOffer.check();
@@ -290,6 +328,16 @@ export async function createOrchestrator(deps) {
   // converted into a named, individually-removable reference. setInterval
   // is not covered by AbortSignal — its own teardown stays in stop() below.
   function installListeners(signal) {
+    // Away detection: visibility, focus and any input. Input is noted only as
+    // "something happened", never what.
+    document.addEventListener('visibilitychange', () => {
+      noteAway(document.visibilityState === 'hidden' ? 'hidden' : 'visible');
+    }, { signal });
+    for (const type of ['mousemove', 'keydown', 'pointerdown', 'wheel', 'touchstart', 'scroll']) {
+      window.addEventListener(type, () => noteAway('input'), { passive: true, signal });
+    }
+    if (document.visibilityState === 'hidden') noteAway('hidden');
+
     // Cursor as a reading pointer. Most mouse movement is not reading, so the
     // tracker decides for itself whether the behaviour qualifies.
     window.addEventListener('mousemove', (e) => {
@@ -337,10 +385,13 @@ export async function createOrchestrator(deps) {
     // Blur/return: coming back to the same paragraph after a long absence is a
     // confirmed loss of the thread. Carrying on forwards is not.
     window.addEventListener('blur', () => {
+      noteAway('blur');
       try { interactionSignals.update({ kind: 'blur', paragraphIndex: activeParagraphIndex() }); } catch (e) {}
     }, { signal });
     window.addEventListener('focus', () => {
       if (!s().comprehensionCheckEnabled) return;
+      // End away (and move the timers) before anything else reads them.
+      noteAway('focus');
       try {
         syncParagraph();
         interactionSignals.update({ kind: 'focus', paragraphIndex: activeParagraphIndex() });
@@ -352,6 +403,7 @@ export async function createOrchestrator(deps) {
     // dwelling on one paragraph produces no events at all.
     idleTimer = setInterval(() => {
       if (!s().comprehensionCheckEnabled) return;
+      try { handleAway(awayDetector.poll()); } catch (e) {}
       try { syncParagraph(); pumpSignals(); } catch (e) {}
     }, IDLE_TICK_MS);
   }
@@ -394,6 +446,7 @@ export async function createOrchestrator(deps) {
     try { scrollRegression.reset(); } catch (e) {}
     try { progressionEntropy.reset(); } catch (e) {}
     try { interactionSignals.reset(); } catch (e) {}
+    try { awayDetector.reset(); awayActive = false; } catch (e) {}
     try { cursorTracker.reset(); } catch (e) {}
     try { scrollDynamics.reset(); } catch (e) {}
     try { pretest.reset(); } catch (e) {}
@@ -414,6 +467,9 @@ export async function createOrchestrator(deps) {
     installListeners,
     primeParagraph,
     handleRouteChange,
+    awayDetector,
+    handleAway,
+    isAway: () => awayActive,
     syncParagraph,
     pumpSignals,
     stop,

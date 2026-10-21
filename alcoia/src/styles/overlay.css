@@ -133,6 +133,7 @@
 }
 .sra-state-struggling .sra-state-badge { color: var(--alc-warn); }
 .sra-state-drifting   .sra-state-badge { color: #7E6E5A; }
+.sra-state-away       .sra-state-badge { color: #6B6862; }
 .sra-state-skimming   .sra-state-badge { color: #5B7A99; }
 
 /* ── Body ────────────────────────────────────────────────────────────────── */
