@@ -9,10 +9,10 @@
  * classifier's names and nothing here has emitted them since that path was
  * deleted (see CLAUDE.md's migration note). session.stateDurations is built
  * by session-tracker.js's recordState(state.label), and state.label is
- * always one of these five, so every key below is reachable and nothing
- * else is. (ABSENT used to be a sixth key here; removed along with the
- * state itself once the audit confirmed nothing ever produced it — see
- * state-engine.js's own STATES comment.)
+ * always one of these six, so every key below is reachable and nothing
+ * else is. (ABSENT was removed once the audit confirmed nothing produced it;
+ * away is its replacement, backed by signals/away-detector.js. Time away is
+ * shown as its own bucket and is never counted as struggle.)
  *
  * Colours reference panel.css's dark-mode-aware tokens (session-report.html
  * loads panel.css, not overlay.css, so overlay.css's --alc-* custom
@@ -35,10 +35,10 @@
  * be reporting something the engine didn't actually observe. */
 export const STATE_COLORS = {
   on_pace: 'var(--sage-2)', skimming: '#5B7A99', struggling: 'var(--warn)',
-  drifting: '#7E6E5A', unknown: 'var(--muted)',
+  drifting: '#7E6E5A', away: 'var(--muted)', unknown: 'var(--muted)',
 };
 
 export const STATE_LABELS = {
   on_pace: 'On Pace', skimming: 'Skimming', struggling: 'Struggling',
-  drifting: 'Drifting', unknown: 'Unknown',
+  drifting: 'Drifting', away: 'Away', unknown: 'Unknown',
 };

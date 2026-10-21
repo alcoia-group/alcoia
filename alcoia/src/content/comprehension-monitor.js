@@ -313,6 +313,13 @@ export function createComprehensionMonitor(opts = {}) {
    * anticipated). */
   function resetParagraph() { paragraphEntry = null; }
 
+  /* Move the in-flight paragraph's start forward by time the reader was away,
+   * so the dwell and the pace sample (and so the personal baseline) count only
+   * time at the page. */
+  function shiftTime(ms) {
+    if (paragraphEntry && Number.isFinite(ms) && ms > 0) paragraphEntry.enteredAt += ms;
+  }
+
   /* The calibration passages are English, so that is the language the measured
      figure belongs to. It still serves as the fallback everywhere else until
      each language earns its own samples. */
@@ -330,7 +337,7 @@ export function createComprehensionMonitor(opts = {}) {
   }
 
   return {
-    enterParagraph, leaveParagraph, onScroll, markOfferShown, resetParagraph,
+    enterParagraph, leaveParagraph, onScroll, markOfferShown, resetParagraph, shiftTime,
     seedWpmFromCalibration, fleschKincaid, getCurrentExpectation,
     getBaselineWpm: () => wpmBaseline.get(),
     getResidualStats: () => residuals.stats(),

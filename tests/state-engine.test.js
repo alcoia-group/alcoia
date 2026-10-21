@@ -17,9 +17,9 @@ describe('STATES', () => {
     expect(Object.values(STATES)).not.toContain('absent');
   });
 
-  it('still has exactly the five states this engine can actually produce', () => {
+  it('has exactly the six states this engine can actually produce', () => {
     expect(Object.values(STATES).sort()).toEqual(
-      ['drifting', 'on_pace', 'skimming', 'struggling', 'unknown'].sort(),
+      ['away', 'drifting', 'on_pace', 'skimming', 'struggling', 'unknown'].sort(),
     );
   });
 });
