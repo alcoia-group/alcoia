@@ -137,14 +137,16 @@ describe('account-sync', () => {
 
 describe('content.js steps back on a workspace page that runs its own detection', () => {
   const contentSrc = readFileSync(new URL('../alcoia/src/content/content.js', import.meta.url), 'utf8');
-  function run({ url, meta }) {
-    const dom = new JSDOM(`<!doctype html><html><head>${meta ? '<meta name="alcoia-detection" content="workspace">' : ''}</head><body><p>x</p></body></html>`, { url, runScripts: 'outside-only' });
+  const sensitiveSrc = readFileSync(new URL('../alcoia/src/shared/sensitive-sites.js', import.meta.url), 'utf8');
+  function run({ url, meta, body = '<p>x</p>', stored = null, withList = true }) {
+    const dom = new JSDOM(`<!doctype html><html><head>${meta ? '<meta name="alcoia-detection" content="workspace">' : ''}</head><body>${body}</body></html>`, { url, runScripts: 'outside-only' });
     const calls = [];
     dom.window.ALCOIA_CONFIG = { READER_ORIGIN: 'https://workspace.alcoia.app', SUMMARIZE_URL: 'https://s/api/summarize' };
     dom.window.chrome = {
-      storage: { local: { get: (k, cb) => { calls.push(['get', k]); }, set: () => {} }, onChanged: { addListener: () => calls.push(['listen']) } },
+      storage: { local: { get: (k, cb) => { calls.push(['get', k]); if (stored) cb({ ...k, ...stored }); }, set: () => {} }, onChanged: { addListener: () => calls.push(['listen']) } },
       runtime: { sendMessage: (m) => calls.push(['send', m]), onMessage: { addListener: () => {} }, getURL: (p) => p },
     };
+    if (withList) dom.window.eval(sensitiveSrc);
     dom.window.eval(contentSrc);
     return { calls, loaded: !!dom.window.__sra_content_loaded };
   }
@@ -164,5 +166,57 @@ describe('content.js steps back on a workspace page that runs its own detection'
   it('ignores the tag on any other site', () => {
     const r = run({ url: 'https://example.com/article', meta: true });
     expect(r.loaded).toBe(true);
+  });
+});
+
+describe('content.js stays off on sensitive pages', () => {
+  const contentSrc = readFileSync(new URL('../alcoia/src/content/content.js', import.meta.url), 'utf8');
+  const sensitiveSrc = readFileSync(new URL('../alcoia/src/shared/sensitive-sites.js', import.meta.url), 'utf8');
+  // master switch off keeps the real start-up out of the test; the account-sync request is what tells us the
+  // page was judged fine, because the script only sends it on a page it will run on
+  function run({ url, body = '<p>x</p>', stored = { sra_enabled: false }, withList = true }) {
+    const dom = new JSDOM(`<!doctype html><html><body>${body}</body></html>`, { url, runScripts: 'outside-only' });
+    const calls = [];
+    dom.window.ALCOIA_CONFIG = { READER_ORIGIN: 'https://workspace.alcoia.app', SUMMARIZE_URL: 'https://s/api/summarize' };
+    dom.window.chrome = {
+      storage: { local: { get: (k, cb) => { calls.push(['get', k]); cb({ ...k, ...stored }); }, set: () => {} }, onChanged: { addListener: () => {} } },
+      runtime: { sendMessage: (m) => calls.push(['send', m]), onMessage: { addListener: () => {} }, getURL: (p) => p },
+    };
+    if (withList) dom.window.eval(sensitiveSrc);
+    dom.window.eval(contentSrc);
+    return calls.filter(([k]) => k === 'send');
+  }
+
+  it('asks for the account settings on an ordinary page (the control for the cases below)', () => {
+    expect(run({ url: 'https://en.wikipedia.org/wiki/Reading' }).length).toBe(1);
+  });
+
+  it.each(['https://mail.google.com/mail/u/0/', 'https://www.paypal.com/myaccount', 'https://my.bitwarden.com/', 'https://www.mychart.com/'])(
+    'sends nothing from %s',
+    (url) => { expect(run({ url })).toEqual([]); },
+  );
+
+  it('sends nothing from a page with a password field', () => {
+    expect(run({ url: 'https://example.org/signin', body: '<form><input type="password"></form>' })).toEqual([]);
+  });
+
+  it('sends nothing from a page with a card-number field', () => {
+    expect(run({ url: 'https://shop.example.org/pay', body: '<input autocomplete="cc-number">' })).toEqual([]);
+  });
+
+  it('sends nothing from a site the reader added to their own list', () => {
+    expect(run({ url: 'https://hr.myemployer.com/review', stored: { sra_enabled: false, sra_sensitive_sites: ['myemployer.com'] } })).toEqual([]);
+  });
+
+  it('stays off, and asks for nothing, if the sensitive-site list did not load', () => {
+    const dom = new JSDOM('<!doctype html><body><p>x</p></body>', { url: 'https://en.wikipedia.org/wiki/Reading', runScripts: 'outside-only' });
+    const calls = [];
+    dom.window.ALCOIA_CONFIG = { READER_ORIGIN: 'https://workspace.alcoia.app', SUMMARIZE_URL: 'https://s/api/summarize' };
+    dom.window.chrome = {
+      storage: { local: { get: (k, cb) => { calls.push(['get', k]); cb({ ...k }); }, set: () => {} }, onChanged: { addListener: () => {} } },
+      runtime: { sendMessage: (m) => calls.push(['send', m]), onMessage: { addListener: () => {} }, getURL: (p) => p },
+    };
+    dom.window.eval(contentSrc);
+    expect(calls).toEqual([]);
   });
 });

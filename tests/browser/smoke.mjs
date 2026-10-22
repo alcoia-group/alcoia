@@ -21,7 +21,8 @@ import { fileURLToPath } from 'node:url';
  * run is a verification step that stops being run. CHROME falls back to
  * whichever Chromium Playwright installed (`npx playwright install chromium`). */
 const HERE  = path.dirname(fileURLToPath(import.meta.url));
-const EXT   = process.env.EXT || path.resolve(HERE, '..', '..', 'alcoia');
+import { prepareTestExtension } from './test-extension.mjs';
+const EXT = prepareTestExtension(process.env.EXT || path.resolve(HERE, '..', '..', 'alcoia'));
 const PINNED_CHROME = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 const CHROME = process.env.CHROME
   || (fs.existsSync(PINNED_CHROME) ? PINNED_CHROME : chromium.executablePath());

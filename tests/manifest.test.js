@@ -32,7 +32,10 @@ describe('manifest targets', () => {
     const m = buildManifest('firefox');
     // config.js must load before background.js — it defines self.ALCOIA_CONFIG,
     // which background.js reads at top level.
-    expect(m.background.scripts).toEqual(['src/shared/config.js', 'src/shared/account-sync.js', 'background.js']);
+    expect(m.background.scripts).toEqual([
+      'src/shared/config.js', 'src/shared/sensitive-sites.js', 'src/shared/site-access.js',
+      'src/shared/account-sync.js', 'background.js',
+    ]);
     expect(m.background.service_worker).toBeUndefined();
   });
 
@@ -177,40 +180,64 @@ describe('package hygiene', () => {
   });
 });
 
-/* alcoia.app's own infrastructure subdomains — a status page, API docs, an
- * admin/instructor console — are not reading material and the content
- * script should never inject into them. See build.mjs's own comment on
- * this exclude_matches entry for why this is a genuinely different
- * mechanism, and a different real subdomain, than externally_connectable's
- * similarly-named 'console.alcoia.invalid' (LTI_READER_ORIGIN — a reading
- * surface, despite the name). */
-describe('content-script domain exclusions', () => {
-  const EXCLUDED = ['https://status.alcoia.app/*', 'https://developers.alcoia.app/*', 'https://console.alcoia.app/*'];
-
-  it('excludes the status, developer-docs and admin-console subdomains, on both targets', () => {
+/* Permissions. alcoia reads nothing on a site the reader has not switched on, so install time grants only
+ * the alcoia sites. Everything else is an optional host permission, and a registered content script follows
+ * what the reader granted (src/shared/site-access.js). */
+describe('permissions', () => {
+  it('asks at install for the alcoia sites only', () => {
     for (const target of TARGETS) {
-      const excludeMatches = buildManifest(target).content_scripts[0].exclude_matches || [];
-      for (const pattern of EXCLUDED) {
-        expect(excludeMatches, `${target} should exclude ${pattern}`).toContain(pattern);
+      const m = buildManifest(target);
+      expect(m.host_permissions).toEqual(['https://server.alcoia.app/*', 'https://workspace.alcoia.app/*', 'https://alcoia.app/*']);
+      expect(m.host_permissions).not.toContain('<all_urls>');
+      expect(m.host_permissions).not.toContain('file:///*');
+    }
+  });
+
+  it('keeps all other sites and local files as optional host permissions', () => {
+    for (const target of TARGETS) {
+      expect(buildManifest(target).optional_host_permissions).toEqual(['<all_urls>', 'file:///*']);
+    }
+  });
+
+  it('injects the static content script only on the alcoia sites', () => {
+    for (const target of TARGETS) {
+      const [cs] = buildManifest(target).content_scripts;
+      expect(cs.matches).toEqual(['https://alcoia.app/*', 'https://workspace.alcoia.app/*']);
+      expect(cs.matches).not.toContain('<all_urls>');
+    }
+  });
+
+  it('loads the sensitive-site list before the content script that reads it', () => {
+    const js = read('manifests/base.json').content_scripts[0].js;
+    expect(js.indexOf('src/shared/sensitive-sites.js')).toBeGreaterThan(-1);
+    expect(js.indexOf('src/shared/sensitive-sites.js')).toBeLessThan(js.indexOf('src/content/content.js'));
+  });
+
+  it('declares scripting and no tabs or webNavigation permission', () => {
+    for (const target of TARGETS) {
+      const perms = buildManifest(target).permissions;
+      expect(perms).toContain('scripting');
+      expect(perms).not.toContain('tabs');
+      expect(perms).not.toContain('webNavigation');
+    }
+  });
+
+  it('does not use webNavigation in the worker', () => {
+    const bg = fs.readFileSync(path.join(ROOT, 'alcoia/background.js'), 'utf8');
+    expect(bg).not.toMatch(/chrome\.webNavigation/);
+  });
+
+  it('does not let any page but alcoia.app message the extension', () => {
+    const m = buildManifest('chrome');
+    expect(m.externally_connectable.matches).toEqual(['https://alcoia.app/*']);
+    expect(JSON.stringify(m)).not.toMatch(/alcoia\.invalid/);
+  });
+
+  it('ships the new page and shared scripts in the package', () => {
+    for (const target of TARGETS) {
+      for (const rel of ['src/popup/welcome.html', 'src/shared/sensitive-sites.js', 'src/shared/site-access.js']) {
+        expect(fs.existsSync(path.join(ROOT, 'dist', target, rel)), `${target}/${rel}`).toBe(true);
       }
     }
-  });
-
-  it('does not exclude alcoia.app itself — the marketing site is real reading content', () => {
-    const excludeMatches = buildManifest('chrome').content_scripts[0].exclude_matches || [];
-    expect(excludeMatches).not.toContain('https://alcoia.app/*');
-    expect(excludeMatches.some((p) => p.includes('://alcoia.app'))).toBe(false);
-  });
-
-  it('leaves the broad <all_urls> content-script match itself untouched — exclude_matches narrows it, not matches', () => {
-    for (const target of TARGETS) {
-      expect(buildManifest(target).content_scripts[0].matches).toEqual(['<all_urls>']);
-    }
-  });
-
-  it('is not the same list as externally_connectable — that mechanism is unrelated and untouched', () => {
-    const m = buildManifest('chrome');
-    expect(m.externally_connectable.matches).not.toContain('https://console.alcoia.app/*');
-    expect(m.externally_connectable.matches).toContain('https://console.alcoia.invalid/*');
   });
 });

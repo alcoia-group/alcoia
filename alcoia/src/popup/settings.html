@@ -11,6 +11,8 @@
        file's own header for why background.js, a classic service worker,
        cannot do the same. -->
   <script src="../shared/config.js"></script>
+  <script src="../shared/sensitive-sites.js"></script>
+  <script src="../shared/site-access.js"></script>
   <style>
     /* Page chrome only — every toggle/section/pill class below is reused
        verbatim from popup.html (panel.css defines the shared primitives);
@@ -107,6 +109,11 @@
       .logo-sub { display: none; }
       .toggle-grid { grid-template-columns: 1fr; }
     }
+  
+    .site-list { list-style: none; margin: 8px 0 0; padding: 0; }
+    .site-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+    .site-list li:last-child { border-bottom: none; }
+    .site-list .btn { padding: 3px 10px; font-size: 11.5px; }
   </style>
 </head>
 <body>
@@ -309,20 +316,52 @@
     </div>
   </div>
 
+  <!-- ════════════════════ Where alcoia runs ════════════════════ -->
+  <div class="settings-card" id="whereCard">
+    <div class="settings-group-title">Where alcoia runs</div>
+    <p class="settings-group-note">alcoia reads nothing on a site until you switch it on. For one site, use the switch in the alcoia button on that page. Here you can switch on every site, or local files.</p>
+    <label class="toggle-row" for="everywhereToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Every site</span>
+        <span class="toggle-desc">Off by default. On: alcoia can run on any website you open. Your browser asks you to allow all sites. It still stays off on the sites listed below.</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="everywhereToggle"><span class="pill-track"></span></label>
+    </label>
+    <label class="toggle-row" for="filesToggle">
+      <div class="toggle-info">
+        <span class="toggle-name">Local files</span>
+        <span class="toggle-desc">For PDFs and other files opened from your computer. Your browser also needs "Allow access to file URLs" turned on for alcoia.</span>
+      </div>
+      <label class="pill"><input type="checkbox" id="filesToggle"><span class="pill-track"></span></label>
+    </label>
+    <div id="optedSitesBlock" hidden>
+      <div class="field-label" style="margin-top:14px">Sites switched on</div>
+      <ul id="optedSitesList" class="site-list"></ul>
+    </div>
+    <div class="field-label" style="margin-top:14px">Sites where alcoia stays off</div>
+    <p class="settings-group-note">Always off on banking, payment, email, health and password-manager sites, and on any page with a password or card-number field. This list cannot be turned off. Add your own sites here.</p>
+    <div class="btn-row">
+      <input type="text" id="sensitiveInput" class="field-input" placeholder="example.com" aria-label="Site to keep alcoia off">
+      <button class="btn btn-ghost" id="sensitiveAddBtn">Add</button>
+    </div>
+    <p class="settings-group-note" id="sensitiveMsg" hidden></p>
+    <ul id="sensitiveList" class="site-list"></ul>
+  </div>
+
   <!-- ════════════════════ Documents ════════════════════ -->
   <div class="settings-card">
     <div class="settings-group-title">Documents</div>
     <label class="toggle-row" for="pdfTakeoverToggle">
       <div class="toggle-info">
         <span class="toggle-name">Open local PDF and PowerPoint files in alcoia</span>
-        <span class="toggle-desc">Off leaves them to your browser's own handling instead, with no alcoia detection.</span>
+        <span class="toggle-desc">Off leaves them to your browser's own handling instead, with no alcoia detection. Turning this on asks your browser for access to local files.</span>
       </div>
       <label class="pill"><input type="checkbox" id="pdfTakeoverToggle" checked><span class="pill-track"></span></label>
     </label>
     <label class="toggle-row" for="webPdfTakeoverToggle">
       <div class="toggle-info">
         <span class="toggle-name">Also open PDFs linked from the web</span>
-        <span class="toggle-desc">Off by default. On: a PDF opened from a website opens in alcoia too, not only files on your computer.</span>
+        <span class="toggle-desc">Off by default. On: a PDF opened from a website opens in alcoia too, on sites where alcoia is switched on.</span>
       </div>
       <label class="pill"><input type="checkbox" id="webPdfTakeoverToggle"><span class="pill-track"></span></label>
     </label>

@@ -155,8 +155,8 @@ export function syntacticLoad(text, lang) {
  * everything as "rare", which is worse than reporting nothing — the same
  * reasoning fleschKincaid() above already applies to itself. */
 export function lexicalRarity(text, lang) {
-  const isEnglish = String(lang || '').slice(0, 2) === 'en';
-  if (!isEnglish) return { available: false, score: 60, rareRatio: 0, rareCount: 0, wordCount: 0 };
+  const code = String(lang || '').slice(0, 2);
+  if (code !== 'en') return otherLanguageRarity(text, code);
 
   const words = segmentWords(text, 'en')
     .map((w) => w.toLowerCase().replace(/[^a-z']/g, ''))
@@ -172,6 +172,49 @@ export function lexicalRarity(text, lang) {
   // not to measure anything precisely.
   const raw = 100 - Math.max(0, rareRatio - 0.08) * 260;
 
+  return { available: true, score: clamp(raw), rareRatio, rareCount, wordCount: words.length };
+}
+
+/* French, Spanish, German, Portuguese and Italian have their own bundled lists (top 5,000 words,
+ * src/libs/wordfreq/common-words-<lang>.js, licence in docs/NOTICE.md). A list is loaded the first time
+ * a page in that language is read (loadLexicon, below), so a page in another language pays nothing.
+ * Until a list has loaded, or for any other language, nothing is reported (available: false): looking a
+ * word up in the wrong list would call nearly everything rare, which is worse than reporting nothing.
+ * These languages' difficulty score is unchanged by this; the share is used by the reading-time model. */
+const LEXICONS = {};
+const LEXICON_LOADS = {};
+export const LEXICON_LANGUAGES = Object.freeze(['fr', 'es', 'de', 'pt', 'it']);
+
+export function loadLexicon(lang) {
+  const code = String(lang || '').slice(0, 2);
+  if (!LEXICON_LANGUAGES.includes(code)) return Promise.resolve(false);
+  if (LEXICONS[code]) return Promise.resolve(true);
+  if (!LEXICON_LOADS[code]) {
+    const importer = {
+      fr: () => import('../../libs/wordfreq/common-words-fr.js').then((m) => m.COMMON_WORDS_FR),
+      es: () => import('../../libs/wordfreq/common-words-es.js').then((m) => m.COMMON_WORDS_ES),
+      de: () => import('../../libs/wordfreq/common-words-de.js').then((m) => m.COMMON_WORDS_DE),
+      pt: () => import('../../libs/wordfreq/common-words-pt.js').then((m) => m.COMMON_WORDS_PT),
+      it: () => import('../../libs/wordfreq/common-words-it.js').then((m) => m.COMMON_WORDS_IT),
+    }[code];
+    LEXICON_LOADS[code] = importer()
+      .then((set) => { LEXICONS[code] = set; return true; })
+      .catch(() => { delete LEXICON_LOADS[code]; return false; });
+  }
+  return LEXICON_LOADS[code];
+}
+
+function otherLanguageRarity(text, code) {
+  const list = LEXICONS[code];
+  if (!list) return { available: false, score: 60, rareRatio: 0, rareCount: 0, wordCount: 0 };
+  // Elisions (l'homme, d'abord, dell'altro) split at the apostrophe; one-letter pieces are function words.
+  const words = segmentWords(text, code)
+    .flatMap((w) => w.toLowerCase().split(/['\u2019]/))
+    .filter((w) => w.length > 1 && /^\p{L}+$/u.test(w));
+  if (!words.length) return { available: true, score: 60, rareRatio: 0, rareCount: 0, wordCount: 0 };
+  const rareCount = words.filter((w) => !list.has(w)).length;
+  const rareRatio = rareCount / words.length;
+  const raw = 100 - Math.max(0, rareRatio - 0.08) * 260;
   return { available: true, score: clamp(raw), rareRatio, rareCount, wordCount: words.length };
 }
 
@@ -288,7 +331,9 @@ export function analyzeDifficulty(text, opts = {}) {
 
   if (!isEnglish) {
     const score = clamp(syn.score * 0.6 + prop.score * 0.4);
+    const lex = lexicalRarity(text, lang);
     return {
+      lexical: lex,
       score,
       grade: gradeFor(score),
       wordCount: syn.wordCount,

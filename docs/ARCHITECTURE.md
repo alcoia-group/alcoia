@@ -6,7 +6,7 @@ This file explains how alcoia works. If it disagrees with the shipped code, the 
 
 ## Product intent
 
-alcoia is a browser extension (Chrome MV3, Firefox via a build target) that notices when a reader is
+alcoia is a browser extension (Chrome MV3; a Firefox build target exists and is tested less) that notices when a reader is
 struggling with a page and intervenes with a **retrieval question** about what they just read.
 
 alcoia's stated purpose is to make the reader need it less over time. A correct answer to a
@@ -28,6 +28,16 @@ Two sources, in order of authority:
 2. **Browser reading signals.** Reading rate versus text difficulty and personal baseline, scroll
    regressions, selection, copy, and tab blur/focus. This is the only detection path, precise,
    always available, and requires no permission prompt.
+
+How the browser signals are read (all in `alcoia/src/content`, none of it sent anywhere):
+
+- **Expected time is continuous and personal** (`signals/reading-time-model.js`). A paragraph's expected time is its words at the reader's own pace, scaled by the share of rare words and the mean clause length, with the scaling fitted online per language (ridge regression pulled towards stated priors, bounded, trimmed against outliers). There are no grade steps. A "very difficult" paragraph is judged like any other; it is simply expected to take longer.
+- **Screen mode** (`signals/screen-timing.js`). A reader who moves a whole screen at a time (Page Down, Space, a big flick) is timed per screen: the time between jumps against what the paragraphs visible on that screen should take. The per-paragraph path stays quiet in that mode.
+- **Two pieces of evidence before struggle** (`signals/struggle-evidence-rule.js`, rule `two_evidence_before_struggle`). One slow paragraph is held, not acted on. It is released when a genuine re-read follows within two minutes, or when a different paragraph is also slow. Self-reports, backtracks and a confirmed re-read on its own are unchanged. Switch off with `evidenceRuleOpts: { enabled: false }`.
+- **Word lists.** English has a 10,000-word list built from public-domain books; French, Spanish, German, Portuguese and Italian have 5,000-word lists (`tools/build-wordfreq-lang.mjs`, source and licence in `docs/NOTICE.md`). A list loads the first time a page in that language is read. The share of words outside the list feeds the time model; it does not change those languages' difficulty score.
+- **Scheduled quick checks** ask about a paragraph chosen at random from those already read since the last check, never the one just read, and never the same paragraph twice in a session.
+
+All the numbers named in these modules (jump size, window, priors, bounds) are provisional and unvalidated; they are constants at the top of each file.
 
 There is no camera path. No sensor, no classifier, no calibration flow, and no code path anywhere
 in the extension reads a gaze coordinate, a video frame, or any camera-derived signal. This is a
@@ -130,7 +140,7 @@ about than an unsure wrong answer.
 
 ## Claims discipline
 
-No accuracy percentage for detection appears in shipped code, UI copy or documentation. Detection has not been evaluated with real participants. Any figure in the historical training material under `tldr classifier/` was measured on synthetic or self-generated data and supports no claim about the product.
+No accuracy percentage for detection appears in shipped code, UI copy or documentation. Detection has not been evaluated with real participants. Any figure in the historical training material under `archive/` was measured on synthetic or self-generated data and supports no claim about the product.
 
 ## Type and colour
 
@@ -154,7 +164,7 @@ No accuracy percentage for detection appears in shipped code, UI copy or documen
 ├── manifests/                shared manifest source (base.json + one override per target)
 ├── tests/                    unit test suite (Vitest) + a real-browser smoke check
 ├── tools/question-quality.mjs  question review harness
-├── tldr classifier/          historical notebooks + synthetic training data
+├── archive/                  historical notebooks + synthetic training data (unused by the extension)
 └── alcoia/
     ├── manifest.json          generated from manifests/, not hand-edited
     ├── background.js          the MV3 service worker: the file:// PDF/PPTX redirect, the SPA

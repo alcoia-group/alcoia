@@ -1430,9 +1430,8 @@ async function boot() {
       debugEnabled = !!msg.enabled;
       sendResponse({ status:'ok' }); return true;
     }
-    // Item 27: background.js's webNavigation.onHistoryStateUpdated listener
-    // — the channel that actually reaches a real SPA's pushState-driven
-    // route change, unlike the isolated-world history patch below.
+    // Older builds relayed route changes from the worker; this still answers them. The page now watches its
+    // own address (see the interval inside boot()).
     if (msg.type === 'spaRouteChanged') {
       try { onSpaNavigate(); } catch (e) {}
       sendResponse({ status: 'ok' }); return true;
@@ -1631,6 +1630,16 @@ async function boot() {
   // Unlike the history patch above, popstate is a genuine removable listener
   // and is re-installed fresh every boot() cycle via the shared signal.
   window.addEventListener('popstate', () => currentOnSpaNavigate?.(), { signal });
+  // Route changes made by the page's own pushState are not visible to this script's world, and the worker no
+  // longer relays them (no webNavigation permission). Watching the address is enough: it changes on every
+  // route change. A hash-only or query-only change is still the same document, as onSpaNavigate already decides.
+  let lastHref = window.location.href;
+  const hrefWatch = setInterval(() => {
+    if (window.location.href === lastHref) return;
+    lastHref = window.location.href;
+    currentOnSpaNavigate?.();
+  }, 400);
+  signal.addEventListener('abort', () => clearInterval(hrefWatch));
 
   // Resize re-clamping lives in ui-controller.js — it is popup geometry.
   ui.installResizeWatcher();
@@ -1784,25 +1793,42 @@ async function boot() {
   _log('Content script loaded ✓');
 }
 
-/* The popup only messages the active tab, so a settings broadcast would
- * leave every other open tab still running. Storage is the one channel
- * every tab hears — and, per the master-switch hard-off design above, the
- * ONLY listener that stays active at all while the switch is off, so a
- * reader can flip it back on without reloading the page. */
+/* Where alcoia runs. Besides the master switch there is one more reason to stay off: banking, payment, email,
+ * health-portal and password-manager pages, any site the reader added to their own list in Settings, and any
+ * page that has a password or card-number field. On such a page nothing is read, timed or sent. The decision
+ * is made again when the reader's list changes and when the page's forms change (a sign-in form that appears
+ * later switches alcoia off). If the list module did not load, alcoia stays off: failing closed. The master
+ * switch is also heard here, because per the hard-off design above this is the only listener that stays
+ * active while it is off, so a reader can flip it back on without reloading the page. */
+const SENSITIVE_API = self.AlcoiaSensitiveSites || null;
+const SENSITIVE_KEY = SENSITIVE_API ? SENSITIVE_API.STORAGE_KEY : 'sra_sensitive_sites';
+const runGate = SENSITIVE_API
+  ? SENSITIVE_API.createRunGate({
+    boot: () => { boot(); },
+    teardown: () => { if (teardownBoot) teardownBoot(); },
+    isBooted: () => isBooted,
+    hostname: () => window.location.hostname,
+    doc: document,
+  })
+  : null;
+
 try {
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local' || !changes.sra_enabled) return;
-    const on = changes.sra_enabled.newValue !== false;
-    if (on) { if (!isBooted) boot(); }
-    else if (teardownBoot) { teardownBoot(); }
+    if (area !== 'local' || !runGate) return;
+    if (changes.sra_enabled) runGate.setEnabled(changes.sra_enabled.newValue !== false);
+    if (changes[SENSITIVE_KEY]) runGate.setUserSites(changes[SENSITIVE_KEY].newValue);
   });
 } catch (e) { /* no storage in this context */ }
 
-chrome.storage.local.get({ sra_enabled: true }, (res) => {
-  if (res.sra_enabled !== false) boot();
-});
-
-// Signed in, settings and the reading baseline follow the account; the background script pulls them (it
-// throttles this itself, so a page load is cheap).
-try { chrome.runtime.sendMessage({ action: 'accountSync' }, () => { void chrome.runtime.lastError; }); } catch (e) { /* no runtime here */ }
+if (runGate) {
+  runGate.watch();
+  chrome.storage.local.get({ sra_enabled: true, [SENSITIVE_KEY]: [] }, (res) => {
+    runGate.init(res.sra_enabled !== false, res[SENSITIVE_KEY]);
+    // Signed in, settings and the reading baseline follow the account; the background script pulls them (it
+    // throttles this itself, so a page load is cheap). Not asked for on a page alcoia stays off.
+    if (!runGate.isSensitive()) {
+      try { chrome.runtime.sendMessage({ action: 'accountSync' }, () => { void chrome.runtime.lastError; }); } catch (e) { /* no runtime here */ }
+    }
+  });
+}
 } // end __sra_main
