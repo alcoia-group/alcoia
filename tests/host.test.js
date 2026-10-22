@@ -3740,6 +3740,21 @@ describe('scheduled quick checks (probes)', () => {
     expect(JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body).type).toBe('probe');
   });
 
+  it('asks about a paragraph chosen at random from those already read, not the one just read', async () => {
+    for (const [r, expectedIndex] of [[0, 0], [0.5, 2], [0.999, 4]]) {
+      document.body.innerHTML = '';
+      const { calls } = setup();
+      const host = await build({ random: () => r });
+      for (let i = 0; i < 5; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+      await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
+      const body = JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body);
+      expect(body.type).toBe('probe');
+      expect(body.paragraph_index).toBe(expectedIndex);
+      // and the card on screen is about that paragraph, not the latest one
+      expect(queryAlcoia('.sra-q-badge')).not.toBeNull();
+    }
+  });
+
   it('does nothing outside an assigned reading, however much is read', async () => {
     const { asked } = setup();
     const { host, setOrchestrator } = await createHost(baseDeps());

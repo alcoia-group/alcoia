@@ -40,6 +40,8 @@ export async function createOrchestrator(deps) {
     // Passed to away-detector.js (thresholds and clock). Omitted, the
     // provisional defaults and the real clock apply.
     awayOpts,
+    // Passed to struggle-evidence-rule.js ({ enabled, windowMs, now }). Omitted, the default rule applies.
+    evidenceRuleOpts,
   } = deps;
 
   const s = () => settings() || {};
@@ -68,7 +70,7 @@ export async function createOrchestrator(deps) {
   // paragraph tracking in particular used to hang off a webcam gaze point,
   // so none of this fired unless a camera was running. It no longer does.
   const [paraTrackModule, regressionModule, interactionModule,
-         dynamicsModule, cursorModule, entropyModule, kinematicsTrackerModule, awayModule] = await Promise.all([
+         dynamicsModule, cursorModule, entropyModule, kinematicsTrackerModule, awayModule, evidenceModule] = await Promise.all([
     loadModule('src/content/signals/paragraph-tracker.js'),
     loadModule('src/content/signals/scroll-regression.js'),
     loadModule('src/content/signals/interaction-signals.js'),
@@ -79,6 +81,7 @@ export async function createOrchestrator(deps) {
     // header for why (item DC-1a): it feeds nothing into state-engine.js.
     loadModule('src/content/scroll-kinematics-tracker.js'),
     loadModule('src/content/signals/away-detector.js'),
+    loadModule('src/content/signals/struggle-evidence-rule.js'),
   ]);
 
   const paragraphTracker   = paraTrackModule.createParagraphTracker({ minWords: 20, ...(paragraphTrackerOpts || {}) });
@@ -89,6 +92,8 @@ export async function createOrchestrator(deps) {
   const progressionEntropy = entropyModule.createProgressionEntropy();
   const scrollKinematicsTracker = kinematicsTrackerModule.createScrollKinematicsTracker();
   const awayDetector       = awayModule.createAwayDetector(awayOpts || {});
+  // One slow paragraph is not enough to call struggle: a second piece of evidence is needed (see the module).
+  const struggleEvidence   = evidenceModule.createStruggleEvidenceRule(evidenceRuleOpts || {});
 
   /* Away: the reader is not at the page (tab hidden or window unfocused with no
    * input, or a long stretch with no input). It is not a reading state and never
@@ -144,7 +149,9 @@ export async function createOrchestrator(deps) {
     }
     if (extra) batch.push(extra);
     if (!batch.length) return;
-    stateEngine.update({ reading: batch });
+    const gated = struggleEvidence.filter(batch);
+    if (!gated.length) return;
+    stateEngine.update({ reading: gated });
   }
 
   /* Viewport-driven paragraph tracking. Feeds the comprehension monitor's

@@ -7,12 +7,7 @@
   "permissions": [
     "storage",
     "activeTab",
-    "tabs",
-    "webNavigation"
-  ],
-  "host_permissions": [
-    "<all_urls>",
-    "file:///*"
+    "scripting"
   ],
   "action": {
     "default_popup": "src/popup/popup.html",
@@ -26,15 +21,12 @@
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
-      ],
-      "exclude_matches": [
-        "https://status.alcoia.app/*",
-        "https://developers.alcoia.app/*",
-        "https://console.alcoia.app/*"
+        "https://alcoia.app/*",
+        "https://workspace.alcoia.app/*"
       ],
       "js": [
         "src/shared/config.js",
+        "src/shared/sensitive-sites.js",
         "src/content/content.js"
       ],
       "run_at": "document_idle",
@@ -62,8 +54,7 @@
   ],
   "externally_connectable": {
     "matches": [
-      "https://alcoia.app/*",
-      "https://console.alcoia.invalid/*"
+      "https://alcoia.app/*"
     ]
   },
   "icons": {
@@ -72,6 +63,15 @@
     "48": "assets/icon-48.png",
     "128": "assets/icon-128.png"
   },
+  "host_permissions": [
+    "https://server.alcoia.app/*",
+    "https://workspace.alcoia.app/*",
+    "https://alcoia.app/*"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>",
+    "file:///*"
+  ],
   "background": {
     "service_worker": "background.js"
   }

@@ -65,6 +65,8 @@ export async function createHost(deps) {
     // this item existed. assignmentId is the whole reading session's
     // context, established once at construction — not per-signal.
     assignmentId = null,
+    // Picks the paragraph a scheduled quick check asks about (0 <= x < 1). Injectable for tests.
+    random = Math.random,
     getSession = null,
     // Item DC-2's passive prerequisite-gap flag. Defaults to reporting
     // "unknown" (undefined), not false — a caller that never passed this
@@ -1649,7 +1651,10 @@ export async function createHost(deps) {
    *   - never about a paragraph the learner has already shown they know (the server's estimate says abstain);
    *   - always through the same policy gates as every other question (budget, 3-minute gap, dismissal
    *     back-off, one card at a time), and it can never take the last free slot of the session budget;
-   *   - tagged 'probe' so its answers stay distinguishable from questions triggered by difficulty.
+   *   - tagged 'probe' so its answers stay distinguishable from questions triggered by difficulty;
+   *   - about a paragraph chosen AT RANDOM from those already read since the last check, not the one just read:
+   *     a question on the paragraph in front of you tests short-term echo, a question on an earlier one tests
+   *     what stayed. A paragraph is asked about at most once per session.
    * Questions alternate between multiple choice and fill-in-the-blank (choose the word). */
   const PROBE_FIRST_WORDS = 500;
   const PROBE_EVERY_WORDS = 1000;
@@ -1662,18 +1667,27 @@ export async function createHost(deps) {
     || (lastNormalCardAt !== 0 && Date.now() - lastNormalCardAt < PROBE_QUIET_MS)
     || lastCogState === 'struggling' || lastCogState === 'drifting' || lastCogState === 'away'
   );
-  const probe = { words: 0, nextAt: PROBE_FIRST_WORDS, counted: new Set(), asked: 0, busy: false };
+  const probe = { words: 0, nextAt: PROBE_FIRST_WORDS, counted: new Set(), asked: 0, busy: false, read: [], askedKeys: new Set() };
+  const PROBE_READ_CAP = 80;
   const wordCount = (t) => (String(t || '').trim().match(/\S+/g) || []).length;
   // Quick checks are spaced by how THIS learner has responded to them (their profile on the account): a learner who keeps
   // turning them away gets them further apart, one who engages gets them closer, and one who reliably turns them away
   // gets none. Without a profile the spacing is the starting value.
   const probeProfile = () => policyProfileManager?.getProfile?.().cards?.probe;
-  function probeCovered() { probe.words = 0; probe.nextAt = Math.round(PROBE_EVERY_WORDS * (probeProfile()?.cooldownFactor ?? 1)); }
+  function probeCovered() { probe.words = 0; probe.read = []; probe.nextAt = Math.round(PROBE_EVERY_WORDS * (probeProfile()?.cooldownFactor ?? 1)); }
 
   async function checkProbe(text, paragraphIndex) {
     if (!assignmentId || !getSession || !text) return;
     const key = text.slice(0, 80).trim();
-    if (!probe.counted.has(key)) { probe.counted.add(key); probe.words += wordCount(text); }
+    if (!probe.counted.has(key)) {
+      probe.counted.add(key);
+      const n = wordCount(text);
+      probe.words += n;
+      if (n >= PROBE_MIN_PARAGRAPH_WORDS) {
+        probe.read.push({ text, paragraphIndex, key });
+        if (probe.read.length > PROBE_READ_CAP) probe.read.shift();
+      }
+    }
     if (probe.words < probe.nextAt || probe.busy) return;
     if (wordCount(text) < PROBE_MIN_PARAGRAPH_WORDS) return; // wait for a substantive paragraph
     if (!s().assistantEnabled || !orchestratorRef?.interventionPolicy) return;
@@ -1681,10 +1695,21 @@ export async function createHost(deps) {
     // checkRetentionCandidate — a quick check is still a card on screen.
     if (s().showInterventions === false) return;
     if (probeBlocked()) return;
-    const identity = computeIdentity(text);
-    if (!identity.knowledgeUnitId) return;
-    const est = learnerEstimates.get(identity.knowledgeUnitId);
-    if (est && est.action === 'abstain') return; // already shown they know this one
+    // A random paragraph already read in this stretch, not one the learner has shown they know, not one asked before.
+    const choices = [];
+    for (const p of probe.read) {
+      if (probe.askedKeys.has(p.key)) continue;
+      const id = computeIdentity(p.text);
+      if (!id.knowledgeUnitId) continue;
+      const e = learnerEstimates.get(id.knowledgeUnitId);
+      if (e && e.action === 'abstain') continue; // already shown they know this one
+      choices.push({ ...p, identity: id });
+    }
+    if (!choices.length) return;
+    const chosen = choices[Math.min(choices.length - 1, Math.floor(random() * choices.length))];
+    const identity = chosen.identity;
+    text = chosen.text;
+    paragraphIndex = chosen.paragraphIndex;
     if (await snoozeControl.isActive()) return;
 
     const decision = orchestratorRef.interventionPolicy.evaluateRetentionCandidate({
@@ -1712,6 +1737,7 @@ export async function createHost(deps) {
       if (shown) {
         orchestratorRef.interventionPolicy.record(decision);
         probe.asked += 1;
+        probe.askedKeys.add(chosen.key);
         reportIntervention(decision.interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'probe', text, 'retrieve');
         probeCovered();
       }

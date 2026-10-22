@@ -17,7 +17,7 @@ export default [
     ignores: [
       'node_modules/**',
       'alcoia/src/libs/**',          // third-party, minified, not ours to lint
-      'tldr classifier/**',
+      'archive/**',
       'alcoia/src/content/classifier.js',  // generated — regenerate, do not edit
     ],
   },
