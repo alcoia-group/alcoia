@@ -6,7 +6,59 @@
 // Firefox's event page instead loads it as a preceding <script> via
 // manifests/firefox.json's `background.scripts` array, which already runs
 // in the same global scope — importScripts does not exist there.
-if (typeof importScripts === 'function') importScripts('src/shared/config.js');
+if (typeof importScripts === 'function') {
+  importScripts('src/shared/config.js', 'src/shared/sensitive-sites.js', 'src/shared/site-access.js', 'src/shared/account-sync.js');
+}
+
+// ── Where alcoia runs ───────────────────────────────────────────────────────
+// Install-time permissions cover only the alcoia sites. Other sites are opt-in (one site from the popup, or
+// everywhere from Settings); src/shared/site-access.js keeps one dynamically registered content script in
+// step with the permissions the reader has granted. Banking, email, health and password-manager pages are
+// excluded from that script and checked again inside the page (src/shared/sensitive-sites.js).
+const siteAccess = (typeof self !== 'undefined' && self.AlcoiaSiteAccess && self.AlcoiaSensitiveSites)
+  ? self.AlcoiaSiteAccess.create({ chromeApi: chrome, sensitiveApi: self.AlcoiaSensitiveSites })
+  : null;
+if (siteAccess) {
+  siteAccess.listen();
+  siteAccess.sync().catch(() => {});
+}
+try {
+  chrome.runtime.onInstalled.addListener((details) => {
+    if (siteAccess) siteAccess.sync().catch(() => {});
+    if (details && details.reason === 'install') {
+      chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/welcome.html') });
+    }
+  });
+} catch (e) { /* no onInstalled in this context */ }
+
+// A page that sent text must not be a sensitive one. The page script already stays off there; this is the
+// second check, on the one path every text-sending request takes.
+function refuseIfSensitive(sender, refuse, proceed) {
+  const url = sender && sender.tab && sender.tab.url;
+  const api = self.AlcoiaSensitiveSites;
+  if (!api) { refuse(); return; }          // the list did not load: fail closed
+  if (!url) { proceed(); return; }         // an extension page, no address to judge
+  chrome.storage.local.get({ [api.STORAGE_KEY]: [] }, (res) => {
+    if (api.isSensitiveUrl(url, res[api.STORAGE_KEY])) refuse(); else proceed();
+  });
+}
+
+// ── Account settings sync ───────────────────────────────────────────────────
+// Signed in, the reading settings and the reading-speed baseline follow the account (src/shared/account-sync.js
+// has what is sent and why). Pulled when the worker starts, on sign-in, and when a page boots (at most every few
+// minutes); local changes are sent up shortly after they are made. Signed out, nothing is sent.
+const accountSync = (typeof self !== 'undefined' && self.AlcoiaAccountSync)
+  ? self.AlcoiaAccountSync.create({
+    storage: chrome.storage.local,
+    fetchImpl: (...a) => fetch(...a),
+    backendOrigin: self.ALCOIA_CONFIG.BACKEND_ORIGIN,
+    sessionKey: self.ALCOIA_CONFIG.SESSION_STORAGE_KEY,
+  })
+  : null;
+if (accountSync) {
+  try { chrome.storage.onChanged.addListener((changes, area) => { accountSync.onStorageChanged(changes, area); }); } catch (e) { /* no storage */ }
+  accountSync.pull({ force: true }).catch(() => {});
+}
 
 // ── Local PDF redirect ─────────────────────────────────────────────────────────
 // Chrome's native PDF viewer runs in a sandboxed renderer that content scripts
@@ -75,34 +127,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   });
 });
 
-// ── SPA route-change detection (item 27) ────────────────────────────────
-// content.js's own history.pushState/replaceState monkey-patch runs in the
-// content script's ISOLATED world and never reaches the page's own
-// MAIN-world `history` object — confirmed by reading
-// `history.pushState.toString()` from the page's own context after the
-// patch runs; it still reports `[native code]`. A real single-page app's
-// route changes call pushState from the page's own script, which that
-// isolated-world patch can never see, so onSpaNavigate() effectively never
-// ran except on a genuine popstate (back/forward button).
-//
-// webNavigation.onHistoryStateUpdated fires from the browser itself,
-// independent of which JS world the history-API call originated in, so it
-// needs no page-context injection at all — no MAIN-world script, no bridge,
-// none of the machinery the gaze-removal item deleted for exactly that
-// reason. The permission was already declared in manifests/base.json
-// (previously unused — the README documented it as backing this file's
-// file:// redirect, but that redirect is actually built on tabs.onUpdated;
-// verified, not assumed, before relying on it here). No new permission was
-// added for this.
-chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
-  if (details.frameId !== 0) return; // top frame only — content scripts run there only too
-  chrome.tabs.sendMessage(details.tabId, { type: 'spaRouteChanged', url: details.url }, () => {
-    // No content script listening on this tab (e.g. a chrome:// page, or the
-    // extension's own pages) — nothing to do, and nothing to surface as an
-    // error either.
-    void chrome.runtime.lastError;
-  });
-});
+// ── SPA route changes ───────────────────────────────────────────────────────
+// Single-page route changes are noticed inside the page (content.js watches the address), so this worker
+// needs no webNavigation permission, which would add a "read your browsing history" warning at install.
 
 // ── Magic-link sign-in handoff (item S3) ────────────────────────────────
 // The Phase 1 landing page (alcoiaWeb, a separate repo) verifies an emailed
@@ -308,6 +335,12 @@ function normaliseSessionExpiry(raw) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.action) return;
 
+  if (msg.action === 'accountSync') {
+    if (accountSync) accountSync.pull().catch(() => {});
+    sendResponse({ status: 'ok' });
+    return;
+  }
+
   if (msg.action === 'openTab') {
     chrome.tabs.create({ url: msg.url });
     sendResponse({ status: 'ok' });
@@ -353,28 +386,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'summarize' || msg.action === 'apiPost') {
     const url = msg.url || self.ALCOIA_CONFIG.SUMMARIZE_URL;
     if (!msg.token) { sendResponse({ ok: false, error: 'no_install_token' }); return; }
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Alcoia-Install-Token': msg.token },
-      body: JSON.stringify(msg.body || {}),
-    })
-      .then(async (resp) => {
-        // The server validated the token itself and said no — expired,
-        // revoked, or never valid. Flagged distinctly so content.js's
-        // install-token manager can clear its stored copy and fetch a
-        // fresh one on the next call, the same self-heal a reader
-        // deleting it by hand would get.
-        if (resp.status === 401 || resp.status === 403) {
-          sendResponse({ ok: false, status: resp.status, tokenRejected: true });
-          return;
-        }
-        if (!resp.ok) { sendResponse({ ok: false, status: resp.status }); return; }
-        const data = await resp.json();
-        sendResponse({ ok: true, data });
+    refuseIfSensitive(sender, () => sendResponse({ ok: false, error: 'sensitive_site' }), () => {
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Alcoia-Install-Token': msg.token },
+        body: JSON.stringify(msg.body || {}),
       })
-      .catch((err) => {
-        sendResponse({ ok: false, error: String(err && err.message || err) });
-      });
+        .then(async (resp) => {
+          // The server validated the token itself and said no: expired, revoked, or never valid. Flagged
+          // distinctly so content.js's install-token manager can clear its stored copy and fetch a fresh
+          // one on the next call.
+          if (resp.status === 401 || resp.status === 403) {
+            sendResponse({ ok: false, status: resp.status, tokenRejected: true });
+            return;
+          }
+          if (!resp.ok) { sendResponse({ ok: false, status: resp.status }); return; }
+          const data = await resp.json();
+          sendResponse({ ok: true, data });
+        })
+        .catch((err) => {
+          sendResponse({ ok: false, error: String(err && err.message || err) });
+        });
+    });
     return true; // keep the message channel open for the async response
   }
 
@@ -391,15 +424,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // `msg.options` (method, headers, body) is passed to fetch() exactly as
   // the caller built it, via proxy-fetch.js's own fetchImpl adapter.
   if (msg.action === 'proxyFetch') {
-    fetch(msg.url, msg.options || {})
-      .then(async (resp) => {
-        const data = await resp.json().catch(() => null);
-        sendResponse({ ok: resp.ok, status: resp.status, data });
-      })
-      .catch((err) => {
-        sendResponse({ ok: false, error: String(err && err.message || err) });
-      });
+    refuseIfSensitive(sender, () => sendResponse({ ok: false, error: 'sensitive_site' }), () => {
+      fetch(msg.url, msg.options || {})
+        .then(async (resp) => {
+          const data = await resp.json().catch(() => null);
+          sendResponse({ ok: resp.ok, status: resp.status, data });
+        })
+        .catch((err) => {
+          sendResponse({ ok: false, error: String(err && err.message || err) });
+        });
+    });
     return true; // keep the message channel open for the async response
+  }
+
+  // The popup or Settings just changed what alcoia may run on: re-register the script, and put it on the
+  // tab the reader is looking at so they need not reload.
+  if (msg.action === 'siteAccessChanged') {
+    if (!siteAccess) { sendResponse({ ok: false }); return; }
+    (async () => {
+      const result = await siteAccess.sync();
+      let injected = false;
+      if (msg.tabId != null && msg.inject !== false) injected = await siteAccess.injectNow(msg.tabId);
+      sendResponse({ ...result, injected });
+    })();
+    return true;
   }
 
   return false;

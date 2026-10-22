@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createComprehensionMonitor } from '../alcoia/src/content/comprehension-monitor.js';
 import { analyzeDifficulty } from '../alcoia/src/content/signals/text-difficulty.js';
+import { createReadingTimeModel } from '../alcoia/src/content/signals/reading-time-model.js';
 
 // Short sentences, simple words: scores as 'easy' (>=80), which is one of the
 // two grades the WPM baseline is allowed to learn from.
@@ -21,9 +22,8 @@ const EASY = (n) => {
 };
 
 // Longer sentences, several subordinators, real punctuation: scores as
-// 'difficult' (40-59), not 'very_difficult' — the too_slow path explicitly
-// excludes very_difficult text, so a 'difficult' fixture is what exercises
-// it. Item 13c: strengthened from an earlier, lighter version — that one
+// 'difficult' (40-59). (Very hard text is judged like any other now; see
+// tests/detection-timing.test.js.) Item 13c: strengthened from an earlier, lighter version — that one
 // used almost entirely common words (committee, proposal, members,
 // amendment...), so once lexicalRarity()/propositionalDensity() started
 // contributing real signal alongside FK/syntacticLoad(), it scored right
@@ -441,9 +441,13 @@ describe('difficulty basis: structure unavailable (item 24 — abstains, does no
     expect(exp).not.toBeNull();
     const r = analyzeDifficulty(probeText, { lang: 'th' });
     expect(r.basis).not.toBe('structure_unavailable'); // confirms the probe is real
-    const GENERIC_WPM_STANDARD = 220; // comprehension-monitor.js's GENERIC_WPM.standard
-    const GENERIC_WPM_EASY = 260;     // comprehension-monitor.js's GENERIC_WPM.easy
-    const expectedGenericMs = (r.wordCount / (r.grade === 'easy' ? GENERIC_WPM_EASY : GENERIC_WPM_STANDARD)) * 60000;
+    // With no personal baseline the expectation is the generic 220 wpm, scaled by the model's PRIOR
+    // multiplier for this text (nothing was learned for 'th', or the multiplier would have moved).
+    const prior = createReadingTimeModel().multiplier({
+      rareShare: r.lexical && r.lexical.available ? r.lexical.rareRatio : null,
+      clauseLength: r.syntactic ? r.syntactic.meanClauseLength : null,
+    });
+    const expectedGenericMs = (r.wordCount / 220) * 60000 * prior;
     expect(exp.expectedMs).toBeCloseTo(expectedGenericMs, 0);
   });
 
