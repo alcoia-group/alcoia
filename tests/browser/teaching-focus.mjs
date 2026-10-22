@@ -17,7 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { computeKnowledgeUnitId } from '../../alcoia/src/content/signals/knowledge-unit.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const EXT = path.resolve(HERE, '..', '..', 'alcoia');
+import { prepareTestExtension } from './test-extension.mjs';
+const EXT = prepareTestExtension(process.env.EXT || path.resolve(HERE, '..', '..', 'alcoia'));
 const CERT = process.env.CERT_DIR || '/tmp/claude-0/cert';
 const PINNED = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 const CHROME = process.env.CHROME || (fs.existsSync(PINNED) ? PINNED : chromium.executablePath());

@@ -2,6 +2,8 @@
   "background": {
     "scripts": [
       "src/shared/config.js",
+      "src/shared/sensitive-sites.js",
+      "src/shared/site-access.js",
       "src/shared/account-sync.js",
       "background.js"
     ]

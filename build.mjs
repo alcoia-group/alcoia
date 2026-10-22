@@ -36,45 +36,25 @@ export const TARGETS = ['chrome', 'firefox'];
  * a comment, so the explanation lives here instead. It is
  * 'https://alcoia.app/*', the live marketing/sign-in site (alcoiaWeb, a
  * separate repo) that hands this extension a magic-link sign-in code via
- * chrome.runtime.sendMessage(). alcoia.app is confirmed live (verified
- * directly, not assumed) as of the change that updated this entry from its
- * earlier localhost dev placeholder. src/shared/config.js's WEB_APP_ORIGIN
+ * chrome.runtime.sendMessage(). src/shared/config.js's WEB_APP_ORIGIN
  * constant (the runtime origin check background.js's onMessageExternal
  * listener does, independent of this manifest entry) must be kept in sync
  * with this value — the two are not wired together, so editing one without
- * the other makes one of them silently wrong. A developer testing sign-in
- * locally against a differently-ported alcoiaWeb dev server needs to
- * change both back, by hand, together.
+ * the other makes one of them silently wrong. The LTI launch page is the
+ * same marketing site's /lti/launch, so it needs no entry of its own.
  *
- * A second entry, 'https://console.alcoia.invalid/*', was added for the
- * LTI launch flow (item S6/E4 follow-up) — the page a Canvas launch
- * actually lands a student's browser on, which hands the extension either
- * a pending-disclosure signal or an already-minted session. That page
- * does not exist in any repo available here either; the value is copied
- * verbatim from alcoiaServer's own default for ltiReaderBaseUrl
- * (src/http/routes/lti.js), not invented, and src/shared/config.js's
- * LTI_READER_ORIGIN must be swapped to match at the same time this entry
- * is, for the same "not wired together" reason as WEB_APP_ORIGIN above. */
-
-/* manifests/base.json's `content_scripts[0].exclude_matches` — JSON cannot
- * hold a comment, so the explanation lives here too. status.alcoia.app,
- * developers.alcoia.app and console.alcoia.app are infrastructure (a
- * status page, API docs, an admin/instructor console), not reading
- * material, so the extension should never inject into them at all.
- *
- * NOT the same "console" as `externally_connectable`'s
- * 'https://console.alcoia.invalid/*' just above — that one is
- * LTI_READER_ORIGIN, the page a Canvas launch lands a STUDENT's browser
- * on to read, deliberately named "console" upstream in alcoiaServer's own
- * default (see that comment) despite being a reading surface, not an
- * admin one. The two are unrelated mechanisms (this one is content-script
- * injection; that one is which pages may message the extension) governing
- * two different real subdomains that happen to share a name — confirmed
- * by reading both call sites directly, not assumed from the name alone.
- *
- * alcoia.app itself (bare, the marketing site) is deliberately NOT
- * excluded — it carries real readable content, unlike its three
- * infrastructure subdomains above. */
+ * Permissions. Install-time host access is only the alcoia sites
+ * (`host_permissions`, plus the static content script for alcoia.app and
+ * workspace.alcoia.app). Every other site is an optional host permission
+ * (`optional_host_permissions`): the reader switches it on for one site in the
+ * popup, or for every site in Settings, and src/shared/site-access.js keeps one
+ * dynamically registered content script in step with what was granted.
+ * `scripting` is for that registration; `activeTab` lets the popup read the
+ * current tab's address. There is no `tabs` or `webNavigation` permission: the
+ * local-file PDF redirect reads the address through the file:/// host
+ * permission, and single-page route changes are noticed inside the page.
+ * Banking, payment, email, health and password-manager pages are excluded
+ * (src/shared/sensitive-sites.js). */
 
 /* Excluded from the shipped package.
  *

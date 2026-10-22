@@ -188,7 +188,13 @@ assistantToggle.addEventListener('change', () => {
 // Read directly by background.js's redirect listener, not any content
 // script — a plain storage write is enough; the effect is on the next
 // navigation, not the current tab.
-pdfTakeoverToggle.addEventListener('change', () => {
+pdfTakeoverToggle.addEventListener('change', async () => {
+  if (pdfTakeoverToggle.checked) {
+    // Redirecting a local file to alcoia's viewer needs to see the file address, which is a permission.
+    const granted = await ask({ origins: ['file:///*'] });
+    if (!granted) { pdfTakeoverToggle.checked = false; chrome.storage.local.set({ sra_pdf_takeover: false }); return; }
+    await notifyAccessChanged();
+  }
   chrome.storage.local.set({ sra_pdf_takeover: pdfTakeoverToggle.checked });
 });
 webPdfTakeoverToggle.addEventListener('change', () => {
@@ -347,3 +353,112 @@ $('popupHistoryClear').addEventListener('click', async () => {
   renderPopupHistory();
 });
 renderPopupHistory();
+
+
+// ── Where alcoia runs ──────────────────────────────────────────────────────
+// Permissions are the source of truth: nothing here is stored in alcoia's own settings except the reader's
+// "stay off" list. The worker keeps one registered content script in step with what is granted.
+const SS = self.AlcoiaSensitiveSites;
+const SA = self.AlcoiaSiteAccess;
+
+function pcall(fn, ...args) {
+  return new Promise((resolve) => {
+    try { fn(...args, (r) => { void chrome.runtime.lastError; resolve(r); }); } catch (e) { resolve(undefined); }
+  });
+}
+const ask = (perm) => pcall(chrome.permissions.request.bind(chrome.permissions), perm);
+const drop = (perm) => pcall(chrome.permissions.remove.bind(chrome.permissions), perm);
+function notifyAccessChanged() {
+  return new Promise((resolve) => {
+    try { chrome.runtime.sendMessage({ action: 'siteAccessChanged', inject: false }, () => { void chrome.runtime.lastError; resolve(); }); } catch (e) { resolve(); }
+  });
+}
+
+const everywhereToggle = $('everywhereToggle');
+const filesToggle = $('filesToggle');
+const optedSitesBlock = $('optedSitesBlock');
+const optedSitesList = $('optedSitesList');
+const sensitiveInput = $('sensitiveInput');
+const sensitiveAddBtn = $('sensitiveAddBtn');
+const sensitiveList = $('sensitiveList');
+const sensitiveMsg = $('sensitiveMsg');
+
+function listRow(text, onRemove) {
+  const li = document.createElement('li');
+  const span = document.createElement('span');
+  span.textContent = text;
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-ghost';
+  btn.textContent = 'Remove';
+  btn.addEventListener('click', onRemove);
+  li.append(span, btn);
+  return li;
+}
+
+async function refreshAccessUi() {
+  if (!SA || !SS || !everywhereToggle) return;
+  const all = await pcall(chrome.permissions.getAll.bind(chrome.permissions));
+  const { everywhere, files, sites } = SA.interpretOrigins((all && all.origins) || []);
+  everywhereToggle.checked = everywhere;
+  filesToggle.checked = files;
+  // The local-file takeover only works while the file permission is held.
+  if (!files && pdfTakeoverToggle.checked) pdfTakeoverToggle.checked = false;
+  optedSitesList.textContent = '';
+  optedSitesBlock.hidden = everywhere || !sites.length;
+  for (const s of sites) {
+    optedSitesList.appendChild(listRow(s.host, async () => {
+      await drop({ origins: [(s.scheme === '*' ? '*' : s.scheme) + '://' + s.host + '/*'] });
+      await notifyAccessChanged();
+      refreshAccessUi();
+    }));
+  }
+  const stored = await pcall(chrome.storage.local.get.bind(chrome.storage.local), { [SS.STORAGE_KEY]: [] });
+  const mine = (stored && stored[SS.STORAGE_KEY]) || [];
+  sensitiveList.textContent = '';
+  for (const host of mine) {
+    sensitiveList.appendChild(listRow(host, async () => {
+      const next = mine.filter((h) => h !== host);
+      await pcall(chrome.storage.local.set.bind(chrome.storage.local), { [SS.STORAGE_KEY]: next });
+      refreshAccessUi();
+    }));
+  }
+}
+
+everywhereToggle?.addEventListener('change', async () => {
+  if (everywhereToggle.checked) {
+    const granted = await ask({ origins: ['<all_urls>'] });
+    if (!granted) everywhereToggle.checked = false;
+  } else {
+    await drop({ origins: ['<all_urls>'] });
+  }
+  await notifyAccessChanged();
+  refreshAccessUi();
+});
+filesToggle?.addEventListener('change', async () => {
+  if (filesToggle.checked) {
+    const granted = await ask({ origins: ['file:///*'] });
+    if (!granted) filesToggle.checked = false;
+  } else {
+    await drop({ origins: ['file:///*'] });
+  }
+  await notifyAccessChanged();
+  refreshAccessUi();
+});
+sensitiveAddBtn?.addEventListener('click', async () => {
+  const host = SS.normalizeUserEntry(sensitiveInput.value);
+  sensitiveMsg.hidden = false;
+  if (!host) { sensitiveMsg.textContent = 'That does not look like a site address. Try something like example.com.'; return; }
+  const stored = await pcall(chrome.storage.local.get.bind(chrome.storage.local), { [SS.STORAGE_KEY]: [] });
+  const mine = (stored && stored[SS.STORAGE_KEY]) || [];
+  if (mine.includes(host) || SS.isBuiltInSensitiveHost(host)) { sensitiveMsg.textContent = host + ' is already on the list.'; sensitiveInput.value = ''; return; }
+  await pcall(chrome.storage.local.set.bind(chrome.storage.local), { [SS.STORAGE_KEY]: mine.concat(host).slice(0, 200) });
+  sensitiveMsg.textContent = 'alcoia will stay off on ' + host + ' and its subdomains.';
+  sensitiveInput.value = '';
+  refreshAccessUi();
+});
+sensitiveInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sensitiveAddBtn.click(); });
+refreshAccessUi();
+try {
+  chrome.permissions.onAdded.addListener(() => refreshAccessUi());
+  chrome.permissions.onRemoved.addListener(() => refreshAccessUi());
+} catch (e) { /* no permission events here */ }

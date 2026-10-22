@@ -216,9 +216,8 @@ install-token client; `background.js` is a thin message relay and the local-file
 ## Installation
 
 ### Prerequisites
-- Google Chrome (or Chromium-based browser), or Firefox via the `firefox` build target
+- Google Chrome or a Chromium-based browser. A `firefox` build target exists (`npm run build:firefox`); it comes from the same code but is not tested as often
 - Node.js >=20 (for this repo's own tooling: lint, tests, build)
-- A running instance of the backend (separate private repository)
 
 ### Load the extension
 
