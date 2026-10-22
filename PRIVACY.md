@@ -2,6 +2,8 @@
 
 The privacy policy is at [alcoia.app/legal/privacy-policy](https://alcoia.app/legal/privacy-policy). It is the authoritative statement.
 
+In short: passage text goes to the server only to make questions, explanations and other help while you read. If you do not trust our server, this client is open source and works with a backend you run yourself (set a Backend URL under developer tools).
+
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes what the code does with data: what stays on the device, what is sent to the server and why.
 
 ## Ideas noticed on web pages

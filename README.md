@@ -62,7 +62,7 @@ docs/                architecture and licence notes
 
 ## Privacy
 
-- **Sent to the server:** the text of the passage, to generate a question or an explanation. Requests carry an install token (a random identifier created on first run) that is not derived from your device or network.
+- **Sent to the server:** the text of the passage, to generate a question or an explanation. That is the only use of passage text: questions, explanations and other help while you read. If you would rather not trust our server, this client is open source: run your own backend and point the extension at it (Backend URL under developer tools). Requests carry an install token (a random identifier created on first run) that is not derived from your device or network.
 - **Signed in with an Alcoia account:** your plan, your class membership and learning-memory settings are read from the server. With account-based learning on, answers to questions are stored on your account.
 - **In a class assignment:** answers and difficulty signals for that reading are reported to the class under the reporting mode (anonymous or identified) shown when you join.
 - **Anonymous counters:** a few daily counts, for example how often question generation failed, are sent only when the server turns this on. They contain no page, text or account.
