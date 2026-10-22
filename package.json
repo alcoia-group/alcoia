@@ -11,6 +11,7 @@
     "test:browser": "node tests/browser/smoke.mjs",
     "questions:review": "node tools/question-quality.mjs",
     "wordfreq:build": "node tools/build-wordfreq.mjs",
+    "wordfreq:lang": "node tools/build-wordfreq-lang.mjs",
     "build": "node build.mjs",
     "build:chrome": "node build.mjs chrome",
     "build:firefox": "node build.mjs firefox"
