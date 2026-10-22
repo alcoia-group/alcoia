@@ -45,9 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const $ = (id) => document.getElementById(id);
 
   const assistantToggle = $('assistantToggle');
-  const permBanner = $('permBanner');
-  const permGrantBtn = $('permGrantBtn');
-  const readingMode = $('readingMode');
+    const readingMode = $('readingMode');
   const homeMode = $('homeMode');
 
   // ── Master switch — mirrored in settings.html's Detection group. Both
@@ -72,25 +70,68 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // ── Host access (Firefox MV3 optional permissions) — unchanged from the
-  // old popup.js, verbatim logic. ─────────────────────────────────────────
-  function refreshHostPermission() {
-    if (!permBanner || !chrome.permissions?.contains) return;
-    try {
-      chrome.permissions.contains({ origins: ['<all_urls>'] }, (granted) => {
-        if (chrome.runtime.lastError) return;
-        permBanner.hidden = !!granted;
-        document.body.classList.toggle('no-host-access', !granted);
-      });
-    } catch (e) { /* API absent — assume granted, as on Chrome */ }
-  }
-  permGrantBtn?.addEventListener('click', () => {
-    chrome.permissions.request({ origins: ['<all_urls>'] }, () => {
-      if (chrome.runtime.lastError) return;
-      refreshHostPermission();
-    });
+  // ── Where alcoia runs on this site ────────────────────────────────────────
+  // alcoia reads nothing on a site until the reader switches it on here (one site) or in Settings
+  // (everywhere). The browser shows its own permission prompt for the one site.
+  const SS = self.AlcoiaSensitiveSites;
+  const SA = self.AlcoiaSiteAccess;
+  const pcall = (fn, ...args) => new Promise((resolve) => {
+    try { fn(...args, (r) => { void chrome.runtime.lastError; resolve(r); }); } catch (e) { resolve(undefined); }
   });
-  refreshHostPermission();
+  const sendRuntime = (msg) => new Promise((resolve) => {
+    try { chrome.runtime.sendMessage(msg, (r) => { void chrome.runtime.lastError; resolve(r); }); } catch (e) { resolve(undefined); }
+  });
+
+  async function setupSiteAccess(tab) {
+    const card = $('siteCard');
+    if (!card || !tab || !tab.url || !SS || !SA) return;
+    let url;
+    try { url = new URL(tab.url); } catch (e) { return; }
+    const toggle = $('siteToggle'), wrap = $('siteToggleWrap'), note = $('siteNote');
+    $('siteHost').textContent = url.hostname || '';
+    const hideToggle = (text) => { wrap.hidden = true; $('siteTitle').textContent = 'alcoia on this site'; note.textContent = text; card.hidden = false; };
+
+    if (url.protocol === 'file:') { hideToggle('Local files are switched on in Settings, under Where alcoia runs.'); return; }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+    const stored = await pcall(chrome.storage.local.get.bind(chrome.storage.local), { [SS.STORAGE_KEY]: [] });
+    if (SS.isSensitiveHost(url.hostname, stored && stored[SS.STORAGE_KEY])) {
+      hideToggle('alcoia stays off on banking, payment, email, health and password sites. Nothing on this page is read or sent.');
+      return;
+    }
+    if (SA.isAlcoiaHost(url.hostname)) { hideToggle('alcoia always works on this site.'); return; }
+
+    const pattern = SA.originPattern(tab.url);
+    const everywhere = !!(await pcall(chrome.permissions.contains.bind(chrome.permissions), { origins: ['<all_urls>'] }));
+    const site = everywhere || !!(await pcall(chrome.permissions.contains.bind(chrome.permissions), { origins: [pattern] }));
+    const paint = (isOn, locked) => {
+      toggle.checked = isOn;
+      toggle.disabled = !!locked;
+      note.textContent = locked
+        ? 'On for every site. Change this in Settings.'
+        : isOn
+          ? 'On for this site only.'
+          : 'Off here. Switch on to get questions while you read this site. Your browser will ask you to allow this one site.';
+    };
+    wrap.hidden = false;
+    $('siteTitle').textContent = 'Use alcoia on this site';
+    paint(site, everywhere);
+    card.hidden = false;
+
+    toggle.addEventListener('change', async () => {
+      if (toggle.checked) {
+        const granted = await pcall(chrome.permissions.request.bind(chrome.permissions), { origins: [pattern] });
+        if (!granted) { paint(false, false); note.textContent = 'Not switched on. The browser did not give permission for this site.'; return; }
+        await sendRuntime({ action: 'siteAccessChanged', tabId: tab.id });
+        paint(true, false);
+        note.textContent = 'On for this site only. It is running on this page now.';
+      } else {
+        await pcall(chrome.permissions.remove.bind(chrome.permissions), { origins: [pattern] });
+        await sendRuntime({ action: 'siteAccessChanged', tabId: tab.id, inject: false });
+        paint(false, false);
+        note.textContent = 'Off for this site. Reload the page to finish turning it off.';
+      }
+    });
+  }
 
   const openPage = (id, path) => $(id)?.addEventListener('click',
     () => chrome.tabs.create({ url: chrome.runtime.getURL(path) }));
@@ -301,6 +342,7 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const tab = tabs?.[0];
     if (!tab) { enterHomeMode(); return; }
+    setupSiteAccess(tab);
     chrome.tabs.sendMessage(tab.id, { type: 'getState' }, (resp) => {
       if (!chrome.runtime.lastError && resp && resp.state) {
         enterReadingMode(tab);

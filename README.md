@@ -6,7 +6,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="License: AGPL-3.0"></a>
 </p>
 
-Alcoia is a browser extension for Chrome and Firefox. It watches reading signals on the page you are reading, and when you slow down or re-read a passage it asks a short question about that passage. A correct answer ends the interaction. A wrong answer gets an explanation with the key terms highlighted.
+Alcoia is a browser extension for Chrome and other Chromium-based browsers. A Firefox build target exists but is tested less. It watches reading signals on the page you are reading, and when you slow down or re-read a passage it asks a short question about that passage. A correct answer ends the interaction. A wrong answer gets an explanation with the key terms highlighted.
 
 It works on web pages, PDFs and PowerPoint files opened from your computer, and on readings assigned through a class.
 
@@ -24,6 +24,8 @@ npm ci
 
 - **Chrome:** open `chrome://extensions`, turn on Developer mode, choose Load unpacked and select the `alcoia/` directory.
 - **Firefox:** run `npm run build:firefox`, open `about:debugging`, choose Load Temporary Add-on and select `dist/firefox/manifest.json`.
+
+After installing, alcoia does nothing on ordinary websites until you allow it. Open the toolbar popup on a page and switch on "Use alcoia on this site", or switch on all websites in Settings, "Where alcoia runs". It stays off on banking, health, webmail and similar pages whatever you choose.
 
 The AI features (questions, explanations, summaries) call the Alcoia server at `https://server.alcoia.app`. The server is a separate private project. To test against your own backend, set a Backend URL under developer tools in the extension settings.
 

@@ -101,12 +101,29 @@ async function openInReader(a, doc) {
   showError("Couldn't open that document just now. Try again.");
 }
 
+// The fallback PDF viewer fetches the file from its storage address, which the browser only allows with a
+// permission for that one host. Asked for here, from the click, and only for the host that serves this file.
+function ensureHostAccess(url) {
+  return new Promise((resolve) => {
+    let perm;
+    try { const u = new URL(url); perm = { origins: [u.protocol + '//' + u.hostname + '/*'] }; } catch (e) { resolve(false); return; }
+    try {
+      chrome.permissions.contains(perm, (has) => {
+        void chrome.runtime.lastError;
+        if (has) { resolve(true); return; }
+        chrome.permissions.request(perm, (granted) => { void chrome.runtime.lastError; resolve(!!granted); });
+      });
+    } catch (e) { resolve(false); }
+  });
+}
+
 async function openPdf(assignmentId, documentId, title) {
   const result = await assignments.getDownloadUrl(documentId);
   if (!result.ok) {
     showError("Couldn't open that document just now. Try again.");
     return;
   }
+  await ensureHostAccess(result.url);
   const viewerUrl = chrome.runtime.getURL('src/pdf-viewer/viewer.html')
     + '?src=' + encodeURIComponent(result.url)
     + '&assignmentId=' + encodeURIComponent(assignmentId)
