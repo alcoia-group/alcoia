@@ -30,6 +30,7 @@
  */
 
 import { t, uiLang, isRtl } from '../shared/i18n.js';
+import { contextLineFor } from '../shared/context-line.js';
 
 const AI_CALL_BURST_LIMIT       = 6;        // calls
 const AI_CALL_BURST_WINDOW_MS   = 10_000;   // per 10s
@@ -137,9 +138,9 @@ export async function createHost(deps) {
       // without it) is dropped now; the server's answer, when it carries one, replaces it. A failed or
       // memory-off submission simply leaves the unit without an estimate, i.e. the normal behaviour.
       if (fields.knowledgeUnitId && fields.questionId) learnerEstimates.delete(fields.knowledgeUnitId);
-      outcomesManager.submit(fields)
-        .then((r) => { if (r && r.learnerEstimate) noteLearnerEstimate(r.learnerEstimate); })
-        .catch(() => {});
+      return outcomesManager.submit(fields)
+        .then((r) => { if (r && r.learnerEstimate) noteLearnerEstimate(r.learnerEstimate); return r; })
+        .catch(() => null);
     };
   }
 
@@ -1075,9 +1076,25 @@ export async function createHost(deps) {
       if (transferPending) pendingTransfer.delete(record.interventionId);
       if (transferPending && record.paragraphKey) styleFollow.delete(record.paragraphKey);
       else { try { noteStyleFollowed(record); } catch (e) {} }
+      // The grader could not produce a verdict (offline, refused, malformed): nothing happened. No outcome is sent (so no
+      // unsettled mark, no inferred style feedback, no class figure), the check can be offered again after the usual
+      // spacing, and the reader has already seen the normal feedback.
+      const gradeUnavailable = record?.gradeReason === 'unavailable';
+      let settleAfterSubmit = null;
       if (transferPending) {
-        // Success is a confirmed correct answer. Anything else (wrong, unconfirmed) is "not yet", never a verdict on the reader.
-        try { const ev = transferTracker?.settle(transferPending.unitId, record.correct === true); if (ev) profileRecord(ev); } catch (e) {}
+        if (record.correct === true) {
+          // Success is a confirmed correct answer.
+          try { const ev = transferTracker?.settle(transferPending.unitId, true); if (ev) profileRecord(ev); } catch (e) {}
+        } else if (gradeUnavailable) {
+          try { transferTracker?.noteDeferred(transferPending.unitId); } catch (e) {}
+        } else {
+          // Could not be confirmed (an application answer is never marked wrong). Bounded: a second try with a different
+          // question, then it is recorded as "did not carry over", the style is marked not helpful (inferred, only when the
+          // reader gave no tap) and no further check is asked for this explanation.
+          let attempts = 0;
+          try { attempts = transferTracker?.noteAttempt(transferPending.unitId) ?? 0; } catch (e) {}
+          settleAfterSubmit = { unitId: transferPending.unitId, attempts };
+        }
         transferHints.delete(transferPending.unitId);
       }
       try {
@@ -1112,7 +1129,8 @@ export async function createHost(deps) {
       // adversarial's deliberate non-grading), not "wrong", and the
       // server rejects `correct` without a `questionId` regardless — both
       // are naturally satisfied here since they come from the same record.
-      submitOutcome({
+      if (gradeUnavailable) return;
+      const submitted = submitOutcome({
         paragraphIndex: record.paragraphIndex,
         questionId: record.questionId,
         correct: typeof record.correct === 'boolean' ? record.correct : undefined,
@@ -1144,6 +1162,16 @@ export async function createHost(deps) {
         questionLevel: record.level,
         ...(transferPending ? { transferCheck: transferPending.tier } : {}),
       });
+      if (settleAfterSubmit) {
+        Promise.resolve(submitted).then((r) => {
+          // The server counts attempts per explanation and says when the second one failed to settle; the page also
+          // counts its own, so a server that did not record it (memory off) still ends the series.
+          if (r?.transfer === 'did_not_carry' || settleAfterSubmit.attempts >= 2) {
+            const ev = transferTracker?.settle(settleAfterSubmit.unitId, false);
+            if (ev) profileRecord(ev);
+          }
+        }).catch(() => {});
+      }
     },
     onDismissed: (record) => {
       const declined = record?.interventionId ? pendingTransfer.get(record.interventionId) : null;
@@ -1279,7 +1307,6 @@ export async function createHost(deps) {
         <button class="sra-ctrl-btn sra-close-btn" title="Dismiss">✕</button>
       </div>
       <div class="sra-popup-body">
-        <div class="sra-state-badge sra-q-badge">quiz</div>
         <div class="sra-q-text">Ready to test what you remember?</div>
       </div>
       <div class="sra-popup-divider"></div>
@@ -1311,11 +1338,11 @@ export async function createHost(deps) {
       const tick = setInterval(() => {
         // Item 44: a review question can now render either markup branch
         // (.sra-q-options for recognition, .sra-q-freetext for the other
-        // three levels) — .sra-q-badge is on the card regardless of level,
+        // three levels) — .sra-q-text is on the card regardless of level,
         // so this keeps detecting "still open" correctly whichever the
         // engine picked, instead of only ever recognising recognition's own
         // markup and resolving instantly for anything else.
-        const open = document.querySelector('.sra-popup .sra-q-badge');
+        const open = document.querySelector('.sra-popup .sra-q-text');
         if (!open || Date.now() - started > 120000) { clearInterval(tick); resolve(); }
       }, 400);
     });
@@ -1368,6 +1395,7 @@ export async function createHost(deps) {
           paragraphKey: item.paragraphKey,
           knowledgeUnitId: item.knowledgeUnitId,
           interventionId,
+          passage: item.text,
         });
         if (!shown) continue;
         reportIntervention(interventionId, item.knowledgeUnitId, item.paragraphIndex, 'session_recall', item.text);
@@ -1446,6 +1474,7 @@ export async function createHost(deps) {
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
         showSelfReport: state.substate === 'unclear',
         interventionId,
+        passage: text,
       });
       if (shown) {
         reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text, 'retrieve');
@@ -1532,7 +1561,6 @@ export async function createHost(deps) {
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: identity.knowledgeUnitId,
         interventionId,
-        ...(relate ? { badge: 'how the ideas connect' } : {}),
         ...(style ? { onFeedback: (helped) => { noteStyleFeedback(mode, style, helped); try { transferTracker?.noteTap(identity.knowledgeUnitId); } catch (e) {} } } : {}),
       });
       if (shown && style) noteStyleShown(mode, style, identity.paragraphKey);
@@ -1637,13 +1665,8 @@ export async function createHost(deps) {
         knowledgeUnitId: identity.knowledgeUnitId,
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
         interventionId: decision.interventionId,
-        // Step 29: the one badge-level cue that distinguishes "you've seen
-        // this before" from an ordinary fresh question — see question-
-        // card.js's own context doc comment for why the evidence line
-        // alone wasn't a reliable enough signal on its own. Plain,
-        // non-jargon wording — never "retention"/"knowledge state"/
-        // "spaced repetition", none of which a reader should ever see.
-        badge: 'from earlier',
+        passage: text,
+        ...(isFocus ? {} : { contextLine: contextLineFor(text) }), // a scheduled review of an earlier paragraph
       });
       // "Budget spent only on yes" — the same rule orchestrator.js's own
       // comment states for handleAsk's path, applied here directly since
@@ -1750,7 +1773,9 @@ export async function createHost(deps) {
     if (!decision.allow) return;
     if (!automaticInterventionGuard.tryAcquire()) return;
     try {
-      const questions = await fetchQuestions(pick.text, { level });
+      const fetched = await fetchQuestions(pick.text, { level });
+      // Each try is a different question: one already asked about this paragraph is passed over.
+      const questions = fetched.filter((q) => !transferTracker.askedBefore(pick.unitId, q?.q));
       if (!questions.length) return;
       const shown = questionCard.show(questions[0], {
         evidence: decision.evidence,
@@ -1758,13 +1783,14 @@ export async function createHost(deps) {
         knowledgeUnitId: pick.unitId,
         paragraphIndex: pick.paragraphIndex,
         interventionId: decision.interventionId,
-        badge: 'apply it',
         // The grader checks the cited span against this passage, so a free-text answer can be confirmed at all.
         passage: pick.text,
+        ...(pick.hint.tier === 'delayed' ? { contextLine: contextLineFor(pick.text) } : {}),
       });
       if (shown) {
         orchestratorRef.interventionPolicy.record(decision);
         pendingTransfer.set(decision.interventionId, { unitId: pick.unitId, tier: pick.hint.tier });
+        transferTracker.noteAsked(pick.unitId, questions[0].q);
         transferHints.delete(pick.unitId);
         reportIntervention(decision.interventionId, pick.unitId, pick.paragraphIndex, 'ask', pick.text, 'retrieve', 'transfer');
       }
@@ -1833,6 +1859,8 @@ export async function createHost(deps) {
         knowledgeUnitId: identity.knowledgeUnitId,
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
         interventionId: decision.interventionId,
+        passage: text,
+        contextLine: contextLineFor(text), // a probe about an earlier paragraph
       });
       if (shown) {
         orchestratorRef.interventionPolicy.record(decision);
@@ -1877,6 +1905,8 @@ export async function createHost(deps) {
         knowledgeUnitId: identity.knowledgeUnitId,
         paragraphIndex: null,
         interventionId: decision.interventionId,
+        passage: text,
+        contextLine: contextLineFor(text), // a return after an absence
       });
       if (shown) {
         orchestratorRef.interventionPolicy.record(decision);

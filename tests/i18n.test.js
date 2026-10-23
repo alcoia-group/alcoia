@@ -123,9 +123,9 @@ describe('a question card on a French page', () => {
   it('shows the fixed words in French and leaves the question as written', () => {
     const { root, card } = setup();
     card.show(QUESTION, { badge: 'from earlier', evidence: ['You scrolled back 40px to re-read'], showSelfReport: true });
+    expect(root.querySelector('.sra-q-badge')).toBeNull();
+    expect(root.querySelector('.sra-q-evidence')).toBeNull();
 
-    expect(root.querySelector('.sra-q-badge').textContent).toBe('vu plus tôt');
-    expect(root.querySelector('.sra-q-evidence').textContent).toBe('Vous êtes remonté(e) de 40 px pour relire.');
     expect(root.querySelector('.sra-q-text').textContent).toBe('Que dit le passage ?');
     expect(root.querySelector('.sra-q-skip').textContent).toBe('Passer');
     expect(root.querySelector('.sra-q-snooze-toggle').textContent).toBe('Mettre les rappels en pause');
@@ -147,8 +147,8 @@ describe('a question card on a French page', () => {
   it('shows the explanation card in French too', () => {
     const { root, card } = setup();
     card.showExplanation('repair', 'Une explication courte.', { evidence: ['You slowed down a lot here'], onFeedback: () => {} });
-    expect(root.querySelector('.sra-explain-badge').textContent).toBe('pour y voir clair');
-    expect(root.querySelector('.sra-q-evidence').textContent).toBe('Vous avez beaucoup ralenti ici.');
+    expect(root.querySelector('.sra-explain-badge')).toBeNull();
+    expect(root.querySelector('.sra-q-evidence')).toBeNull();
     expect(root.querySelector('.sra-q-helped-label').textContent).toBe('Cela vous a-t-il aidé ?');
     expect(root.querySelector('.sra-q-helped-no').textContent).toBe('Pas vraiment');
   });
@@ -157,9 +157,9 @@ describe('a question card on a French page', () => {
     document.documentElement.lang = 'en';
     const { root, card } = setup();
     card.show(QUESTION, { evidence: ['You slowed down a lot here'] });
-    expect(root.querySelector('.sra-q-badge').textContent).toBe('quick check');
+    expect(root.querySelector('.sra-q-badge')).toBeNull();
     expect(root.querySelector('.sra-q-skip').textContent).toBe('Skip this');
-    expect(root.querySelector('.sra-q-evidence').textContent).toBe('You slowed down a lot here.');
+    expect(root.querySelector('.sra-q-evidence')).toBeNull();
   });
 
   it('sets right-to-left for Arabic', () => {

@@ -62,7 +62,7 @@ await sw.evaluate(() => chrome.storage.local.set({ sra_session: { token: 'sess-1
 
 const cardCount = (page) => page.evaluate(() => {
   let n = 0;
-  const walk = (root) => { n += root.querySelectorAll('.sra-q-badge').length; root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot); }); };
+  const walk = (root) => { n += root.querySelectorAll('.sra-q-text').length; root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot); }); };
   walk(document);
   return n;
 });

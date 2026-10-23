@@ -21,7 +21,7 @@ import { t } from '../shared/i18n.js';
 
 const escText = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function gradedResultMarkup({ verdict, level, question, esc, lang = 'en' }) {
+export function gradedResultMarkup({ verdict, level, question, esc, lang = 'en', reason = null }) {
   if (verdict === 'correct') {
     return {
       className: 'sra-q-result sra-q-result-correct',
@@ -33,6 +33,15 @@ export function gradedResultMarkup({ verdict, level, question, esc, lang = 'en' 
       className: 'sra-q-result sra-q-result-wrong',
       innerHTML: `<strong>${esc(t('res.notQuite', lang))}</strong>${question.explanation ? ` ${renderHighlightedExplanation(question.explanation, esc)}` : ''}
          ${question.span ? `<div class="sra-q-span">“${esc(question.span)}”</div>` : ''}`,
+    };
+  }
+  // The model ran and could not tell: ground the reader in the text itself instead of leaving them with nothing. No new
+  // model call: the question's own cited sentence, and the question's own explanation when it has one.
+  if (reason === 'undecided' && question.span) {
+    const why = question.explanation ? ` ${renderHighlightedExplanation(question.explanation, esc)}` : '';
+    return {
+      className: 'sra-q-result sra-q-result-unknown',
+      innerHTML: `<strong>${esc(level === 'scenario' ? t('res.cantConfirmEither', lang) : t('res.cantConfirm', lang))}</strong> ${esc(t('res.passageSays', lang))}<div class="sra-q-span">“${esc(question.span)}”</div>${why}`,
     };
   }
   const spanLine = question.span ? `<div class="sra-q-span">“${esc(question.span)}”</div>` : '';
