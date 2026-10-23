@@ -118,9 +118,9 @@ describe('content.js — reads both keys live and threads them into host.js', ()
 });
 
 describe('host.js — the gate and the setter this whole feature is built on', () => {
-  it('onIntervention, checkRetentionCandidate, and checkProbe all check showInterventions', () => {
+  it('onIntervention, checkRetentionCandidate, checkProbe and checkTransferCandidate all check showInterventions', () => {
     const occurrences = hostJs.match(/s\(\)\.showInterventions === false/g) || [];
-    expect(occurrences.length).toBe(3);
+    expect(occurrences.length).toBe(4);
   });
 
   it('exposes setShowSelfReportButton, toggling ensureSelfReportTrigger/removeSelfReportTrigger', () => {

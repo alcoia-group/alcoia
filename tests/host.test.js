@@ -3934,3 +3934,212 @@ describe('ways of explaining adapt to this learner', () => {
     stopAdaptationSync();
   });
 });
+
+/* Transfer check: after an explanation or repair, a NEW application-level question asks whether the idea carries over.
+ * The server says which paragraphs still need one (and the tier, from its own clock); the page adds the spacing only it
+ * can see. Real modules throughout (question-card, ui-controller, intervention-policy), only the network is scripted. */
+describe('transfer check (follow-up question after an explanation)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const PROFILE_URL = 'https://api.test.invalid/api/learner-memory/policy-profile';
+  const EVENTS_URL = 'https://api.test.invalid/api/learner-memory/policy-events';
+  const ESTIMATES_URL = `${ASSIGNMENTS_URL}/assign-t/knowledge-state/estimates`;
+  const OUTCOMES_URL = `${ASSIGNMENTS_URL}/assign-t/outcomes`;
+  const PARA = 'Photosynthesis converts light energy into chemical energy stored in glucose, using water and carbon dioxide as raw materials inside the chloroplast of a plant cell.';
+  const SPAN = 'Photosynthesis converts light energy into chemical energy stored in glucose';
+  const OTHER = (n) => `Another paragraph number ${n} that is long enough to count as a real paragraph the reader moved on to after the explanation was shown to them.`;
+  const styles = { explain_more: [{ style: 'scenario', n: 20, trials: 9, rate: 0.8 }, { style: 'analogy', n: 20, trials: 9, rate: 0.3 }], repair: [{ style: 'contrast', n: 20, trials: 9, rate: 0.7 }] };
+  const deps = (over = {}) => baseDeps({ assignmentId: 'assign-t', getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 99_999_999 }), ...over });
+  const hint = (unitId, over = {}) => ({ knowledgeUnitId: unitId, level: 'insufficient', confidence: 'none', action: 'gather', kind: 'retrieve', reason: 'only_assisted_or_unverified_attempts', transferCheck: true, transferLevel: 'application', transferTier: 'same_session', ...over });
+  const unitOf = async (t) => (await import('../alcoia/src/content/signals/knowledge-unit.js')).computeKnowledgeUnitId(t);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const flush = () => { Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); document.dispatchEvent(new Event('visibilitychange')); };
+
+  function setup({ verdict = 'correct', estimates = { current: [] }, preferred = false } = {}) {
+    document.body.innerHTML = `<p id="t">${PARA}</p>`;
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL, LEARNER_POLICY_PROFILE_URL: PROFILE_URL, LEARNER_POLICY_EVENTS_URL: EVENTS_URL, QUESTION_LEVELS_SUPPORTED: ['recognition', 'free_recall', 'scenario', 'adversarial'] });
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    const calls = []; const summarize = []; const questions = [];
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.action === 'proxyFetch') {
+        calls.push({ url: msg.url, options: msg.options });
+        if (msg.url === PROFILE_URL) return cb({ ok: true, status: 200, data: { cards: {}, detectors: {}, sensitivity: 1, styles } });
+        if (msg.url === ESTIMATES_URL) return cb({ ok: true, status: 200, data: { estimates: estimates.current, transferPreferred: preferred } });
+        if (msg.url === OUTCOMES_URL) return cb({ ok: true, status: 201, data: { recorded: true } });
+        return cb({ ok: true, status: 200, data: { recorded: true, candidates: [] } });
+      }
+      if (msg.url?.includes('/api/questions')) { questions.push(msg.body); return cb({ ok: true, data: { questions: [{ q: 'A new situation: how would you use the idea?', span: SPAN, spanRole: 'principle', level: msg.body.level, explanation: 'e' }] } }); }
+      if (msg.body && typeof msg.body.answer === 'string') return cb({ ok: true, data: { verdict, span: SPAN } });
+      summarize.push(msg.body);
+      return cb({ ok: true, data: { summary: 'A plainer explanation of the idea.' } });
+    };
+    return { calls, summarize, questions, estimates };
+  }
+  const events = (calls) => calls.filter((c) => c.url === EVENTS_URL).flatMap((c) => JSON.parse(c.options.body).events);
+  const outcomes = (calls) => calls.filter((c) => c.url === OUTCOMES_URL).map((c) => JSON.parse(c.options.body));
+
+  async function explained(env, { tap = false, over } = {}) {
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const h = await createHost(deps(over));
+    await vi.waitFor(() => expect(env.calls.some((c) => c.url === PROFILE_URL)).toBe(true));
+    await wait(20);
+    const engine = await import('../alcoia/src/content/intervention-policy.js');
+    h.setOrchestrator({ interventionPolicy: engine.createInterventionPolicy({}) });
+    const el = document.getElementById('t');
+    expect(await h.host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_x1' }, {}, el, 2)).toBe(true);
+    if (tap) queryAlcoia('.sra-q-helped-no').click();
+    queryAlcoia('.sra-close-btn')?.click();
+    await wait(320);
+    return h;
+  }
+  const readOthers = (host, n) => { for (let i = 1; i <= n; i += 1) host.onParagraphRead(OTHER(i), 5000, 10 + i); };
+  const answerCard = async (typed = 'I would use it by turning light into stored energy in a new setting.') => {
+    const input = queryAlcoia('.sra-q-answer-input');
+    input.value = typed; input.dispatchEvent(new Event('input'));
+    queryAlcoia('.sra-q-submit-text').click();
+    queryAlcoia('.sra-q-conf-skip').click();
+    await wait(60);
+  };
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('same-session success: a scenario question is asked after the spacing, reported with the marker, and counts as an inferred "helped" for the style used', async () => {
+    const env = setup();
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    readOthers(host, 3);
+    await wait(30);
+    expect(queryAlcoia('.sra-q-badge')).toBeNull(); // not yet: about three minutes have not passed
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    host.onParagraphRead(OTHER(4), 5000, 14);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')?.textContent).toBe('apply it'));
+    expect(env.questions.at(-1)).toMatchObject({ level: 'scenario' });
+    expect(env.calls.some((c) => c.url.endsWith('/interventions'))).toBe(true);
+    await answerCard();
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(1));
+    expect(outcomes(env.calls)[0]).toMatchObject({ transfer_check: 'same_session', question_level: 'scenario', correct: true, knowledge_unit_id: unit });
+    flush();
+    await vi.waitFor(() => expect(events(env.calls).some((e) => e.scope === 'style' && e.key === 'explain_more:scenario' && e.helpedInferred === 1)).toBe(true));
+    expect(events(env.calls).some((e) => e.key === 'explain_more:scenario' && e.answered > 0)).toBe(false); // not also counted as "the next answered question"
+    stopAdaptationSync();
+  });
+
+  it('needs two OTHER paragraphs read: one is not enough', async () => {
+    const env = setup();
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    env.estimates.current = [hint(unit)];
+    readOthers(host, 1);
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    host.onParagraphRead(PARA, 5000, 2); // meeting the explained paragraph again does not count as another paragraph
+    await wait(80);
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    stopAdaptationSync();
+  });
+
+  it('an explicit tap on the explanation wins: nothing is inferred, whatever the result', async () => {
+    const env = setup({ verdict: 'unknown' });
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env, { tap: true });
+    readOthers(host, 3);
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    host.onParagraphRead(OTHER(4), 5000, 14);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')?.textContent).toBe('apply it'));
+    await answerCard();
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(1));
+    flush();
+    await vi.waitFor(() => expect(events(env.calls).some((e) => e.key === 'explain_more:scenario' && e.notHelped === 1)).toBe(true));
+    expect(events(env.calls).some((e) => e.helpedInferred > 0 || e.notHelpedInferred > 0)).toBe(false);
+    stopAdaptationSync();
+  });
+
+  it('a check that is not confirmed is an inferred "not helped" and the next explanation of that paragraph uses a different style', async () => {
+    const env = setup({ verdict: 'unknown' });
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    expect(env.summarize.at(-1).style).toBe('scenario');
+    readOthers(host, 3);
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    host.onParagraphRead(OTHER(4), 5000, 14);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')?.textContent).toBe('apply it'));
+    await answerCard();
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(1));
+    expect(outcomes(env.calls)[0].correct).toBeUndefined(); // an unconfirmed answer is sent as ungraded, never as wrong
+    flush();
+    await vi.waitFor(() => expect(events(env.calls).some((e) => e.key === 'explain_more:scenario' && e.notHelpedInferred === 1)).toBe(true));
+    queryAlcoia('.sra-close-btn')?.click();
+    await wait(320);
+    await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['again'], interventionId: 'iv_x2' }, {}, document.getElementById('t'), 2);
+    expect(env.summarize.at(-1).style).toBe('analogy'); // not the failed one
+    stopAdaptationSync();
+  });
+
+  it('a dismissal changes no evidence and the question is not asked again this session', async () => {
+    const env = setup();
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    readOthers(host, 3);
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    host.onParagraphRead(OTHER(4), 5000, 14);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')?.textContent).toBe('apply it'));
+    queryAlcoia('.sra-close-btn').click();
+    await wait(320);
+    expect(outcomes(env.calls)).toHaveLength(0);
+    vi.setSystemTime(Date.now() + 30 * 60_000);
+    host.onParagraphRead(OTHER(5), 5000, 15);
+    await wait(80);
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    flush();
+    await wait(60);
+    expect(events(env.calls).some((e) => e.helpedInferred > 0 || e.notHelpedInferred > 0)).toBe(false);
+    stopAdaptationSync();
+  });
+
+  it('respects the usual gates: assistant off, or a question already on screen, asks nothing', async () => {
+    const env = setup();
+    const unit = await unitOf(PARA);
+    let enabled = true;
+    const { host, stopAdaptationSync } = await explained(env, { over: { settings: () => ({ assistantEnabled: enabled, backendUrl: 'https://api.test.invalid/api/summarize' }) } });
+    readOthers(host, 3);
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    enabled = false;
+    host.onParagraphRead(OTHER(4), 5000, 14);
+    await wait(80);
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(env.questions.some((q) => q.level === 'scenario')).toBe(false);
+    stopAdaptationSync();
+  });
+
+  it('a delayed check is asked when the reader meets the paragraph again, at the level the server names (recall depth)', async () => {
+    const env = setup();
+    const unit = await unitOf(PARA);
+    env.estimates.current = [hint(unit, { transferTier: 'delayed', transferLevel: 'recall' })];
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const { host, setOrchestrator, stopAdaptationSync } = await createHost(deps());
+    const engine = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engine.createInterventionPolicy({}) });
+    host.onParagraphRead(PARA, 5000, 2);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')?.textContent).toBe('apply it'));
+    expect(env.questions.at(-1)).toMatchObject({ level: 'free_recall' }); // recall depth: never escalated to a scenario
+    await answerCard();
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(1));
+    expect(outcomes(env.calls)[0]).toMatchObject({ transfer_check: 'delayed', question_level: 'free_recall' });
+    stopAdaptationSync();
+  });
+
+  it('with no assignment (ordinary pages) nothing is tracked or asked', async () => {
+    const env = setup();
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const { host, stopAdaptationSync } = await createHost(baseDeps());
+    host.onParagraphRead(PARA, 5000, 2);
+    await wait(60);
+    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(env.calls.some((c) => c.url === ESTIMATES_URL)).toBe(false);
+    stopAdaptationSync();
+  });
+});

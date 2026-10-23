@@ -1,7 +1,9 @@
 /* learner-estimates.js — the learner's own estimates for one assignment (Stage B).
  *
  *   GET {ASSIGNMENTS_URL}/:assignmentId/knowledge-state/estimates -> 200
- *     { estimates: [{ knowledgeUnitId, level, confidence, action, kind, reason }] }
+ *     { estimates: [{ knowledgeUnitId, level, confidence, action, kind, reason, transferCheck?, transferLevel?, transferTier?, transferFocus? }], transferPreferred }
+ *   transferCheck: the unit was explained and a new application-level question is still needed (the server decides the tier
+ *   from its own clock; the page adds the 'two other paragraphs read' spacing). Labels only.
  *
  * Same shape and posture as retention.js: the caller builds the URL, this never throws, a failure means "no
  * estimates", and the reading flow then behaves exactly as it did before estimates existed. Labels and
@@ -26,7 +28,7 @@ export function createLearnerEstimatesManager(opts = {}) {
         return { ok: false, error: (data && typeof data.error === 'string' && data.error) || `status_${resp.status}`, estimates: [] };
       }
       const data = await resp.json().catch(() => null);
-      return { ok: true, estimates: data && Array.isArray(data.estimates) ? data.estimates : [] };
+      return { ok: true, estimates: data && Array.isArray(data.estimates) ? data.estimates : [], transferPreferred: data?.transferPreferred === true };
     } catch (e) {
       return { ok: false, error: 'network_error', estimates: [] };
     }

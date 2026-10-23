@@ -663,7 +663,9 @@ export function createInterventionPolicy(config = {}) {
     }
 
     const key = paragraphKey(state, ctx.currentEl);
-    if (key && seenParagraphs.has(key)) {
+    // A transfer check is about a paragraph that WAS explained here, so the per-paragraph "already interrupted" rule
+    // cannot apply to it. Every other gate above and the budget still do.
+    if (key && seenParagraphs.has(key) && ctx.kind !== 'transfer') {
       return deny('already interrupted on this paragraph');
     }
 
@@ -764,7 +766,7 @@ export function createInterventionPolicy(config = {}) {
       ({ allow: false, action: 'none', policyAction: POLICY_ACTIONS.NONE, reason, evidence: [], paragraphKey: null, interventionId: null });
 
     // The kind of card, for this learner's history with that kind (retention, focus, probe, return_check).
-    const cardType = ['focus', 'probe', 'return_check'].includes(ctx.kind) ? ctx.kind : 'retention';
+    const cardType = ['focus', 'probe', 'return_check', 'transfer'].includes(ctx.kind) ? ctx.kind : 'retention';
     // A kind the learner reliably turns away is not shown. The one exception is an instructor-flagged concept the
     // learner's own evidence says they do not know (mode support or repair): that is help, not a check.
     const needsHelp = ctx.kind === 'focus' && (ctx.mode === 'support' || ctx.mode === 'repair');
@@ -829,6 +831,19 @@ export function createInterventionPolicy(config = {}) {
     const isReturnCheck = ctx.kind === 'return_check';
     if ((isProbe || isReturnCheck) && count >= cap - 1) {
       return deny(`keeping the last slot of the session budget (${count}/${cap}) for help`);
+    }
+    if (ctx.kind === 'transfer') {
+      // A follow-up question to see whether an earlier explanation carried over to using the idea. It is a retrieval
+      // question (not a new policy action: APPLY stays unreachable) and spends the same shared budget and gates.
+      return {
+        allow: true,
+        action: 'transfer',
+        policyAction: POLICY_ACTIONS.RETRIEVE,
+        reason: 'follow-up to see whether an explanation carried over',
+        evidence: ['A new question to see whether the idea carries over.'],
+        paragraphKey: key,
+        interventionId: generateId(now, random),
+      };
     }
     if (isReturnCheck) {
       return {
