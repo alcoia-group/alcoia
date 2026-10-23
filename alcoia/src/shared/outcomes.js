@@ -73,7 +73,7 @@ export function createOutcomesManager(opts = {}) {
   async function submit({
     paragraphIndex, struggled, questionId, correct, confidence, reached,
     substate, selfReported, source, selectedAnswer, explanationPrecededAttempt,
-    knowledgeUnitId, interventionId, questionLevel,
+    knowledgeUnitId, interventionId, questionLevel, transferCheck,
   } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
@@ -162,6 +162,12 @@ export function createOutcomesManager(opts = {}) {
     // answered question has one. Absent means recognition on the server.
     if (['recognition', 'free_recall', 'scenario', 'adversarial'].includes(questionLevel) && body.question_id) {
       body.question_level = questionLevel;
+    }
+
+    // A transfer check (a new application-level question asked to see whether an earlier explanation carried over).
+    // Only asks to be treated as one: the server decides from its own clock and the stored evidence whether it is.
+    if ((transferCheck === 'same_session' || transferCheck === 'delayed') && body.question_id) {
+      body.transfer_check = transferCheck;
     }
 
     try {
