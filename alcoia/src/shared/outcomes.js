@@ -185,7 +185,9 @@ export function createOutcomesManager(opts = {}) {
       // for replayed submissions.
       const data = await resp.json?.().catch(() => null);
       const learnerEstimate = data && data.learnerEstimate && typeof data.learnerEstimate === 'object' ? data.learnerEstimate : null;
-      return learnerEstimate ? { ok: true, learnerEstimate } : { ok: true };
+      // For a transfer check the server also says how it went: 'carried', 'retry' (one more try) or 'did_not_carry'.
+      const transfer = data && ['carried', 'retry', 'did_not_carry'].includes(data.transfer) ? data.transfer : null;
+      return { ok: true, ...(learnerEstimate ? { learnerEstimate } : {}), ...(transfer ? { transfer } : {}) };
     } catch (e) {
       return { ok: false, error: 'network_error' };
     }

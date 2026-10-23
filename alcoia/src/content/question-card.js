@@ -10,9 +10,10 @@
  *    as a wrong answer, and no question is ever asked twice for the same
  *    paragraph. Being tested against your will is the thing that makes
  *    software like this hated.
- * 2. The card shows what was observed before it asks anything — the same
- *    evidence line every other interruption carries. The reader should be able
- *    to see why they were interrupted and disagree with it.
+ * 2. The card names nothing about itself. No badge, no "why this appeared"
+ *    line: only the content (question, or explanation) and the controls. The
+ *    decision record stays in code and in the diagnostics log; an opt-in
+ *    diagnostics view could show it again.
  * 3. Confidence is captured at commit time, alongside the answer — not as a
  *    post-answer "are you sure?" probe. A probe that surfaces more often
  *    after wrong answers leaks the result, and readers learn to read the
@@ -47,12 +48,7 @@ import { calibratedLine } from './calibration-copy.js';
 import { SNOOZE_OPTIONS } from './snooze.js';
 import { renderHighlightedExplanation } from './keyword-highlight.js';
 import { gradedResultMarkup, respondedResultMarkup } from './graded-result.js';
-import { t, tr, uiLang, isRtl } from '../shared/i18n.js';
-
-/* One closing full stop on the "why now" line, unless the sentence already ends in punctuation. */
-function evidenceSentence(text) {
-  return /[.。!?…]$/.test(text) ? text : `${text}.`;
-}
+import { t, uiLang, isRtl } from '../shared/i18n.js';
 
 const GRADED_LEVELS = ['free_recall', 'scenario'];
 const FREE_TEXT_LEVELS = ['free_recall', 'scenario', 'adversarial'];
@@ -78,20 +74,12 @@ export function createQuestionCard(deps = {}) {
 
   /* question: { q, options[4], answerIndex, explanation, span, level?, span_role? }
    * context: { evidence[], anchorRect, paragraphKey, knowledgeUnitId, interventionId,
-   *            passage?, showSelfReport?, badge? } — item 13a:
+   *            passage?, showSelfReport?, contextLine? } — item 13a:
    *            showSelfReport renders the self-report options alongside this
    *            question, additive to the answer flow, never a replacement for it.
-   *            badge (Step 29, optional, defaults to "quick check"): the one
-   *            visible cue that currently tells a retention/delayed-retrieve
-   *            item apart from an ordinary fresh question — see host.js's own
-   *            checkRetentionCandidate call site. Without it, a retention
-   *            card was visually IDENTICAL to a brand-new question (same
-   *            badge text, same layout), relying entirely on a single small
-   *            caption-sized evidence line to signal "this is something you
-   *            already covered" — easy to miss, and a real UX gap this
-   *            item's own §7 asks to verify against ("recognizable as
-   *            retrieval of previously encountered material... does not
-   *            look like an arbitrary new question").
+   *            contextLine (optional): one plain sentence naming which part of the reading the card is about; only
+   *            for cards about an earlier paragraph (see shared/context-line.js). Rendered as muted text, not a badge.
+   *            (badge and evidence are accepted and ignored: cards name nothing about themselves.)
    *            knowledgeUnitId (step 3) and interventionId (step 5) are documented
    *            here for shape completeness — this component does not compute
    *            either itself; it is response-signals.js's present()/answer() (called
@@ -162,10 +150,12 @@ export function createQuestionCard(deps = {}) {
     // persisted server-side). See response-signals.js's own header.
     responseSignals.present(question, { ...context, questionId: fingerprint });
 
-    const evidence = context.evidence && context.evidence.length
-      ? `<div class="sra-q-evidence">${esc(evidenceSentence(tr(context.evidence[0], lang)))}</div>`
+    if (isRtl(lang)) root.setAttribute?.('dir', 'rtl');
+    root.setAttribute?.('role', 'group');
+    root.setAttribute?.('aria-label', 'Question');
+    const contextLine = typeof context.contextLine === 'string' && context.contextLine.trim()
+      ? `<div class="sra-q-context">${esc(context.contextLine.trim().slice(0, 200))}</div>`
       : '';
-    if (isRtl(lang)) root.setAttribute('dir', 'rtl');
 
     const bodyInner = level === 'recognition'
       ? `<div class="sra-q-options">
@@ -198,8 +188,7 @@ export function createQuestionCard(deps = {}) {
         <button class="sra-ctrl-btn sra-close-btn" title="${esc(L('card.dismiss'))}">✕</button>
       </div>
       <div class="sra-popup-body">
-        <div class="sra-state-badge sra-q-badge">${esc(tr(context.badge || 'quick check', lang))}</div>
-        ${evidence}
+        ${contextLine}
         <div class="sra-q-text">${esc(question.q)}</div>
         ${bodyInner}
         ${selfReport}
@@ -394,10 +383,11 @@ export function createQuestionCard(deps = {}) {
         // checked here too, not assumed from upstream.
         const verdict = level === 'scenario' && graded.verdict === 'incorrect' ? 'unknown' : graded.verdict;
 
-        const record = responseSignals.answerGraded(answerText, verdict, confidence, interventionId);
+        const gradeReason = verdict === 'unknown' ? (graded.reason === 'undecided' ? 'undecided' : 'unavailable') : null;
+        const record = responseSignals.answerGraded(answerText, verdict, confidence, interventionId, gradeReason);
         if (record && onAnswered) onAnswered(record);
 
-        revealGraded(root, question, verdict, level, esc, lang);
+        revealGraded(root, question, verdict, level, esc, lang, gradeReason);
 
         // Only free_recall can ever reach here with subtype 'incorrect' —
         // fetchGrading() structurally cannot return "incorrect" for
@@ -478,22 +468,15 @@ export function createQuestionCard(deps = {}) {
     const root = ui.reservePopup(fingerprint, isRepair ? 'repair' : 'explain');
     if (!root) return false;
 
-    const badgeText = typeof context.badge === 'string' && context.badge.trim()
-      ? context.badge.trim().slice(0, 40)
-      : (isRepair ? 'clearing this up' : 'a closer look');
-    const badgeShown = tr(badgeText, lang);
-    const evidenceHtml = context.evidence && context.evidence.length
-      ? `<div class="sra-q-evidence">${esc(evidenceSentence(tr(context.evidence[0], lang)))}</div>`
-      : '';
-    if (isRtl(lang)) root.setAttribute('dir', 'rtl');
+    if (isRtl(lang)) root.setAttribute?.('dir', 'rtl');
+    root.setAttribute?.('role', 'group');
+    root.setAttribute?.('aria-label', 'Explanation');
 
     root.innerHTML = `
       <div class="sra-controls">
         <button class="sra-ctrl-btn sra-close-btn" title="${esc(L('card.dismiss'))}">✕</button>
       </div>
       <div class="sra-popup-body">
-        <div class="sra-state-badge sra-explain-badge">${esc(badgeShown)}</div>
-        ${evidenceHtml}
         <div class="sra-q-explain sra-explain-text">${renderHighlightedExplanation(text, esc)}</div>
       </div>
       <div class="sra-popup-divider"></div>
@@ -583,10 +566,10 @@ function revealAnswer(root, question, chosen, confidence, esc, lang = 'en') {
  * nothing, never a false correction (the project notes, item 43's whole reason to
  * exist). free_recall's "unknown" copy is worded the same way, for the same
  * reason — an inconclusive grade is not evidence of a wrong answer either. */
-function revealGraded(root, question, verdict, level, esc, lang = 'en') {
+function revealGraded(root, question, verdict, level, esc, lang = 'en', reason = null) {
   const body = root.querySelector('.sra-popup-body');
   if (!body) return;
-  const { className, innerHTML } = gradedResultMarkup({ verdict, level, question, esc, lang });
+  const { className, innerHTML } = gradedResultMarkup({ verdict, level, question, esc, lang, reason });
   const note = document.createElement('div');
   note.className = className;
   note.innerHTML = innerHTML;
