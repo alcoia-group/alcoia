@@ -200,6 +200,15 @@ No accuracy percentage for detection appears in shipped code, UI copy or documen
   messaging, the manifest, and end-to-end behaviour in a real Chromium instance.
 - No new runtime dependencies are added without a deliberate decision to do so.
 
+## Transfer check (assigned readings)
+
+An answer given right after an explanation or repair is recorded by the server as assisted: it shows the reader could answer with the help in front of them. The page follows it with a new application-level question to see whether the idea carries over.
+
+- `src/shared/transfer-check.js` remembers, in memory for the page session, which paragraphs were explained and in which style, and how many other paragraphs were read since. A same-session check needs two other paragraphs and about three minutes. The server says which paragraphs still need a check and the tier (`transferCheck`, `transferTier`, `transferLevel` on the estimates response); a delayed check is asked when the reader meets the paragraph again.
+- `checkTransferCandidate` in `host.js` asks a scenario question (free recall when the instructor's depth is recall) through the usual question card and the usual gates: assistant on, interventions shown, snooze, one card at a time, the shared budget, cooldown and dismissal back-off, and the automatic-intervention guard. A dismissal changes no evidence and the question is not asked again that session. The outcome carries `transfer_check`; the server decides whether it counts.
+- When the explanation had no tap on "did this help?", the check stands in for it: success is reported as `helpedInferred`, anything else as `notHelpedInferred`, through the existing policy-events batch. A tap always wins. A failed check with no tap also makes the next explanation of that paragraph use a different style.
+- Known gap, not fixed here: nothing passes `context.passage` to the question card for the free-text levels, so on the older retrieval paths the grader cannot confirm a span and the answer comes back ungraded. The transfer check passes it.
+
 ## Verifying this yourself
 
 ```bash
