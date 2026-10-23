@@ -277,10 +277,13 @@
 
 .sra-error { color: var(--alc-wrong); font-size: 13px; }
 
-/* The question card's own badge. Sage, because asking is the system acting —
-   and deliberately no icon: a sparkle here would say "generated", which is the
-   opposite of what a question about a real sentence is claiming. */
-.sra-q-badge { color: var(--alc-sage-2); }
+/* Cards carry no badge. The one optional context sentence (earlier-paragraph cards only) is plain muted text. */
+.sra-q-context {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--alc-muted);
+  margin: 0 0 8px;
+}
 
 /* ── Retrieval question card (P3) — the primary intervention ──────────────
    Lives on .sra-popup, so it inherits the card's type. These rules were

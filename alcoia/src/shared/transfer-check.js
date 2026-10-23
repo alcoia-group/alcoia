@@ -18,6 +18,7 @@
  * stated limit. */
 export const SPACING_OTHER_PARAGRAPHS = 2; // same-session tier: at least this many other paragraphs read since the explanation
 export const SPACING_MS = 3 * 60 * 1000; // ... and at least about three minutes (the server enforces the same floor)
+export const MAX_ATTEMPTS = 2; // unconfirmed attempts per explanation; then it is recorded as "did not carry over" and no more are asked
 const MAX_UNITS = 40;
 
 export function createTransferTracker({ now = () => Date.now() } = {}) {
@@ -27,7 +28,7 @@ export function createTransferTracker({ now = () => Date.now() } = {}) {
   function noteExplained(unitId, { text = '', mode = null, style = null, paragraphIndex = null } = {}) {
     if (!unitId) return;
     units.delete(unitId);
-    units.set(unitId, { text: String(text || ''), paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null, key: mode && style ? `${mode}:${style}` : null, at: now(), others: 0, tapped: false, settled: false });
+    units.set(unitId, { text: String(text || ''), paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null, key: mode && style ? `${mode}:${style}` : null, at: now(), others: 0, tapped: false, settled: false, attempts: 0, asked: new Set() });
     if (units.size > MAX_UNITS) units.delete(units.keys().next().value);
   }
   function noteTap(unitId) {
@@ -43,6 +44,28 @@ export function createTransferTracker({ now = () => Date.now() } = {}) {
     for (const [unitId, r] of units) if (spacingMet(r) && r.text) out.push({ unitId, text: r.text, paragraphIndex: r.paragraphIndex });
     return out;
   }
+  /* A transfer question was asked about this unit. Each try must be a different question, so the text is remembered
+   * (this session only), and the spacing starts again for the next one. */
+  function noteAsked(unitId, questionText) {
+    const r = units.get(unitId);
+    if (r && questionText) r.asked.add(String(questionText).trim());
+  }
+  const askedBefore = (unitId, questionText) => Boolean(units.get(unitId)?.asked.has(String(questionText || '').trim()));
+  /* An answer that could not be confirmed counts as an attempt (the server keeps its own count; at most MAX_ATTEMPTS). */
+  function noteAttempt(unitId) {
+    const r = units.get(unitId);
+    if (!r) return 0;
+    r.attempts += 1;
+    r.at = now();
+    r.others = 0;
+    return r.attempts;
+  }
+  /* No usable verdict (the grader was unavailable): nothing happened, but do not ask again straight away. */
+  function noteDeferred(unitId) {
+    const r = units.get(unitId);
+    if (r) { r.at = now(); r.others = 0; }
+  }
+  const attemptsOf = (unitId) => units.get(unitId)?.attempts ?? 0;
   const textOf = (unitId) => units.get(unitId)?.text ?? '';
   const isExplained = (unitId) => units.has(unitId) && !units.get(unitId).settled;
 
@@ -62,5 +85,5 @@ export function createTransferTracker({ now = () => Date.now() } = {}) {
     return key ? key.split(':')[1] ?? null : null;
   }
 
-  return { noteExplained, noteTap, noteParagraphRead, readyUnits, textOf, isExplained, settle, avoidStyleFor };
+  return { noteExplained, noteTap, noteParagraphRead, readyUnits, textOf, isExplained, settle, avoidStyleFor, noteAsked, askedBefore, noteAttempt, noteDeferred, attemptsOf };
 }

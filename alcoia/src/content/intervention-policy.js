@@ -813,7 +813,9 @@ export function createInterventionPolicy(config = {}) {
     }
 
     const key = ctx.paragraphKey || null;
-    if (key && seenParagraphs.has(key)) {
+    // A second transfer try is about a paragraph a first one was already asked on; the bound on tries lives with the
+    // transfer tracker and the server, not in this rule.
+    if (key && seenParagraphs.has(key) && ctx.kind !== 'transfer') {
       return deny('already interrupted on this paragraph');
     }
 
