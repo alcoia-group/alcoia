@@ -996,20 +996,16 @@ describe('showExplanation() (Learning Intelligence step 24)', () => {
     expect(ui.root.querySelector('.sra-explain-text').textContent).toContain('A plain explanation of the idea.');
   });
 
-  it('explain and repair show different, fixed, non-AI-sounding badge copy', () => {
-    const uiA = fakeUIWithKind();
-    const cardA = createQuestionCard({ ui: uiA, esc, responseSignals: createResponseSignals() });
-    cardA.showExplanation('explain', 'text', {});
-    const explainBadge = uiA.root.querySelector('.sra-explain-badge').textContent;
-
-    const uiB = fakeUIWithKind();
-    const cardB = createQuestionCard({ ui: uiB, esc, responseSignals: createResponseSignals() });
-    cardB.showExplanation('repair', 'text', {});
-    const repairBadge = uiB.root.querySelector('.sra-explain-badge').textContent;
-
-    expect(explainBadge).not.toBe(repairBadge);
-    for (const copy of [explainBadge, repairBadge]) {
-      expect(copy.toLowerCase()).not.toMatch(/\b(ai|generation intent|policy action|content intelligence|llm|model)\b/);
+  it('explain and repair cards show no badge and only a neutral accessible name', () => {
+    for (const kind of ['explain', 'repair']) {
+      const ui = fakeUIWithKind();
+      const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
+      card.showExplanation(kind, 'text', { badge: 'a closer look', evidence: ['You slowed down'] });
+      expect(ui.root.querySelector('.sra-state-badge')).toBeNull();
+      expect(ui.root.querySelector('.sra-explain-badge')).toBeNull();
+      expect(ui.root.querySelector('.sra-q-evidence')).toBeNull();
+      expect(ui.root.querySelector('.sra-q-context')).toBeNull();
+      expect(ui.root.getAttribute('aria-label')).toBe('Explanation');
     }
   });
 
@@ -1041,13 +1037,6 @@ describe('showExplanation() (Learning Intelligence step 24)', () => {
     expect(onDismissed).not.toHaveBeenCalled();
   });
 
-  it('shows the evidence line, same markup class as the retrieval question card, when provided', () => {
-    const ui = fakeUIWithKind();
-    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
-    card.showExplanation('explain', 'text', { evidence: ['You seemed to slow down here'] });
-    expect(ui.root.querySelector('.sra-q-evidence').textContent).toContain('You seemed to slow down here');
-  });
-
   it('closing the card removes it from the DOM, same as the question card\'s own dismiss', () => {
     const ui = fakeUIWithKind();
     const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
@@ -1058,34 +1047,56 @@ describe('showExplanation() (Learning Intelligence step 24)', () => {
   });
 });
 
-/* Step 29 (student intervention experience audit). Before this item, every
- * card show() renders used the identical hardcoded "quick check" badge --
- * a fresh retrieval question and a retention/delayed-retrieve item (one
- * about content the reader already covered) were visually indistinguishable
- * except for one small caption-sized evidence line. See host.js's
- * checkRetentionCandidate for the one real caller that now passes a
- * distinguishing badge. */
-describe('badge override (Step 29)', () => {
-  it('defaults to "quick check" when the caller supplies no badge', () => {
+/* Cards name nothing about themselves: no badge, no "why this appeared" line. The one exception is a single plain
+ * context sentence on cards about an earlier paragraph (shared/context-line.js). */
+import { contextLineFor, CONTEXT_FALLBACK } from '../alcoia/src/shared/context-line.js';
+
+describe('cards name nothing about themselves', () => {
+  const LABELS = /quick check|from earlier|a closer look|clearing this up|let's clear this up|how the ideas connect|apply it|quiz\b|review|retrieval/i;
+
+  it('a question card shows no badge, no evidence line and no label words, whatever the caller passes', () => {
     const ui = fakeUI();
     const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
-    card.show(QUESTION, {});
-    expect(ui.root.querySelector('.sra-q-badge').textContent).toBe('quick check');
+    card.show(QUESTION, { badge: 'from earlier', evidence: ['You scrolled back to re-read'] });
+    expect(ui.root.querySelector('.sra-q-badge')).toBeNull();
+    expect(ui.root.querySelector('.sra-state-badge')).toBeNull();
+    expect(ui.root.querySelector('.sra-q-evidence')).toBeNull();
+    expect(ui.root.querySelector('.sra-q-context')).toBeNull();
+    expect(ui.root.textContent).not.toMatch(LABELS);
+    expect(ui.root.textContent).not.toContain('scrolled back');
+    expect(ui.root.getAttribute('aria-label')).toBe('Question');
   });
 
-  it('renders a caller-supplied badge instead — e.g. a retention item presented as "from earlier"', () => {
+  it('renders the context sentence as plain muted text above the question, escaped', () => {
     const ui = fakeUI();
     const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
-    card.show(QUESTION, { badge: 'from earlier' });
-    expect(ui.root.querySelector('.sra-q-badge').textContent).toBe('from earlier');
+    card.show(QUESTION, { contextLine: 'About the part that starts: "<script>alert(1)</script>"' });
+    const line = ui.root.querySelector('.sra-q-context');
+    expect(line.innerHTML).not.toContain('<script>');
+    expect(line.textContent).toContain('<script>alert(1)</script>');
+    expect(line.className).not.toMatch(/badge|pill/);
+    expect(ui.root.querySelector('.sra-state-badge')).toBeNull();
+    const kids = [...ui.root.querySelector('.sra-popup-body').children];
+    expect(kids.indexOf(line)).toBeLessThan(kids.indexOf(ui.root.querySelector('.sra-q-text')));
   });
+});
 
-  it('escapes the badge text the same way every other reader-visible string in this card is escaped', () => {
-    const ui = fakeUI();
-    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals() });
-    card.show(QUESTION, { badge: '<script>alert(1)</script>' });
-    const badge = ui.root.querySelector('.sra-q-badge');
-    expect(badge.innerHTML).not.toContain('<script>');
-    expect(badge.textContent).toContain('<script>alert(1)</script>');
+describe('contextLineFor', () => {
+  it('quotes the first eight words and truncates at a word boundary', () => {
+    expect(contextLineFor('One two three four five six seven eight nine ten'))
+      .toBe('About the part that starts: "One two three four five six seven eight..."');
+  });
+  it('does not add dots when the paragraph is short', () => {
+    expect(contextLineFor('A short one.')).toBe('About the part that starts: "A short one."');
+  });
+  it('falls back when the text is unavailable', () => {
+    for (const v of [undefined, null, '', '   ', 42]) expect(contextLineFor(v)).toBe(CONTEXT_FALLBACK);
+    expect(CONTEXT_FALLBACK).toBe('You read this earlier.');
+  });
+  it('never emits a very long word whole', () => {
+    expect(contextLineFor('x'.repeat(500)).length).toBeLessThan(80);
+  });
+  it('uses no label words', () => {
+    expect(contextLineFor('Some words here about things')).not.toMatch(/quick check|review|retrieval|from earlier/i);
   });
 });

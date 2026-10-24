@@ -29,7 +29,7 @@ describe('policy profile manager (the learner\'s adaptation follows their accoun
     m.record({ scope: 'card', key: 'probe', shown: 1 });
     expect(await m.flush()).toBe(true);
     const post = calls.find((c) => c.init.method === 'POST');
-    expect(JSON.parse(post.init.body)).toEqual({ events: [{ scope: 'card', key: 'probe', shown: 2, answered: 0, dismissed: 1, quickDismissed: 1, correct: 0, selfReports: 0, helped: 0, notHelped: 0 }] });
+    expect(JSON.parse(post.init.body)).toEqual({ events: [{ scope: 'card', key: 'probe', shown: 2, answered: 0, dismissed: 1, quickDismissed: 1, correct: 0, selfReports: 0, helped: 0, notHelped: 0, helpedInferred: 0, notHelpedInferred: 0 }] });
     expect(post.init.headers.Authorization).toBe('Bearer tok');
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ sensitivity: 1.1 }));
     expect(m.getProfile().cards.probe.withhold).toBe(true);

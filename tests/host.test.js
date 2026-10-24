@@ -231,7 +231,7 @@ describe('fetchGrading (item 43)', () => {
     const { fetchGrading } = await createHost(baseDeps());
 
     const result = await fetchGrading(gradingArgs({ level: 'adversarial' }));
-    expect(result).toEqual({ verdict: 'unknown', span: null });
+    expect(result).toEqual({ verdict: 'unknown', span: null, reason: 'unavailable' });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -241,7 +241,7 @@ describe('fetchGrading (item 43)', () => {
     const { fetchGrading } = await createHost(baseDeps());
 
     const result = await fetchGrading(gradingArgs({ level: 'recognition' }));
-    expect(result).toEqual({ verdict: 'unknown', span: null });
+    expect(result).toEqual({ verdict: 'unknown', span: null, reason: 'unavailable' });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -252,7 +252,7 @@ describe('fetchGrading (item 43)', () => {
 
     const oversized = 'x'.repeat(501);
     const result = await fetchGrading(gradingArgs({ answer: oversized }));
-    expect(result).toEqual({ verdict: 'unknown', span: null });
+    expect(result).toEqual({ verdict: 'unknown', span: null, reason: 'unavailable' });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -261,8 +261,8 @@ describe('fetchGrading (item 43)', () => {
     chrome.runtime.sendMessage = sendMessage;
     const { fetchGrading } = await createHost(baseDeps());
 
-    expect(await fetchGrading(gradingArgs({ answer: '' }))).toEqual({ verdict: 'unknown', span: null });
-    expect(await fetchGrading(gradingArgs({ answer: '   ' }))).toEqual({ verdict: 'unknown', span: null });
+    expect(await fetchGrading(gradingArgs({ answer: '' }))).toEqual({ verdict: 'unknown', span: null, reason: 'unavailable' });
+    expect(await fetchGrading(gradingArgs({ answer: '   ' }))).toEqual({ verdict: 'unknown', span: null, reason: 'unavailable' });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -280,7 +280,7 @@ describe('fetchGrading (item 43)', () => {
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     const { fetchGrading } = await createHost(baseDeps());
 
-    expect(await fetchGrading(gradingArgs())).toEqual({ verdict: 'unknown', span: null });
+    expect(await fetchGrading(gradingArgs())).toEqual({ verdict: 'unknown', span: null, reason: 'unavailable' });
   });
 
   it('a "correct" verdict citing a span not actually in the passage is rejected as invented evidence', async () => {
@@ -288,7 +288,7 @@ describe('fetchGrading (item 43)', () => {
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     const { fetchGrading } = await createHost(baseDeps());
 
-    expect(await fetchGrading(gradingArgs())).toEqual({ verdict: 'unknown', span: null });
+    expect(await fetchGrading(gradingArgs())).toEqual({ verdict: 'unknown', span: null, reason: 'unavailable' });
   });
 
   /* A scenario answer the grader is unsure about produces unknown, never
@@ -301,7 +301,18 @@ describe('fetchGrading (item 43)', () => {
     const { fetchGrading } = await createHost(baseDeps());
 
     const result = await fetchGrading(gradingArgs({ level: 'scenario', spanRole: 'principle' }));
-    expect(result).toEqual({ verdict: 'unknown', span: null });
+    expect(result).toEqual({ verdict: 'unknown', span: null, reason: 'undecided' }); // the model ran, so this is undecided, not an outage
+  });
+
+  it('carries the server\'s reason through: the model could not tell is undecided, no usable verdict is unavailable', async () => {
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    const { fetchGrading } = await createHost(baseDeps());
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { verdict: 'unknown', span: null, reason: 'undecided' } });
+    expect((await fetchGrading(gradingArgs())).reason).toBe('undecided');
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { verdict: 'unknown', span: null, reason: 'unavailable' } });
+    expect((await fetchGrading(gradingArgs())).reason).toBe('unavailable');
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { verdict: 'unknown', span: null } });
+    expect((await fetchGrading(gradingArgs())).reason).toBe('undecided'); // an older server sends none: the model ran
   });
 
   it('a network/server failure degrades to unknown, not a throw', async () => {
@@ -309,7 +320,7 @@ describe('fetchGrading (item 43)', () => {
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     const { fetchGrading } = await createHost(baseDeps());
 
-    await expect(fetchGrading(gradingArgs())).resolves.toEqual({ verdict: 'unknown', span: null });
+    await expect(fetchGrading(gradingArgs())).resolves.toEqual({ verdict: 'unknown', span: null, reason: 'unavailable' });
   });
 
   it('has its own rate-limit bucket, independent of summarize and questions', async () => {
@@ -922,7 +933,7 @@ describe('onIntervention — the 12-callback surface, branching', () => {
     expect(await host.onIntervention({ action: 'nudge' }, {}, target)).toBe(false);
     expect(await host.onIntervention({ action: 'ask', evidence: [] }, {}, target)).toBe(false);
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
   });
 
   it('a nudge renders without going through the AI-fetch pipeline at all', async () => {
@@ -1490,7 +1501,7 @@ describe('teaching focus (instructor Teaching Intent on assigned readings)', () 
     const id = await unitId(TEXT);
     const { host, calls } = await setup([id]);
     host.onParagraphRead(TEXT, 5000, 2);
-    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
     await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
     const body = JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body);
     expect(body.type).toBe('ask');
@@ -1501,7 +1512,7 @@ describe('teaching focus (instructor Teaching Intent on assigned readings)', () 
     const { host, calls } = await setup(['k_other']);
     host.onParagraphRead(TEXT, 5000, 2);
     await new Promise((r) => setTimeout(r, 30));
-    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
     expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
   });
 
@@ -1511,7 +1522,7 @@ describe('teaching focus (instructor Teaching Intent on assigned readings)', () 
     host.setCogState(state);
     host.onParagraphRead(TEXT, 5000, 2);
     await new Promise((r) => setTimeout(r, 30));
-    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
   });
 
   it('never even asks the server without an assignment (ordinary pages)', async () => {
@@ -1562,7 +1573,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     // A card left open (or open-and-answered but not DOM-removed) by an
     // earlier test in this block would otherwise still occupy a
     // ui-controller.js popup slot (MAX_POPUPS) and still match a bare
-    // queryAlcoia('.sra-q-badge') existence check in a LATER test — the
+    // queryAlcoia('.sra-q-text') existence check in a LATER test — the
     // same reset this file's own self-report describe block already
     // applies for the identical reason (see its own comments).
     document.body.innerHTML = '';
@@ -1629,7 +1640,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
 
     host.onParagraphRead(text, 5000, 3);
 
-    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
     await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
     const interventionBody = JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body);
     expect(interventionBody.type).toBe('retention');
@@ -1653,7 +1664,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
    * covered this" from a brand-new question was one small, caption-sized
    * evidence line, easy to miss. checkRetentionCandidate now passes a
    * distinguishing badge through to the real, rendered card. */
-  it('a retention item renders with a distinguishing badge, not the generic "quick check" every fresh question uses', async () => {
+  it('a retention item shows the one context sentence and no badge', async () => {
     const text = 'A due paragraph, long enough to clear fetchQuestions\' own 120-character floor for this specific badge-distinction test here.';
     const knowledgeUnitId = await realKnowledgeUnitId(text);
     stubQuestions();
@@ -1665,9 +1676,69 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
 
     host.onParagraphRead(text, 5000, 3);
 
-    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
-    expect(queryAlcoia('.sra-q-badge').textContent).toBe('from earlier');
-    expect(queryAlcoia('.sra-q-badge').textContent).not.toBe('quick check');
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    expect(queryAlcoia('.sra-state-badge')).toBeNull();
+    expect(queryAlcoia('.sra-q-context').textContent).toMatch(/^About the part that starts: "A due paragraph/);
+  });
+
+  describe('free-text answers to a scheduled review reach the grader with their passage', () => {
+    const TEXT = 'A due paragraph, long enough to clear fetchQuestions\' own 120-character floor, used for the free-text grading flow of a scheduled review here.';
+    const SPAN = 'long enough to clear fetchQuestions\' own 120-character floor';
+    async function run({ level, grader }) {
+      document.body.innerHTML = '';
+      const knowledgeUnitId = await realKnowledgeUnitId(TEXT);
+      const graderBodies = [];
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      globalThis.__sendMessageImpl = (msg, cb) => {
+        if (msg.url?.includes('/api/questions')) return cb({ ok: true, data: { questions: [{ q: 'Say it in your own words?', span: SPAN, spanRole: level === 'scenario' ? 'principle' : 'answer', level, explanation: 'e' }] } });
+        if (msg.body && typeof msg.body.answer === 'string') { graderBodies.push(msg.body); return cb(grader); }
+        return cb({ ok: true, data: { summary: 's' } });
+      };
+      const calls = [];
+      mockProxyFetch(proxyFetchImpl(calls, [{ knowledgeUnitId, retentionStage: 1, nextRetrievalAt: new Date(Date.now() - 1000).toISOString() }]));
+      const { host, setOrchestrator } = await createHost(assignmentDeps());
+      const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+      setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+      host.onParagraphRead(TEXT, 5000, 3);
+      await vi.waitFor(() => expect(queryAlcoia('.sra-q-answer-input')).not.toBeNull());
+      const input = queryAlcoia('.sra-q-answer-input');
+      input.value = 'my own words about it'; input.dispatchEvent(new Event('input'));
+      queryAlcoia('.sra-q-submit-text').click();
+      queryAlcoia('.sra-q-conf-skip').click();
+      await new Promise((r) => setTimeout(r, 80));
+      const outcomes = calls.filter((c) => c.url.endsWith('/outcomes')).map((c) => JSON.parse(c.options.body));
+      return { graderBodies, outcomes, shown: queryAlcoia('.sra-q-result')?.textContent ?? '' };
+    }
+    const verdict = (v, extra = {}) => ({ ok: true, data: { verdict: v, span: v === 'unknown' ? null : SPAN, ...extra } });
+
+    it('the passage goes with the answer, so the cited span can be matched', async () => {
+      const { graderBodies } = await run({ level: 'free_recall', grader: verdict('correct') });
+      expect(graderBodies).toHaveLength(1);
+      expect(graderBodies[0].passage).toBe(TEXT);
+    });
+    it('a correct free-recall answer is recorded correct', async () => {
+      const { outcomes } = await run({ level: 'free_recall', grader: verdict('correct') });
+      expect(outcomes[0]).toMatchObject({ correct: true, question_level: 'free_recall' });
+    });
+    it('an incorrect free-recall answer is recorded incorrect', async () => {
+      const { outcomes } = await run({ level: 'free_recall', grader: verdict('incorrect') });
+      expect(outcomes[0]).toMatchObject({ correct: false, question_level: 'free_recall' });
+    });
+    it('an undecided answer is recorded without a verdict (ungraded) and shows what the passage says', async () => {
+      const { outcomes, shown } = await run({ level: 'free_recall', grader: verdict('unknown', { reason: 'undecided' }) });
+      expect(outcomes[0].correct).toBeUndefined();
+      expect(shown).toContain('The passage says:');
+    });
+    it('a scenario answer is never recorded as incorrect, even if the server sent "incorrect"', async () => {
+      const { outcomes } = await run({ level: 'scenario', grader: verdict('incorrect') });
+      expect(outcomes[0].correct).toBeUndefined();
+    });
+    it('when the grader is unavailable nothing is recorded', async () => {
+      const { outcomes, graderBodies, shown } = await run({ level: 'free_recall', grader: { ok: false, status: 503 } });
+      expect(graderBodies).toHaveLength(1);
+      expect(outcomes).toHaveLength(0);
+      expect(shown.length).toBeGreaterThan(0);
+    });
   });
 
   it('a card turned away is counted by its kind on the learner\'s account, and a card answered likewise', async () => {
@@ -1686,7 +1757,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     const engineModule = await import('../alcoia/src/content/intervention-policy.js');
     setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
     host.onParagraphRead(text, 5000, 3);
-    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
     await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
 
     queryAlcoia('.sra-q-option[data-index="0"]').click();
@@ -1713,7 +1784,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     const engineModule = await import('../alcoia/src/content/intervention-policy.js');
     setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
     host.onParagraphRead(text, 5000, 3);
-    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
     queryAlcoia('.sra-close-btn').click();
     Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
     document.dispatchEvent(new Event('visibilitychange'));
@@ -1763,7 +1834,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     host.onParagraphRead('An ordinary paragraph that does not match anything in the due set at all.', 5000, 1);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
     expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
   });
 
@@ -1781,7 +1852,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     host.onParagraphRead(text, 5000, 1);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
     expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
   });
 
@@ -1804,7 +1875,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     host.onParagraphRead(text, 5000, 1);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(queryAlcoia('.sra-q-badge')).toBeNull();
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
     expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(false);
   });
 
@@ -2271,7 +2342,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(questionsCallCount(sendMessage)).toBe(2);
     deferred.resolveNext();
-    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
     expect(interventionPolicy.stats().count).toBe(1); // retention's own record() DID fire
   });
 
@@ -2531,7 +2602,7 @@ describe('active intervention awareness (step 9A)', () => {
     // intervention fires, even though minGapMs: 0 means the shared budget/
     // cooldown alone would already have allowed one.
     expect(calls.filter((c) => c.url.endsWith('/interventions')).length).toBe(1); // just the ask
-    expect(queryAllAlcoia('.sra-q-badge')).toHaveLength(1);
+    expect(queryAllAlcoia('.sra-q-text')).toHaveLength(1);
   });
 
   it('the same due candidate fires once the open ask card is dismissed (test D)', async () => {
@@ -2601,13 +2672,13 @@ describe('active intervention awareness (step 9A)', () => {
     const shownB = await host.onIntervention(decisionB, {}, document.getElementById('b'), 1);
     expect(shownA).toBe(true);
     expect(shownB).toBe(true);
-    expect(queryAllAlcoia('.sra-q-badge')).toHaveLength(2);
+    expect(queryAllAlcoia('.sra-q-text')).toHaveLength(2);
     expect(host.isQuestionCardVisible()).toBe(true);
 
     // Answer B first, by its own interventionId — Step 5's concurrency
     // guarantee (pendingByIntervention) is what makes this resolve the
     // RIGHT card rather than clobbering A's still-pending state.
-    const [cardA, cardB] = queryAllAlcoia('.sra-q-badge').map((b) => b.closest('.sra-popup'));
+    const [cardA, cardB] = queryAllAlcoia('.sra-q-text').map((b) => b.closest('.sra-popup'));
     cardB.querySelector('.sra-q-option[data-index="0"]').click();
     cardB.querySelector('.sra-q-conf-btn[data-conf="high"]').click();
     cardB.querySelector('.sra-q-skip').click(); // closes B — openPopups drops it synchronously, the DOM node itself only after closePopup()'s own 250ms transition
@@ -2627,7 +2698,7 @@ describe('active intervention awareness (step 9A)', () => {
     sessionRecall.recordRead(recallText, 5000, 0);
 
     const recallPromise = runSessionRecall(1);
-    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
     expect(host.isQuestionCardVisible()).toBe(true);
 
     queryAlcoia('.sra-close-btn').click();
@@ -3294,7 +3365,7 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
       const shown = await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['re-read'], interventionId: 'iv_rel_1' }, {}, document.getElementById('r'), 2);
       expect(shown).toBe(true);
       expect(calls[0].body.mode).toBe('relate');
-      expect(JSON.stringify([...document.querySelectorAll('*')].map((n) => n.shadowRoot?.innerHTML ?? '')) + document.body.innerHTML).toContain('how the ideas connect');
+      expect(JSON.stringify([...document.querySelectorAll('*')].map((n) => n.shadowRoot?.innerHTML ?? '')) + document.body.innerHTML).not.toContain('how the ideas connect');
     });
 
     it('policyAction "repair" calls the summarize endpoint with mode "repair", never the questions endpoint', async () => {
@@ -3440,9 +3511,8 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
 
       await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_x4' }, {}, document.getElementById('t'), 0);
 
-      const badge = queryAlcoia('.sra-explain-badge');
-      expect(badge).not.toBeNull();
-      expect(badge.textContent).not.toMatch(/quick check/i);
+      expect(queryAlcoia('.sra-explain-text')).not.toBeNull();
+      expect(queryAlcoia('.sra-state-badge')).toBeNull();
       expect(queryAlcoia('.sra-explain-text').textContent).toContain('A plainer explanation of the idea.');
     });
 
@@ -3470,8 +3540,9 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
       expect(shown).toBe(true);
       expect(host.isQuestionCardVisible()).toBe(false);
 
-      const badge = queryAlcoia('.sra-explain-badge');
-      expect(badge.textContent.toLowerCase()).toContain('clearing this up');
+      expect(queryAlcoia('.sra-explain-text')).not.toBeNull();
+      expect(queryAlcoia('.sra-state-badge')).toBeNull();
+      expect(queryAlcoia('.sra-q-context')).toBeNull();
       expect(queryAlcoia('.sra-explain-text').textContent).toContain('The correct idea, contrasted with the common mix-up.');
     });
 
@@ -3734,7 +3805,7 @@ describe('scheduled quick checks (probes)', () => {
     for (let i = 0; i < 4; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
     expect(asked).toHaveLength(0); // roughly 400 words so far: nothing yet
     host.onParagraphRead(para(4), 5000, 4);
-    await vi.waitFor(() => expect(queryAlcoia('.sra-q-badge')).not.toBeNull());
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
     expect(asked).toEqual(['recall']);
     await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
     expect(JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body).type).toBe('probe');
@@ -3751,8 +3822,25 @@ describe('scheduled quick checks (probes)', () => {
       expect(body.type).toBe('probe');
       expect(body.paragraph_index).toBe(expectedIndex);
       // and the card on screen is about that paragraph, not the latest one
-      expect(queryAlcoia('.sra-q-badge')).not.toBeNull();
+      expect(queryAlcoia('.sra-q-text')).not.toBeNull();
+      expect(queryAlcoia('.sra-q-context').textContent).toBe(`About the part that starts: "Paragraph number ${expectedIndex} explains one idea. The idea..."`);
+      expect(queryAlcoia('.sra-state-badge')).toBeNull();
     }
+  });
+
+  it('a return check after an absence shows the context sentence, and no badge', async () => {
+    setup();
+    const { host, setOrchestrator } = await createHost(deps());
+    const policy = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: policy.createInterventionPolicy({}) });
+    const el = document.createElement('p');
+    el.textContent = para(7);
+    document.body.appendChild(el);
+    host.setCurrentParagraph({ type: 'dom', data: el });
+    host.onReturnCheck?.(180_000);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    expect(queryAlcoia('.sra-q-context').textContent).toMatch(/^About the part that starts: "Paragraph number 7/);
+    expect(queryAlcoia('.sra-state-badge')).toBeNull();
   });
 
   it('does nothing outside an assigned reading, however much is read', async () => {
@@ -3846,7 +3934,7 @@ describe('scheduled quick checks (probes)', () => {
     host.setCogState('struggling');                         // meanwhile the reader runs into difficulty
     release();
     await flush();
-    expect(queryAlcoia('.sra-q-badge')).toBeNull();         // the help path owns the moment; no check shown
+    expect(queryAlcoia('.sra-q-text')).toBeNull();         // the help path owns the moment; no check shown
   });
 });
 
@@ -3931,6 +4019,306 @@ describe('ways of explaining adapt to this learner', () => {
     queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
     flush();
     await vi.waitFor(() => expect(events(calls).some((e) => e.key === 'explain_more:scenario' && e.answered === 1 && e.correct === 1)).toBe(true));
+    stopAdaptationSync();
+  });
+});
+
+/* Transfer check: after an explanation or repair, a NEW application-level question asks whether the idea carries over.
+ * The server says which paragraphs still need one (and the tier, from its own clock); the page adds the spacing only it
+ * can see. Real modules throughout (question-card, ui-controller, intervention-policy), only the network is scripted. */
+const DAY_MS = 86_400_000;
+describe('transfer check (follow-up question after an explanation)', () => {
+  const ASSIGNMENTS_URL = 'https://api.test.invalid/api/assignments';
+  const PROFILE_URL = 'https://api.test.invalid/api/learner-memory/policy-profile';
+  const EVENTS_URL = 'https://api.test.invalid/api/learner-memory/policy-events';
+  const ESTIMATES_URL = `${ASSIGNMENTS_URL}/assign-t/knowledge-state/estimates`;
+  const OUTCOMES_URL = `${ASSIGNMENTS_URL}/assign-t/outcomes`;
+  const PARA = 'Photosynthesis converts light energy into chemical energy stored in glucose, using water and carbon dioxide as raw materials inside the chloroplast of a plant cell.';
+  const SPAN = 'Photosynthesis converts light energy into chemical energy stored in glucose';
+  const OTHER = (n) => `Another paragraph number ${n} that is long enough to count as a real paragraph the reader moved on to after the explanation was shown to them.`;
+  const styles = { explain_more: [{ style: 'scenario', n: 20, trials: 9, rate: 0.8 }, { style: 'analogy', n: 20, trials: 9, rate: 0.3 }], repair: [{ style: 'contrast', n: 20, trials: 9, rate: 0.7 }] };
+  const deps = (over = {}) => baseDeps({ assignmentId: 'assign-t', getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 99_999_999 }), ...over });
+  const hint = (unitId, over = {}) => ({ knowledgeUnitId: unitId, level: 'insufficient', confidence: 'none', action: 'gather', kind: 'retrieve', reason: 'only_assisted_or_unverified_attempts', transferCheck: true, transferLevel: 'application', transferTier: 'same_session', ...over });
+  const unitOf = async (t) => (await import('../alcoia/src/content/signals/knowledge-unit.js')).computeKnowledgeUnitId(t);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const flush = () => { Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); document.dispatchEvent(new Event('visibilitychange')); };
+
+  function setup({ verdict = 'correct', reason = 'undecided', estimates = { current: [] }, preferred = false, outcomeData = { recorded: true }, fixedQuestion = false } = {}) {
+    document.body.innerHTML = `<p id="t">${PARA}</p>`;
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL, LEARNER_POLICY_PROFILE_URL: PROFILE_URL, LEARNER_POLICY_EVENTS_URL: EVENTS_URL, QUESTION_LEVELS_SUPPORTED: ['recognition', 'free_recall', 'scenario', 'adversarial'] });
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    const calls = []; const summarize = []; const questions = [];
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.action === 'proxyFetch') {
+        calls.push({ url: msg.url, options: msg.options });
+        if (msg.url === PROFILE_URL) return cb({ ok: true, status: 200, data: { cards: {}, detectors: {}, sensitivity: 1, styles } });
+        if (msg.url === ESTIMATES_URL) return cb({ ok: true, status: 200, data: { estimates: estimates.current, transferPreferred: preferred } });
+        if (msg.url === OUTCOMES_URL) return cb({ ok: true, status: 201, data: typeof outcomeData === 'function' ? outcomeData() : outcomeData });
+        return cb({ ok: true, status: 200, data: { recorded: true, candidates: [] } });
+      }
+      if (msg.url?.includes('/api/questions')) { questions.push(msg.body); return cb({ ok: true, data: { questions: [{ q: `A new situation${fixedQuestion ? '' : ` (${questions.length})`}: how would you use the idea?`, span: SPAN, spanRole: 'principle', level: msg.body.level, explanation: 'e' }] } }); }
+      if (msg.body && typeof msg.body.answer === 'string') {
+        if (verdict === 'error') return cb({ ok: false, status: 503 });
+        return cb({ ok: true, data: verdict === 'unknown' ? { verdict, span: null, reason } : { verdict, span: SPAN } });
+      }
+      summarize.push(msg.body);
+      return cb({ ok: true, data: { summary: 'A plainer explanation of the idea.' } });
+    };
+    return { calls, summarize, questions, estimates };
+  }
+  const events = (calls) => calls.filter((c) => c.url === EVENTS_URL).flatMap((c) => JSON.parse(c.options.body).events);
+  const outcomes = (calls) => calls.filter((c) => c.url === OUTCOMES_URL).map((c) => JSON.parse(c.options.body));
+
+  async function explained(env, { tap = false, over } = {}) {
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const h = await createHost(deps(over));
+    await vi.waitFor(() => expect(env.calls.some((c) => c.url === PROFILE_URL)).toBe(true));
+    await wait(20);
+    const engine = await import('../alcoia/src/content/intervention-policy.js');
+    h.setOrchestrator({ interventionPolicy: engine.createInterventionPolicy({}) });
+    const el = document.getElementById('t');
+    expect(await h.host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_x1' }, {}, el, 2)).toBe(true);
+    if (tap) queryAlcoia('.sra-q-helped-no').click();
+    queryAlcoia('.sra-close-btn')?.click();
+    await wait(320);
+    return h;
+  }
+  const readOthers = (host, n) => { for (let i = 1; i <= n; i += 1) host.onParagraphRead(OTHER(i), 5000, 10 + i); };
+  const answerCard = async (typed = 'I would use it by turning light into stored energy in a new setting.') => {
+    const input = queryAlcoia('.sra-q-answer-input');
+    input.value = typed; input.dispatchEvent(new Event('input'));
+    queryAlcoia('.sra-q-submit-text').click();
+    queryAlcoia('.sra-q-conf-skip').click();
+    await wait(60);
+  };
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('same-session success: a scenario question is asked after the spacing, reported with the marker, and counts as an inferred "helped" for the style used', async () => {
+    const env = setup();
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    readOthers(host, 3);
+    await wait(30);
+    expect(queryAlcoia('.sra-q-text')).toBeNull(); // not yet: about three minutes have not passed
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    host.onParagraphRead(OTHER(4), 5000, 14);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    expect(env.questions.at(-1)).toMatchObject({ level: 'scenario' });
+    expect(queryAlcoia('.sra-q-context')).toBeNull(); // about a paragraph read a few minutes ago: no context line
+    expect(queryAlcoia('.sra-state-badge')).toBeNull();
+    expect(env.calls.some((c) => c.url.endsWith('/interventions'))).toBe(true);
+    await answerCard();
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(1));
+    expect(outcomes(env.calls)[0]).toMatchObject({ transfer_check: 'same_session', question_level: 'scenario', correct: true, knowledge_unit_id: unit });
+    flush();
+    await vi.waitFor(() => expect(events(env.calls).some((e) => e.scope === 'style' && e.key === 'explain_more:scenario' && e.helpedInferred === 1)).toBe(true));
+    expect(events(env.calls).some((e) => e.key === 'explain_more:scenario' && e.answered > 0)).toBe(false); // not also counted as "the next answered question"
+    stopAdaptationSync();
+  });
+
+  it('needs two OTHER paragraphs read: one is not enough', async () => {
+    const env = setup();
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    env.estimates.current = [hint(unit)];
+    readOthers(host, 1);
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    host.onParagraphRead(PARA, 5000, 2); // meeting the explained paragraph again does not count as another paragraph
+    await wait(80);
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
+    stopAdaptationSync();
+  });
+
+  it('an explicit tap on the explanation wins: nothing is inferred, whatever the result', async () => {
+    const env = setup({ verdict: 'unknown' });
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env, { tap: true });
+    readOthers(host, 3);
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    host.onParagraphRead(OTHER(4), 5000, 14);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    await answerCard();
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(1));
+    flush();
+    await vi.waitFor(() => expect(events(env.calls).some((e) => e.key === 'explain_more:scenario' && e.notHelped === 1)).toBe(true));
+    expect(events(env.calls).some((e) => e.helpedInferred > 0 || e.notHelpedInferred > 0)).toBe(false);
+    stopAdaptationSync();
+  });
+
+  // Asks one transfer question and answers it. `ago` moves the clock far enough for the spacing rule each time.
+  async function askAndAnswer(env, host, unit, n) {
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    readOthers(host, 3);
+    host.onParagraphRead(OTHER(100 + n), 5000, 20 + n);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    const text = queryAlcoia('.sra-q-text').textContent;
+    await answerCard();
+    return text;
+  }
+
+  it('an unconfirmed check gets one more try with a different question; after the second it is "did not carry over", the style is inferred not helpful, and nothing more is asked', async () => {
+    const env = setup({ verdict: 'unknown', outcomeData: { recorded: true } });
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    expect(env.summarize.at(-1).style).toBe('scenario');
+    const first = await askAndAnswer(env, host, unit, 1);
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(1));
+    expect(outcomes(env.calls)[0].correct).toBeUndefined(); // an unconfirmed answer is sent as ungraded, never as wrong
+    flush();
+    await wait(30);
+    expect(events(env.calls).some((e) => e.notHelpedInferred === 1)).toBe(false); // not yet: one more try
+    queryAlcoia('.sra-close-btn')?.click();
+    await wait(320);
+    const second = await askAndAnswer(env, host, unit, 2);
+    expect(second).not.toBe(first); // a different question
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(2));
+    flush();
+    await vi.waitFor(() => expect(events(env.calls).filter((e) => e.key === 'explain_more:scenario' && e.notHelpedInferred === 1)).toHaveLength(1));
+    queryAlcoia('.sra-close-btn')?.click();
+    await wait(320);
+    // A third check is never asked, however long we wait and whatever the server hint says.
+    vi.setSystemTime(Date.now() + 3 * DAY_MS);
+    env.estimates.current = [hint(unit, { transferTier: 'delayed' })];
+    readOthers(host, 3);
+    host.onParagraphRead(PARA, 5000, 2);
+    await wait(80);
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
+    expect(env.questions.filter((q) => q.level === 'scenario')).toHaveLength(2);
+    await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['again'], interventionId: 'iv_x2' }, {}, document.getElementById('t'), 2);
+    expect(env.summarize.at(-1).style).toBe('analogy'); // not the failed one
+    stopAdaptationSync();
+  });
+
+  it('a second try is never the same question: if only the question already asked comes back, nothing is shown', async () => {
+    const env = setup({ verdict: 'unknown', fixedQuestion: true });
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    await askAndAnswer(env, host, unit, 1);
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(1));
+    queryAlcoia('.sra-close-btn')?.click();
+    await wait(320);
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    readOthers(host, 3);
+    host.onParagraphRead(OTHER(200), 5000, 30);
+    await vi.waitFor(() => expect(env.questions.filter((q) => q.level === 'scenario')).toHaveLength(2));
+    await wait(60);
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
+    stopAdaptationSync();
+  });
+
+  it('the server saying the second attempt did not carry over ends the series even if the page lost count', async () => {
+    const env = setup({ verdict: 'unknown', outcomeData: { recorded: true, transfer: 'did_not_carry' } });
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    await askAndAnswer(env, host, unit, 1);
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(1));
+    flush();
+    await vi.waitFor(() => expect(events(env.calls).some((e) => e.notHelpedInferred === 1)).toBe(true));
+    stopAdaptationSync();
+  });
+
+  it('when the grader is unavailable nothing is recorded: no outcome, no inferred feedback, the check can be offered again, and the reader sees normal feedback', async () => {
+    const env = setup({ verdict: 'error' });
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    await askAndAnswer(env, host, unit, 1);
+    expect(queryAlcoia('.sra-q-result-unknown')).not.toBeNull();
+    expect(queryAlcoia('.sra-q-result-unknown').textContent).not.toContain('The passage says');
+    flush();
+    await wait(60);
+    expect(outcomes(env.calls)).toHaveLength(0);
+    expect(events(env.calls).some((e) => e.helpedInferred || e.notHelpedInferred)).toBe(false);
+    queryAlcoia('.sra-close-btn')?.click();
+    await wait(320);
+    // Offered again after the usual spacing; still not settled and not declined.
+    await askAndAnswer(env, host, unit, 2);
+    expect(env.questions.filter((q) => q.level === 'scenario')).toHaveLength(2);
+    stopAdaptationSync();
+  });
+
+  it('an undecided answer shows what the passage says, from the question\'s own span, with no new request', async () => {
+    const env = setup({ verdict: 'unknown' });
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    const before = env.questions.length;
+    await askAndAnswer(env, host, unit, 1);
+    const shown = queryAlcoia('.sra-q-result-unknown').textContent;
+    expect(shown).toContain('The passage says:');
+    expect(shown).toContain(SPAN);
+    expect(env.questions.length).toBe(before + 1); // only the question itself was fetched
+    stopAdaptationSync();
+  });
+
+  it('a dismissal changes no evidence and the question is not asked again this session', async () => {
+    const env = setup();
+    const unit = await unitOf(PARA);
+    const { host, stopAdaptationSync } = await explained(env);
+    readOthers(host, 3);
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    host.onParagraphRead(OTHER(4), 5000, 14);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    queryAlcoia('.sra-close-btn').click();
+    await wait(320);
+    expect(outcomes(env.calls)).toHaveLength(0);
+    vi.setSystemTime(Date.now() + 30 * 60_000);
+    host.onParagraphRead(OTHER(5), 5000, 15);
+    await wait(80);
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
+    flush();
+    await wait(60);
+    expect(events(env.calls).some((e) => e.helpedInferred > 0 || e.notHelpedInferred > 0)).toBe(false);
+    stopAdaptationSync();
+  });
+
+  it('respects the usual gates: assistant off, or a question already on screen, asks nothing', async () => {
+    const env = setup();
+    const unit = await unitOf(PARA);
+    let enabled = true;
+    const { host, stopAdaptationSync } = await explained(env, { over: { settings: () => ({ assistantEnabled: enabled, backendUrl: 'https://api.test.invalid/api/summarize' }) } });
+    readOthers(host, 3);
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    env.estimates.current = [hint(unit)];
+    enabled = false;
+    host.onParagraphRead(OTHER(4), 5000, 14);
+    await wait(80);
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
+    expect(env.questions.some((q) => q.level === 'scenario')).toBe(false);
+    stopAdaptationSync();
+  });
+
+  it('a delayed check is asked when the reader meets the paragraph again, at the level the server names (recall depth)', async () => {
+    const env = setup();
+    const unit = await unitOf(PARA);
+    env.estimates.current = [hint(unit, { transferTier: 'delayed', transferLevel: 'recall' })];
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const { host, setOrchestrator, stopAdaptationSync } = await createHost(deps());
+    const engine = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engine.createInterventionPolicy({}) });
+    host.onParagraphRead(PARA, 5000, 2);
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    expect(env.questions.at(-1)).toMatchObject({ level: 'free_recall' }); // recall depth: never escalated to a scenario
+    expect(queryAlcoia('.sra-q-context').textContent).toMatch(/^About the part that starts: "/); // a delayed check
+    await answerCard();
+    await vi.waitFor(() => expect(outcomes(env.calls)).toHaveLength(1));
+    expect(outcomes(env.calls)[0]).toMatchObject({ transfer_check: 'delayed', question_level: 'free_recall' });
+    stopAdaptationSync();
+  });
+
+  it('with no assignment (ordinary pages) nothing is tracked or asked', async () => {
+    const env = setup();
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const { host, stopAdaptationSync } = await createHost(baseDeps());
+    host.onParagraphRead(PARA, 5000, 2);
+    await wait(60);
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
+    expect(env.calls.some((c) => c.url === ESTIMATES_URL)).toBe(false);
     stopAdaptationSync();
   });
 });

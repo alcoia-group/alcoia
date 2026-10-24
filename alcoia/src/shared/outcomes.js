@@ -73,7 +73,7 @@ export function createOutcomesManager(opts = {}) {
   async function submit({
     paragraphIndex, struggled, questionId, correct, confidence, reached,
     substate, selfReported, source, selectedAnswer, explanationPrecededAttempt,
-    knowledgeUnitId, interventionId, questionLevel,
+    knowledgeUnitId, interventionId, questionLevel, transferCheck,
   } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
@@ -164,6 +164,12 @@ export function createOutcomesManager(opts = {}) {
       body.question_level = questionLevel;
     }
 
+    // A transfer check (a new application-level question asked to see whether an earlier explanation carried over).
+    // Only asks to be treated as one: the server decides from its own clock and the stored evidence whether it is.
+    if ((transferCheck === 'same_session' || transferCheck === 'delayed') && body.question_id) {
+      body.transfer_check = transferCheck;
+    }
+
     try {
       const resp = await fetchImpl(outcomesUrl, {
         method: 'POST',
@@ -179,7 +185,9 @@ export function createOutcomesManager(opts = {}) {
       // for replayed submissions.
       const data = await resp.json?.().catch(() => null);
       const learnerEstimate = data && data.learnerEstimate && typeof data.learnerEstimate === 'object' ? data.learnerEstimate : null;
-      return learnerEstimate ? { ok: true, learnerEstimate } : { ok: true };
+      // For a transfer check the server also says how it went: 'carried', 'retry' (one more try) or 'did_not_carry'.
+      const transfer = data && ['carried', 'retry', 'did_not_carry'].includes(data.transfer) ? data.transfer : null;
+      return { ok: true, ...(learnerEstimate ? { learnerEstimate } : {}), ...(transfer ? { transfer } : {}) };
     } catch (e) {
       return { ok: false, error: 'network_error' };
     }
