@@ -250,7 +250,7 @@ export function createResponseSignals(opts = {}) {
    * the same as a dismissal, per invariants 5/9. This file does not decide
    * what confidence a model verdict carries — see this file's own header —
    * that stays entirely state-engine.js's call. */
-  function answerGraded(answerText, verdict, confidence, interventionId) {
+  function answerGraded(answerText, verdict, confidence, interventionId, gradeReason = null) {
     const target = resolvePending(interventionId);
     if (!target) return null;
     const latencyMs = now() - target.askedAt;
@@ -263,6 +263,8 @@ export function createResponseSignals(opts = {}) {
       correct: normalizedVerdict === 'unknown' ? null : normalizedVerdict === 'correct',
       confidence: normalizedConfidence,
       gradingMethod: 'model',
+      // For an unknown verdict only: 'unavailable' (no usable verdict was produced) or 'undecided' (the model ran and could not tell).
+      gradeReason: normalizedVerdict === 'unknown' ? (gradeReason === 'undecided' ? 'undecided' : 'unavailable') : null,
       level: target.level,
       answerText: String(answerText || '').slice(0, MAX_ANSWER_TEXT_CHARS),
       latencyMs,

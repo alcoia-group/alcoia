@@ -1,7 +1,8 @@
 /* policy-profile.js: the learner's OWN adaptive profile, kept on their account so it follows them across devices.
  *
  *   GET  {profileUrl}  -> { cards: {type: {n, cooldownFactor, withhold}}, detectors: {key: {n, confidenceFactor}}, sensitivity, styles: {mode: [{style, n, trials, rate}]} }
- *   POST {eventsUrl}   { events: [{ scope: 'card'|'detector'|'style', key, shown, answered, dismissed, quickDismissed, correct, selfReports, helped, notHelped }] }
+ *   POST {eventsUrl}   { events: [{ scope: 'card'|'detector'|'style', key, shown, answered, dismissed, quickDismissed, correct, selfReports, helped, notHelped, helpedInferred, notHelpedInferred }] }
+ *   (helpedInferred / notHelpedInferred: style scope only; a result inferred from a later transfer check when the reader gave no tap)
  *
  * The extension only REPORTS counts (what it showed, what the reader answered, turned away, or said it had missed) and
  * READS the adaptation the server derives from them. There is exactly one rule for what the counts mean and it lives on
@@ -11,7 +12,7 @@
  * policy then behaves as it always did (its own fixed starting values). Pending counts are kept in storage until they
  * are sent, so closing a tab does not lose them. Never throws: this must not become a failure on a reading path. */
 const PENDING_KEY = 'sra_policy_pending';
-const NUM = ['shown', 'answered', 'dismissed', 'quickDismissed', 'correct', 'selfReports', 'helped', 'notHelped'];
+const NUM = ['shown', 'answered', 'dismissed', 'quickDismissed', 'correct', 'selfReports', 'helped', 'notHelped', 'helpedInferred', 'notHelpedInferred'];
 export const EMPTY_PROFILE = Object.freeze({ cards: {}, detectors: {}, sensitivity: 1, styles: {} });
 
 export function createPolicyProfileManager(opts = {}) {
@@ -42,7 +43,7 @@ export function createPolicyProfileManager(opts = {}) {
   function merge(e) {
     if (!e || (e.scope !== 'card' && e.scope !== 'detector' && e.scope !== 'style') || typeof e.key !== 'string' || !e.key) return;
     const id = `${e.scope}|${e.key}`;
-    const cur = pending.get(id) || { scope: e.scope, key: e.key, shown: 0, answered: 0, dismissed: 0, quickDismissed: 0, correct: 0, selfReports: 0, helped: 0, notHelped: 0 };
+    const cur = pending.get(id) || { scope: e.scope, key: e.key, shown: 0, answered: 0, dismissed: 0, quickDismissed: 0, correct: 0, selfReports: 0, helped: 0, notHelped: 0, helpedInferred: 0, notHelpedInferred: 0 };
     for (const f of NUM) if (Number.isInteger(e[f]) && e[f] > 0) cur[f] += e[f];
     pending.set(id, cur);
     if (pending.size > maxPending) pending.delete(pending.keys().next().value);

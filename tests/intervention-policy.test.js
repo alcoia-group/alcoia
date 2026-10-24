@@ -1273,3 +1273,16 @@ describe('evaluateRetentionCandidate with kind "probe" (scheduled quick check)',
     expect(p.evaluateRetentionCandidate({ paragraphKey: 'b', kind: 'probe' }).allow).toBe(false);
   });
 });
+
+describe('transfer check candidates (second try on the same paragraph)', () => {
+  it('a second transfer try on a paragraph the first one was asked on is allowed; other kinds on it are still refused', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    const first = p.evaluateRetentionCandidate({ paragraphKey: 'k1', kind: 'transfer' });
+    expect(first.allow).toBe(true);
+    p.record(first);
+    clock.advance(10 * 60_000);
+    expect(p.evaluateRetentionCandidate({ paragraphKey: 'k1', kind: 'retention' }).allow).toBe(false);
+    expect(p.evaluateRetentionCandidate({ paragraphKey: 'k1', kind: 'transfer' }).allow).toBe(true);
+  });
+});
