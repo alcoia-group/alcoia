@@ -60,6 +60,13 @@
  * OUT rather than reads IN).
  */
 
+function makeEventId() {
+  const rnd = (typeof crypto !== 'undefined' && crypto.getRandomValues)
+    ? Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')
+    : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  return `ev_${rnd}`;
+}
+
 export function createOutcomesManager(opts = {}) {
   const fetchImpl = opts.fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
   const getSession = opts.getSession;
@@ -84,7 +91,9 @@ export function createOutcomesManager(opts = {}) {
     }
     if (!outcomesUrl || !fetchImpl) return { ok: false, error: 'no_outcomes_url' };
 
-    const body = { paragraph_index: paragraphIndex };
+    // One random token per signal. The server uses it to acknowledge a replay of this same request (a proxy duplicate)
+    // without a second row; it identifies the event on this device, not the reader, and is derived from nothing.
+    const body = { paragraph_index: paragraphIndex, event_id: makeEventId() };
     if (typeof struggled === 'boolean') body.struggled = struggled;
     if (typeof questionId === 'string' && questionId) body.question_id = questionId;
     if (typeof correct === 'boolean') body.correct = correct;
