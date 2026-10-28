@@ -77,3 +77,20 @@ describe('"Why am I seeing this?" on a card', () => {
     expect(root.textContent).not.toMatch(/repair|retention|probe|transfer check/i);
   });
 });
+
+import { holdClassOf, HOLD_CLASSES } from '../alcoia/src/shared/hold-class.js';
+describe('holdClassOf', () => {
+  it('maps the policy reasons onto a closed list and ignores routine ones', () => {
+    expect(holdClassOf('session budget spent (3/3, ceiling 6)')).toBe('budget');
+    expect(holdClassOf('only 40s since the last interruption')).toBe('cooldown');
+    expect(holdClassOf('2 consecutive dismissals — holding off retention until answered')).toBe('dismissed_before');
+    expect(holdClassOf('already interrupted on this paragraph')).toBe('already_asked');
+    expect(holdClassOf('a question card is already visible — holding off on a redundant interruption')).toBe('card_open');
+    expect(holdClassOf('learner estimate: device_concept_secure - a question would add no information')).toBe('learner_evidence');
+    expect(holdClassOf('this learner turns ask cards away more often than not; held back')).toBe('turned_away');
+    expect(holdClassOf('confidence 0.40 below 0.6')).toBeNull();
+    expect(holdClassOf('no state')).toBeNull();
+    expect(holdClassOf(undefined)).toBeNull();
+    for (const r of ['session budget spent', 'only 3s since the last interruption']) expect(HOLD_CLASSES).toContain(holdClassOf(r));
+  });
+});
