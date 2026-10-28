@@ -31,6 +31,7 @@
 
 import { t, uiLang, isRtl } from '../shared/i18n.js';
 import { contextLineFor } from '../shared/context-line.js';
+import { whyFor } from '../shared/why-this.js';
 
 const AI_CALL_BURST_LIMIT       = 6;        // calls
 const AI_CALL_BURST_WINDOW_MS   = 10_000;   // per 10s
@@ -1396,6 +1397,7 @@ export async function createHost(deps) {
           knowledgeUnitId: item.knowledgeUnitId,
           interventionId,
           passage: item.text,
+          why: whyFor('session_recall'),
         });
         if (!shown) continue;
         reportIntervention(interventionId, item.knowledgeUnitId, item.paragraphIndex, 'session_recall', item.text);
@@ -1475,6 +1477,7 @@ export async function createHost(deps) {
         showSelfReport: state.substate === 'unclear',
         interventionId,
         passage: text,
+        why: whyFor('ask', { evidence: decision.evidence }),
       });
       if (shown) {
         reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text, 'retrieve');
@@ -1561,6 +1564,7 @@ export async function createHost(deps) {
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: identity.knowledgeUnitId,
         interventionId,
+        why: relate ? null : whyFor(kind === 'repair' ? 'repair' : 'explain'),
         ...(style ? { onFeedback: (helped) => { noteStyleFeedback(mode, style, helped); try { transferTracker?.noteTap(identity.knowledgeUnitId); } catch (e) {} } } : {}),
       });
       if (shown && style) noteStyleShown(mode, style, identity.paragraphKey);
@@ -1666,6 +1670,7 @@ export async function createHost(deps) {
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
         interventionId: decision.interventionId,
         passage: text,
+        why: whyFor('retention', { focus: !!isFocus }),
         ...(isFocus ? {} : { contextLine: contextLineFor(text) }), // a scheduled review of an earlier paragraph
       });
       // "Budget spent only on yes" — the same rule orchestrator.js's own
@@ -1785,6 +1790,7 @@ export async function createHost(deps) {
         interventionId: decision.interventionId,
         // The grader checks the cited span against this passage, so a free-text answer can be confirmed at all.
         passage: pick.text,
+        why: whyFor('transfer'),
         ...(pick.hint.tier === 'delayed' ? { contextLine: contextLineFor(pick.text) } : {}),
       });
       if (shown) {
@@ -1860,6 +1866,7 @@ export async function createHost(deps) {
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
         interventionId: decision.interventionId,
         passage: text,
+        why: whyFor('probe'),
         contextLine: contextLineFor(text), // a probe about an earlier paragraph
       });
       if (shown) {
@@ -1906,6 +1913,7 @@ export async function createHost(deps) {
         paragraphIndex: null,
         interventionId: decision.interventionId,
         passage: text,
+        why: whyFor('return_check'),
         contextLine: contextLineFor(text), // a return after an absence
       });
       if (shown) {

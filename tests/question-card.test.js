@@ -629,6 +629,23 @@ describe('free-text levels (item 43)', () => {
     expect(ui.root.querySelector('.sra-q-result').classList.contains('sra-q-result-wrong')).toBe(false);
   });
 
+  it('scenario: a confirmed contradiction IS shown as not quite, and recorded as incorrect', async () => {
+    const ui = fakeUI();
+    const fetchGrading = vi.fn(async () => ({ verdict: 'incorrect', span: SCENARIO_QUESTION.span, basis: 'contradiction' }));
+    const onAnswered = vi.fn();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), fetchGrading, fetchExplanation: async () => '', onAnswered, onDismissed: () => {},
+    });
+    card.show(SCENARIO_QUESTION);
+    typeAnswer(ui.root, 'the opposite of what the principle says');
+    submitAnswer(ui.root);
+    rate(ui.root, null);
+
+    await vi.waitFor(() => expect(onAnswered).toHaveBeenCalledTimes(1));
+    expect(onAnswered.mock.calls[0][0].subtype).toBe('incorrect');
+    expect(ui.root.querySelector('.sra-q-result').classList.contains('sra-q-result-wrong')).toBe(true);
+  });
+
   it('scenario: a correct verdict is still shown as correct', async () => {
     const ui = fakeUI();
     const fetchGrading = vi.fn(async () => ({ verdict: 'correct', span: SCENARIO_QUESTION.span }));
