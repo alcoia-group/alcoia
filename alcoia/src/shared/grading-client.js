@@ -60,9 +60,10 @@ export function createGradingClient({ callBackend, getGradeUrl, checkBudget, log
 
       const verdict = j.verdict;
       if (verdict !== 'correct' && verdict !== 'incorrect' && verdict !== 'unknown') return { ...UNGRADED };
-      // Never assert "wrong" at scenario, no matter what came back over the
-      // wire — a second, independent gate on top of the server's own.
-      if (level === 'scenario' && verdict === 'incorrect') return { ...UNDECIDED };
+      // "Wrong" at scenario is allowed only when the server says it rests on a confirmed contradiction (the reader's own
+      // words say the opposite of the principle, checked twice). Any other incorrect at scenario is an unconfirmed
+      // answer, a second independent gate on top of the server's own.
+      if (level === 'scenario' && verdict === 'incorrect' && j.basis !== 'contradiction') return { ...UNDECIDED };
       // Older servers send no reason: an unknown verdict then means the model ran and could not tell.
       if (verdict === 'unknown') return j.reason === 'unavailable' ? { ...UNGRADED } : { ...UNDECIDED };
 
@@ -74,7 +75,7 @@ export function createGradingClient({ callBackend, getGradeUrl, checkBudget, log
       const returnedSpan = String(j.span || '').replace(/\s+/g, ' ').trim();
       if (returnedSpan.length < 10 || !normalisedPassage.includes(returnedSpan)) return { ...UNGRADED };
 
-      return { verdict, span: returnedSpan };
+      return level === 'scenario' && verdict === 'incorrect' ? { verdict, span: returnedSpan, basis: 'contradiction' } : { verdict, span: returnedSpan };
     } catch (e) {
       warn?.('fetchGrading failed:', e.message);
       return { ...UNGRADED };
