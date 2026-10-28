@@ -901,3 +901,13 @@
 :host([data-sra-dark]) .sra-map-divider     { background: rgba(126,96,174,0.1) !important; }
 :host([data-sra-dark]) .sra-map-progress-bar{ background: rgba(126,96,174,0.12) !important; }
 :host([data-sra-dark]) #sra-color-picker { background: #1e2422 !important; border-color: rgba(255,255,255,0.08) !important; }
+
+/* "Why am I seeing this?": a small text button under a card's content that opens one plain sentence. Closed by default. */
+.sra-q-why { margin: 10px 0 0; }
+.sra-q-why-toggle {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--alc-muted); text-decoration: underline;
+}
+.sra-q-why-toggle:hover, .sra-q-why-toggle:focus-visible { color: var(--alc-accent); }
+.sra-q-why-text { font-size: 12.5px; line-height: 1.5; color: var(--alc-muted); margin: 6px 0 0; }
+.sra-q-why-text[hidden] { display: none; }

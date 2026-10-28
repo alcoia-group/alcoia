@@ -31,6 +31,8 @@
 
 import { t, uiLang, isRtl } from '../shared/i18n.js';
 import { contextLineFor } from '../shared/context-line.js';
+import { whyFor } from '../shared/why-this.js';
+import { holdClassOf } from '../shared/hold-class.js';
 
 const AI_CALL_BURST_LIMIT       = 6;        // calls
 const AI_CALL_BURST_WINDOW_MS   = 10_000;   // per 10s
@@ -533,6 +535,7 @@ export async function createHost(deps) {
   let adaptationTimer = null;
   let visibilityHandler = null;
   const profileRecord = (e) => { try { policyProfileManager?.record(e); } catch (err) {} };
+  const holdCounted = new Map();
   const poolAdd = (metric, dimension) => { try { poolReporter?.add(metric, dimension, 1); } catch (err) {} };
   function noteCardShown(interventionId, type) {
     if (!interventionId || !type) return;
@@ -1162,6 +1165,10 @@ export async function createHost(deps) {
         questionLevel: record.level,
         ...(transferPending ? { transferCheck: transferPending.tier } : {}),
       });
+      if (transferPending) {
+        // How a transfer check turned out, counted anonymously (carried over, one more try, or did not carry over).
+        Promise.resolve(submitted).then((r) => { if (['carried', 'retry', 'did_not_carry'].includes(r?.transfer)) poolAdd('transfer_result', r.transfer); }).catch(() => {});
+      }
       if (settleAfterSubmit) {
         Promise.resolve(submitted).then((r) => {
           // The server counts attempts per explanation and says when the second one failed to settle; the page also
@@ -1396,6 +1403,7 @@ export async function createHost(deps) {
           knowledgeUnitId: item.knowledgeUnitId,
           interventionId,
           passage: item.text,
+          why: whyFor('session_recall'),
         });
         if (!shown) continue;
         reportIntervention(interventionId, item.knowledgeUnitId, item.paragraphIndex, 'session_recall', item.text);
@@ -1475,6 +1483,7 @@ export async function createHost(deps) {
         showSelfReport: state.substate === 'unclear',
         interventionId,
         passage: text,
+        why: whyFor('ask', { evidence: decision.evidence }),
       });
       if (shown) {
         reportIntervention(interventionId, identity.knowledgeUnitId, Number.isInteger(paragraphIndex) ? paragraphIndex : null, 'ask', text, 'retrieve');
@@ -1561,6 +1570,7 @@ export async function createHost(deps) {
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: identity.knowledgeUnitId,
         interventionId,
+        why: relate ? null : whyFor(kind === 'repair' ? 'repair' : 'explain'),
         ...(style ? { onFeedback: (helped) => { noteStyleFeedback(mode, style, helped); try { transferTracker?.noteTap(identity.knowledgeUnitId); } catch (e) {} } } : {}),
       });
       if (shown && style) noteStyleShown(mode, style, identity.paragraphKey);
@@ -1666,6 +1676,7 @@ export async function createHost(deps) {
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
         interventionId: decision.interventionId,
         passage: text,
+        why: whyFor('retention', { focus: !!isFocus }),
         ...(isFocus ? {} : { contextLine: contextLineFor(text) }), // a scheduled review of an earlier paragraph
       });
       // "Budget spent only on yes" — the same rule orchestrator.js's own
@@ -1785,6 +1796,7 @@ export async function createHost(deps) {
         interventionId: decision.interventionId,
         // The grader checks the cited span against this passage, so a free-text answer can be confirmed at all.
         passage: pick.text,
+        why: whyFor('transfer'),
         ...(pick.hint.tier === 'delayed' ? { contextLine: contextLineFor(pick.text) } : {}),
       });
       if (shown) {
@@ -1860,6 +1872,7 @@ export async function createHost(deps) {
         paragraphIndex: Number.isInteger(paragraphIndex) ? paragraphIndex : null,
         interventionId: decision.interventionId,
         passage: text,
+        why: whyFor('probe'),
         contextLine: contextLineFor(text), // a probe about an earlier paragraph
       });
       if (shown) {
@@ -1906,6 +1919,7 @@ export async function createHost(deps) {
         paragraphIndex: null,
         interventionId: decision.interventionId,
         passage: text,
+        why: whyFor('return_check'),
         contextLine: contextLineFor(text), // a return after an absence
       });
       if (shown) {
@@ -1972,6 +1986,15 @@ export async function createHost(deps) {
         if (c && !c.logged) { c.logged = true; entry = { ...entry, cardType: c.type }; }
       }
       if (entry?.kind === 'self_report') { try { noteSelfReport(entry.previousState); } catch (e) {} }
+      // A card that was held back, counted anonymously by a closed class of reason, at most once a minute per class so a
+      // reader who stays in one state is not counted on every evaluation.
+      if (entry?.kind === 'decision' && entry.action === 'hold') {
+        try {
+          const cls = holdClassOf(entry.reason);
+          const t = Date.now();
+          if (cls && t - (holdCounted.get(cls) ?? 0) > 60000) { holdCounted.set(cls, t); poolAdd('card_held_back', cls); }
+        } catch (e) {}
+      }
       // The card's own 'shown' entry (with its kind) is written when the card is reported; this one adds the detector's side.
       decisionLog.record(entry);
     },

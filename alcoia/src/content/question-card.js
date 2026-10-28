@@ -57,6 +57,32 @@ const FREE_TEXT_LEVELS = ['free_recall', 'scenario', 'adversarial'];
 // AND again in commit() below, so nothing bypasses it via a pasted value.
 const MAX_ANSWER_CHARS = 500;
 
+
+/* The optional "Why am I seeing this?" line. context.why = { key, auto }: key is one of the why.* strings in i18n.js,
+ * chosen by shared/why-this.js from the reason the card was shown; auto is true for a card alcoia chose to show on its own
+ * (not one the reader asked for), which adds where to turn those off. It is closed by default, never blocks answering, and
+ * names no card type or internal state. A card with no usable key shows no line at all. */
+function whyBlock(context, L, esc) {
+  const key = context?.why?.key;
+  if (typeof key !== 'string' || !key.startsWith('why.')) return { html: '', wire: () => {} };
+  const reason = L(key);
+  if (!reason || reason === key) return { html: '', wire: () => {} };
+  const text = context.why.auto ? `${reason} ${L('why.off')}` : reason;
+  return {
+    html: `<div class="sra-q-why"><button type="button" class="sra-q-why-toggle" aria-expanded="false">${esc(L('why.toggle'))}</button><div class="sra-q-why-text" hidden>${esc(text)}</div></div>`,
+    wire: (root) => {
+      const btn = root.querySelector('.sra-q-why-toggle');
+      const box = root.querySelector('.sra-q-why-text');
+      if (!btn || !box) return;
+      btn.onclick = () => {
+        const open = box.hasAttribute('hidden');
+        if (open) box.removeAttribute('hidden'); else box.setAttribute('hidden', '');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+    },
+  };
+}
+
 /* Wrong answers are not scolded. The reader gets the correct option marked,
  * the sentence it came from, and an offer of a fuller explanation. */
 export function createQuestionCard(deps = {}) {
@@ -183,6 +209,7 @@ export function createQuestionCard(deps = {}) {
         </div>`
       : '';
 
+    const why = whyBlock(context, L, esc);
     root.innerHTML = `
       <div class="sra-controls">
         <button class="sra-ctrl-btn sra-close-btn" title="${esc(L('card.dismiss'))}">✕</button>
@@ -192,6 +219,7 @@ export function createQuestionCard(deps = {}) {
         <div class="sra-q-text">${esc(question.q)}</div>
         ${bodyInner}
         ${selfReport}
+        ${why.html}
       </div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
@@ -232,6 +260,7 @@ export function createQuestionCard(deps = {}) {
      * "Skip this" uses: before an answer that records the dismissal (item
      * 10's backoff); after one, dismiss() is a no-op beyond closing the
      * card, since answering already counted as engagement, not evasion. */
+    why.wire(root);
     const snoozeToggle = root.querySelector('.sra-q-snooze-toggle');
     if (snoozeToggle) {
       snoozeToggle.onclick = () => {
@@ -381,7 +410,7 @@ export function createQuestionCard(deps = {}) {
         // check wrong is a reader who reasoned well being told they were
         // wrong — unrecoverable, per this item's own reasoning — so it is
         // checked here too, not assumed from upstream.
-        const verdict = level === 'scenario' && graded.verdict === 'incorrect' ? 'unknown' : graded.verdict;
+        const verdict = level === 'scenario' && graded.verdict === 'incorrect' && graded.basis !== 'contradiction' ? 'unknown' : graded.verdict;
 
         const gradeReason = verdict === 'unknown' ? (graded.reason === 'undecided' ? 'undecided' : 'unavailable') : null;
         const record = responseSignals.answerGraded(answerText, verdict, confidence, interventionId, gradeReason);
@@ -472,12 +501,14 @@ export function createQuestionCard(deps = {}) {
     root.setAttribute?.('role', 'group');
     root.setAttribute?.('aria-label', 'Explanation');
 
+    const why = whyBlock(context, L, esc);
     root.innerHTML = `
       <div class="sra-controls">
         <button class="sra-ctrl-btn sra-close-btn" title="${esc(L('card.dismiss'))}">✕</button>
       </div>
       <div class="sra-popup-body">
         <div class="sra-q-explain sra-explain-text">${renderHighlightedExplanation(text, esc)}</div>
+        ${why.html}
       </div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
@@ -485,6 +516,7 @@ export function createQuestionCard(deps = {}) {
         <button class="sra-btn sra-btn-secondary sra-q-skip">${esc(L('card.close'))}</button>
       </div>`;
 
+    why.wire(root);
     const dismiss = () => ui.closePopup(root, fingerprint);
     root.querySelector('.sra-close-btn').onclick = dismiss;
     root.querySelector('.sra-q-skip').onclick = dismiss;
