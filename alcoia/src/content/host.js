@@ -32,6 +32,7 @@
 import { t, uiLang, isRtl } from '../shared/i18n.js';
 import { contextLineFor } from '../shared/context-line.js';
 import { whyFor } from '../shared/why-this.js';
+import { holdClassOf } from '../shared/hold-class.js';
 
 const AI_CALL_BURST_LIMIT       = 6;        // calls
 const AI_CALL_BURST_WINDOW_MS   = 10_000;   // per 10s
@@ -534,6 +535,7 @@ export async function createHost(deps) {
   let adaptationTimer = null;
   let visibilityHandler = null;
   const profileRecord = (e) => { try { policyProfileManager?.record(e); } catch (err) {} };
+  const holdCounted = new Map();
   const poolAdd = (metric, dimension) => { try { poolReporter?.add(metric, dimension, 1); } catch (err) {} };
   function noteCardShown(interventionId, type) {
     if (!interventionId || !type) return;
@@ -1163,6 +1165,10 @@ export async function createHost(deps) {
         questionLevel: record.level,
         ...(transferPending ? { transferCheck: transferPending.tier } : {}),
       });
+      if (transferPending) {
+        // How a transfer check turned out, counted anonymously (carried over, one more try, or did not carry over).
+        Promise.resolve(submitted).then((r) => { if (['carried', 'retry', 'did_not_carry'].includes(r?.transfer)) poolAdd('transfer_result', r.transfer); }).catch(() => {});
+      }
       if (settleAfterSubmit) {
         Promise.resolve(submitted).then((r) => {
           // The server counts attempts per explanation and says when the second one failed to settle; the page also
@@ -1980,6 +1986,15 @@ export async function createHost(deps) {
         if (c && !c.logged) { c.logged = true; entry = { ...entry, cardType: c.type }; }
       }
       if (entry?.kind === 'self_report') { try { noteSelfReport(entry.previousState); } catch (e) {} }
+      // A card that was held back, counted anonymously by a closed class of reason, at most once a minute per class so a
+      // reader who stays in one state is not counted on every evaluation.
+      if (entry?.kind === 'decision' && entry.action === 'hold') {
+        try {
+          const cls = holdClassOf(entry.reason);
+          const t = Date.now();
+          if (cls && t - (holdCounted.get(cls) ?? 0) > 60000) { holdCounted.set(cls, t); poolAdd('card_held_back', cls); }
+        } catch (e) {}
+      }
       // The card's own 'shown' entry (with its kind) is written when the card is reported; this one adds the detector's side.
       decisionLog.record(entry);
     },
