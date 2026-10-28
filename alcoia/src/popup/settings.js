@@ -26,6 +26,7 @@ import { createSessionManager } from '../shared/session.js';
 import { createLearningMemoryManager } from '../shared/learning-memory.js';
 import { mountLearningMemory } from './learning-memory-ui.js';
 import * as popupHistory from '../shared/popup-history.js';
+import { SHARE_KEY as POOL_SHARE_KEY } from '../shared/pool-counters.js';
 import { sendToReadingTab } from '../shared/reading-tab.js';
 
 const $ = (id) => document.getElementById(id);
@@ -353,6 +354,16 @@ $('popupHistoryClear').addEventListener('click', async () => {
   renderPopupHistory();
 });
 renderPopupHistory();
+
+// ── Anonymous usage counts (on unless the reader turns them off) ──────────
+(async () => {
+  const stored = await new Promise((resolve) => chrome.storage.local.get({ [POOL_SHARE_KEY]: true }, resolve));
+  $('usageCountsToggle').checked = stored[POOL_SHARE_KEY] !== false;
+})();
+$('usageCountsToggle').addEventListener('change', (ev) => {
+  chrome.storage.local.set({ [POOL_SHARE_KEY]: ev.target.checked });
+  if (!ev.target.checked) chrome.storage.local.set({ sra_pool_pending: [] });
+});
 
 
 // ── Where alcoia runs ──────────────────────────────────────────────────────
