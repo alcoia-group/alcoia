@@ -84,6 +84,17 @@ describe('evidence pool reporter', () => {
     expect(await r.flush()).toBe(true);
     expect(callBackend).toHaveBeenCalledWith('apiPost', 'c', { counters: [{ metric: 'card_dismissed', dimension: 'probe', value: 2 }, { metric: 'generation_failure', dimension: 'questions', value: 1 }] });
   });
+  it("the reader's own switch stops everything at once, even while the server has the pool on", async () => {
+    const storage = memoryStorage();
+    await new Promise((resolve) => storage.set({ sra_pool_share: false }, resolve));
+    const callBackend = vi.fn(async () => ({ ok: true }));
+    const fetchImpl = vi.fn(async () => ok({ enabled: true }));
+    const r = createPoolReporter({ callBackend, fetchImpl, statusUrl: 's', countersUrl: 'c', storage });
+    r.add('card_shown', 'ask');
+    expect(await r.flush()).toBe(false);
+    expect(callBackend).not.toHaveBeenCalled();
+    expect(r.pendingCount()).toBe(0);
+  });
   it('an unreadable status means off', async () => {
     const r = createPoolReporter({ callBackend: vi.fn(), fetchImpl: async () => ({ ok: false }), statusUrl: 's', countersUrl: 'c', storage: null });
     expect(await r.enabled()).toBe(false);
