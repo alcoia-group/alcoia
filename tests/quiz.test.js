@@ -192,6 +192,7 @@ describe('quiz.js outcome reporting (item 13i)', () => {
     expect(body.intervention_id.length).toBeGreaterThan(0);
     const outcomeInterventionId = body.intervention_id;
     delete body.intervention_id;
+    delete body.event_id;
     expect(body).toEqual({
       paragraph_index: 3, question_id: 'q-server-1', correct: true, confidence: 'high', source: 'quiz',
       // Item 13j-1: the real chosen option (index 0, the one clicked above).
