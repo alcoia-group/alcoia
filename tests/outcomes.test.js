@@ -17,7 +17,7 @@ describe('submit — the request body NEVER carries a pseudonym', () => {
   it('a struggle signal POSTs only paragraph_index + struggled, no pseudonym key anywhere in the body', async () => {
     let seenBody = null;
     const fetchImpl = vi.fn(async (url, init) => {
-      seenBody = JSON.parse(init.body);
+      seenBody = (({ event_id, ...r }) => r)(JSON.parse(init.body));
       return { ok: true, json: async () => ({ recorded: true }) };
     });
     const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
@@ -31,7 +31,7 @@ describe('submit — the request body NEVER carries a pseudonym', () => {
   it('a question-answered signal POSTs paragraph_index + question_id + correct + confidence, still no pseudonym', async () => {
     let seenBody = null;
     const fetchImpl = vi.fn(async (url, init) => {
-      seenBody = JSON.parse(init.body);
+      seenBody = (({ event_id, ...r }) => r)(JSON.parse(init.body));
       return { ok: true, json: async () => ({ recorded: true }) };
     });
     const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
@@ -53,7 +53,7 @@ describe('submit — the request body NEVER carries a pseudonym', () => {
 
   it('a correct: false answer is sent as an explicit false, never dropped as falsy', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(init.body)); return { ok: true, json: async () => ({ recorded: true }) }; });
     const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
 
     await m.submit({ paragraphIndex: 2, questionId: 'q-1', correct: false });
@@ -62,7 +62,7 @@ describe('submit — the request body NEVER carries a pseudonym', () => {
 
   it('correct: undefined (a model verdict of "unknown", or adversarial\'s deliberate non-grading) is omitted, not sent as null or false', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(init.body)); return { ok: true, json: async () => ({ recorded: true }) }; });
     const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
 
     await m.submit({ paragraphIndex: 2, questionId: 'q-1', correct: undefined });
@@ -76,7 +76,7 @@ describe('submit — the request body NEVER carries a pseudonym', () => {
 describe('submit — substate / self_reported / source (13g)', () => {
   async function bodyFor(fields) {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(init.body)); return { ok: true, json: async () => ({ recorded: true }) }; });
     const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
     await m.submit(fields);
     return seenBody;
@@ -170,7 +170,7 @@ describe('submit — validation and failure handling', () => {
 describe('submit — selected_answer (item 13j-1)', () => {
   async function bodyFor(fields) {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(init.body)); return { ok: true, json: async () => ({ recorded: true }) }; });
     const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
     await m.submit(fields);
     return seenBody;
@@ -205,7 +205,7 @@ describe('submit — selected_answer (item 13j-1)', () => {
 describe('submit — explanation_preceded_attempt (item DC-2)', () => {
   async function bodyFor(fields) {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(init.body)); return { ok: true, json: async () => ({ recorded: true }) }; });
     const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
     await m.submit(fields);
     return seenBody;
@@ -228,7 +228,7 @@ describe('submit — explanation_preceded_attempt (item DC-2)', () => {
 describe('submit — intervention_id (step 5)', () => {
   async function bodyFor(fields) {
     let seenBody = null;
-    const fetchImpl = vi.fn(async (url, init) => { seenBody = JSON.parse(init.body); return { ok: true, json: async () => ({ recorded: true }) }; });
+    const fetchImpl = vi.fn(async (url, init) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(init.body)); return { ok: true, json: async () => ({ recorded: true }) }; });
     const m = createOutcomesManager({ fetchImpl, outcomesUrl: OUTCOMES_URL, getSession: sessionOf('tok-1') });
     await m.submit(fields);
     return seenBody;

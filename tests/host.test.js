@@ -1020,7 +1020,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
 
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenUrl).toBe(`${ASSIGNMENTS_URL}/assign-42/outcomes`);
-    const body = JSON.parse(seenInit.body);
+    const body = (({ event_id, ...r }) => r)(JSON.parse(seenInit.body));
     // source: 'inline' is unconditional for this chokepoint (13g) — it
     // names WHICH path submitted, not a fact that can be "unavailable".
     // substate/self_reported stay absent here since neither was passed.
@@ -1040,7 +1040,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
   it('a struggle signal with a self-reported substate POSTs substate + self_reported:true + source:inline together', async () => {
     let seenBody = null;
     const fetchImpl = vi.fn((url, options) => {
-      seenBody = JSON.parse(options.body);
+      seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body));
       return { ok: true, status: 200, data: { recorded: true } };
     });
     mockProxyFetch(fetchImpl);
@@ -1058,7 +1058,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
   it('a struggle signal with an inferred (non-self-reported) substate POSTs self_reported:false, distinctly', async () => {
     let seenBody = null;
     const fetchImpl = vi.fn((url, options) => {
-      seenBody = JSON.parse(options.body);
+      seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body));
       return { ok: true, status: 200, data: { recorded: true } };
     });
     mockProxyFetch(fetchImpl);
@@ -1076,7 +1076,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
   it('an explicit null substate (no real classification) POSTs substate: null, never omitted and never fabricated', async () => {
     let seenBody = null;
     const fetchImpl = vi.fn((url, options) => {
-      seenBody = JSON.parse(options.body);
+      seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body));
       return { ok: true, status: 200, data: { recorded: true } };
     });
     mockProxyFetch(fetchImpl);
@@ -1104,7 +1104,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
   it('a real question, answered through the actual rendered card, POSTs paragraph_index + question_id + correct + confidence, no pseudonym', async () => {
     let seenUrl = null, seenBody = null;
     const fetchImpl = vi.fn((url, options) => {
-      seenUrl = url; seenBody = JSON.parse(options.body);
+      seenUrl = url; seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body));
       return { ok: true, status: 200, data: { recorded: true } };
     });
 
@@ -1146,7 +1146,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
 
   it('an incorrect answer sends correct: false explicitly, not omitted', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    const fetchImpl = vi.fn((url, options) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'incorrect-answer-test span' }] } });
     mockProxyFetch(fetchImpl);
@@ -1180,7 +1180,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
    * is what confirms that claim rather than trusting it. */
   it('an adversarial answer\'s real confidence pick reaches the outcomes POST — the previously-broken path, now fixed', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    const fetchImpl = vi.fn((url, options) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     // The mocked question comes back already at 'adversarial' level —
     // this test is about confidence reaching the outcome, not about
@@ -1366,7 +1366,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
    * (tests/knowledge-unit.test.js already covers that). */
   it('knowledge-unit identity flows end to end: real paragraph text -> a real computed hash -> the outcomes POST body, alongside the unchanged paragraph_index', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    const fetchImpl = vi.fn((url, options) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     const paragraphText = 'A paragraph used specifically for the step-3 knowledge-unit identity integration test, long enough to pass fetchQuestions\' own length floor.';
     globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'ku-integration-test span' }] } });
@@ -2764,7 +2764,7 @@ describe('scroll-kinematics reporting to the server (item DC-1a)', () => {
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
     expect(seenUrl).toBe(KINEMATICS_URL);
     expect(seenInit.headers.Authorization).toBe('Bearer tok-1');
-    expect(JSON.parse(seenInit.body)).toEqual({ assignmentId: 'assign-42', kinematics: VALID_KINEMATICS });
+    expect((({ event_id, ...r }) => r)(JSON.parse(seenInit.body))).toEqual({ assignmentId: 'assign-42', kinematics: VALID_KINEMATICS });
   });
 
   it('a non-signed-in user (getSession resolves null) sends nothing', async () => {
@@ -2835,7 +2835,7 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
 
   it('a struggle on a previously-explained paragraph reaches the outcomes payload as explanation_preceded_attempt:true', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    const fetchImpl = vi.fn((url, options) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
     mockProxyFetch(fetchImpl);
 
     const { host } = await createHost(assignmentDeps({ wasParagraphExplained: (key) => key === 'a previously explained paragraph' }));
@@ -2847,7 +2847,7 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
 
   it('a struggle on a DIFFERENT paragraph reports false, not true and not absent', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    const fetchImpl = vi.fn((url, options) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
     mockProxyFetch(fetchImpl);
 
     const { host } = await createHost(assignmentDeps({ wasParagraphExplained: (key) => key === 'a previously explained paragraph' }));
@@ -2859,7 +2859,7 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
 
   it('sends explicit false for an unaided answer when no external tracker is wired: host.js tracks assistance itself', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    const fetchImpl = vi.fn((url, options) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
     mockProxyFetch(fetchImpl);
 
     const { host } = await createHost(assignmentDeps()); // no wasParagraphExplained override
@@ -2874,7 +2874,7 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
     function wire() {
       const bodies = [];
       const fetchImpl = vi.fn((url, options) => {
-        if (String(url).endsWith('/outcomes')) bodies.push(JSON.parse(options.body));
+        if (String(url).endsWith('/outcomes')) bodies.push((({ event_id, ...r }) => r)(JSON.parse(options.body)));
         return { ok: true, status: 200, data: { recorded: true } };
       });
       chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
@@ -3019,7 +3019,7 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
 
   it('a real answered question also carries the flag, keyed by the SAME paragraphKey the question card itself used', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { recorded: true } }; });
+    const fetchImpl = vi.fn((url, options) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     globalThis.__sendMessageImpl = (msg, cb) => {
       cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
@@ -3079,13 +3079,13 @@ describe('reportExplanationEvent (item DC-2 follow-up)', () => {
     await vi.waitFor(() => expect(posts()).toHaveLength(1));
     seenUrl = posts()[0][0]; seenInit = posts()[0][1];
     expect(seenUrl).toBe(EXPLANATION_EVENTS_URL);
-    expect(JSON.parse(seenInit.body)).toEqual({ selectionType: 'equation' });
+    expect((({ event_id, ...r }) => r)(JSON.parse(seenInit.body))).toEqual({ selectionType: 'equation' });
     expect(seenInit.headers.Authorization).toBe('Bearer tok-1');
   });
 
   it('a real, non-negative paragraphIndex rides along when one is given', async () => {
     let seenBody = null;
-    const fetchImpl = vi.fn((url, options) => { seenBody = JSON.parse(options.body); return { ok: true, status: 200, data: { logged: true } }; });
+    const fetchImpl = vi.fn((url, options) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body)); return { ok: true, status: 200, data: { logged: true } }; });
     mockProxyFetch(fetchImpl);
 
     const { reportExplanationEvent } = await createHost(assignmentDeps());
