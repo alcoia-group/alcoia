@@ -25,6 +25,11 @@ import { createHost } from '../alcoia/src/content/host.js';
 import { createUIController } from '../alcoia/src/content/ui-controller.js';
 import { createResponseSignals } from '../alcoia/src/content/signals/response-signals.js';
 
+// A "read without difficulty" outcome (struggled: false, no question) is sent for each paragraph left smoothly.
+// Tests about answers and struggles look past those rows; the smooth-reading tests below look at them directly.
+const isSmoothBody = (body) => { try { const b = JSON.parse(body); return b.struggled === false && b.question_id == null && b.correct == null; } catch { return false; } };
+const isOutcome = (c) => String(c.url).endsWith('/outcomes') && !isSmoothBody(c.options?.body);
+
 const HOST_JS_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)), '..', 'alcoia', 'src', 'content', 'host.js',
 );
@@ -1432,15 +1437,15 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     queryAlcoia('.sra-q-option[data-index="0"]').click();
     queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
 
-    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
-    const outcomeBody = JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).options.body);
+    await vi.waitFor(() => expect(calls.some((c) => isOutcome(c))).toBe(true));
+    const outcomeBody = JSON.parse(calls.find((c) => isOutcome(c)).options.body);
     // THE LINKAGE: the exact same id the intervention was reported under.
     expect(outcomeBody.intervention_id).toBe('iv_1700000000000_abc123');
     expect(outcomeBody.paragraph_index).toBe(7);
     expect(outcomeBody.correct).toBe(true);
     // Stage A: one answer, exactly one outcome POST and one intervention report.
     await new Promise((r) => setTimeout(r, 50));
-    expect(calls.filter((c) => c.url.endsWith('/outcomes')).length).toBe(1);
+    expect(calls.filter((c) => isOutcome(c)).length).toBe(1);
     expect(calls.filter((c) => c.url.endsWith('/interventions')).length).toBe(1);
   });
 
@@ -1651,8 +1656,8 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     // resulting outcome carries the same intervention_id.
     queryAlcoia('.sra-q-option[data-index="0"]').click();
     queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
-    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
-    const outcomeBody = JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).options.body);
+    await vi.waitFor(() => expect(calls.some((c) => isOutcome(c))).toBe(true));
+    const outcomeBody = JSON.parse(calls.find((c) => isOutcome(c)).options.body);
     expect(outcomeBody.intervention_id).toBe(interventionBody.intervention_id);
     expect(outcomeBody.knowledge_unit_id).toBe(knowledgeUnitId);
   });
@@ -1706,7 +1711,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
       queryAlcoia('.sra-q-submit-text').click();
       queryAlcoia('.sra-q-conf-skip').click();
       await new Promise((r) => setTimeout(r, 80));
-      const outcomes = calls.filter((c) => c.url.endsWith('/outcomes')).map((c) => JSON.parse(c.options.body));
+      const outcomes = calls.filter((c) => isOutcome(c)).map((c) => JSON.parse(c.options.body));
       return { graderBodies, outcomes, shown: queryAlcoia('.sra-q-result')?.textContent ?? '' };
     }
     const verdict = (v, extra = {}) => ({ ok: true, data: { verdict: v, span: v === 'unknown' ? null : SPAN, ...extra } });
@@ -1762,9 +1767,9 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
 
     queryAlcoia('.sra-q-option[data-index="0"]').click();
     queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
-    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
+    await vi.waitFor(() => expect(calls.some((c) => isOutcome(c))).toBe(true));
     // the outcome names the rung of the ladder it answered
-    expect(JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).options.body).question_level).toBe('recognition');
+    expect(JSON.parse(calls.find((c) => isOutcome(c)).options.body).question_level).toBe('recognition');
 
     stopAdaptationSync();
   });
@@ -2874,7 +2879,7 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
     function wire() {
       const bodies = [];
       const fetchImpl = vi.fn((url, options) => {
-        if (String(url).endsWith('/outcomes')) bodies.push((({ event_id, ...r }) => r)(JSON.parse(options.body)));
+        if (String(url).endsWith('/outcomes') && !isSmoothBody(options.body)) bodies.push((({ event_id, ...r }) => r)(JSON.parse(options.body)));
         return { ok: true, status: 200, data: { recorded: true } };
       });
       chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
@@ -4067,7 +4072,7 @@ describe('transfer check (follow-up question after an explanation)', () => {
     return { calls, summarize, questions, estimates };
   }
   const events = (calls) => calls.filter((c) => c.url === EVENTS_URL).flatMap((c) => JSON.parse(c.options.body).events);
-  const outcomes = (calls) => calls.filter((c) => c.url === OUTCOMES_URL).map((c) => JSON.parse(c.options.body));
+  const outcomes = (calls) => calls.filter((c) => c.url === OUTCOMES_URL && !isSmoothBody(c.options?.body)).map((c) => JSON.parse(c.options.body));
 
   async function explained(env, { tap = false, over } = {}) {
     vi.spyOn(Math, 'random').mockReturnValue(0.99);
@@ -4093,6 +4098,40 @@ describe('transfer check (follow-up question after an explanation)', () => {
     await wait(60);
   };
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  describe('smooth reading rows', () => {
+    const smooth = (calls) => calls.filter((c) => c.url === OUTCOMES_URL && isSmoothBody(c.options?.body)).map((c) => JSON.parse(c.options.body));
+    it('a paragraph left without difficulty is recorded once as read without difficulty, with no text', async () => {
+      const env = setup();
+      const h = await createHost(deps());
+      await wait(20);
+      h.host.onParagraphRead(OTHER(1), 5000, 11);
+      h.host.onParagraphRead(OTHER(1), 5000, 11);
+      await vi.waitFor(() => expect(smooth(env.calls)).toHaveLength(1));
+      await wait(30);
+      const [row] = smooth(env.calls);
+      expect(row).toMatchObject({ paragraph_index: 11, struggled: false, reached: true, knowledge_unit_id: await unitOf(OTHER(1)) });
+      expect(JSON.stringify(row)).not.toContain('Another paragraph');
+      expect(smooth(env.calls)).toHaveLength(1);
+    });
+    it('no smooth row for a paragraph with a struggle signal, or one skimmed too fast to be read', async () => {
+      const env = setup();
+      const h = await createHost(deps());
+      await wait(20);
+      h.host.onStruggle(OTHER(2), 12, null, false);
+      h.host.onParagraphRead(OTHER(2), 5000, 12);
+      h.host.onParagraphRead(OTHER(3), 300, 13);
+      await wait(60);
+      expect(smooth(env.calls)).toHaveLength(0);
+    });
+    it('no smooth row for a paragraph a card was shown about', async () => {
+      const env = setup();
+      const h = await explained(env);
+      h.host.onParagraphRead(PARA, 8000, 2);
+      await wait(60);
+      expect(smooth(env.calls).filter((r) => r.paragraph_index === 2)).toHaveLength(0);
+    });
+  });
 
   it('same-session success: a scenario question is asked after the spacing, reported with the marker, and counts as an inferred "helped" for the style used', async () => {
     const env = setup();

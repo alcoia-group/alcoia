@@ -236,6 +236,15 @@ export async function createHost(deps) {
   }
 
   let lastNormalCardAt = 0; // when a help / retention / focus card last appeared; read by the quick-check logic
+  // Smooth reading (assigned readings only). A paragraph the reader leaves with no struggle signal and no card on it
+  // is recorded once per session as a "read without difficulty" outcome (struggled: false, no question). Without it a
+  // student who reads well leaves no trace, and the instructor cannot tell them from someone who never opened the
+  // reading. It carries no text, only the paragraph number and its content hash, like every other outcome.
+  const struggledUnits = new Set();
+  const helpedUnits = new Set();
+  const smoothSent = new Set();
+  const SMOOTH_MIN_WORDS = 20;
+  const SMOOTH_MAX_WPM = 900; // faster than this is skimming, not reading, so it is not recorded as smooth
   // Any intervention reported (a question, an explanation, a review) means the reader has just had help or been
   // checked, so the scheduled quick-check window restarts (probeCovered is defined with the probe below).
   {
@@ -247,6 +256,7 @@ export async function createHost(deps) {
       // The card's kind, for this learner's own profile and the local log. args[6] names a kind the wire type cannot
       // (a 'focus' card is an ordinary 'ask' on the wire).
       try { noteCardShown(args[0], args[6] || (args[3] === 'ask' ? (args[5] === 'repair' ? 'repair' : args[5] === 'explain' ? 'explain' : 'ask') : args[3])); } catch (e) { /* never blocks reporting */ }
+      try { if (args[1]) helpedUnits.add(args[1]); } catch (e) { /* never blocks reporting */ }
       return baseReport(...args);
     };
   }
@@ -1812,6 +1822,17 @@ export async function createHost(deps) {
   }
 
   const probeProfile = () => policyProfileManager?.getProfile?.().cards?.probe;
+  function noteSmoothReading(text, dwellMs, paragraphIndex) {
+    if (!assignmentId || !Number.isInteger(paragraphIndex) || paragraphIndex < 0) return;
+    if (lastCogState === 'struggling' || lastCogState === 'drifting' || lastCogState === 'away') return;
+    const words = wordCount(text);
+    if (words < SMOOTH_MIN_WORDS || !(dwellMs > 0)) return;
+    if (words / (dwellMs / 60000) > SMOOTH_MAX_WPM) return;
+    const unit = knowledgeUnitModule.computeKnowledgeUnitId(text);
+    if (!unit || smoothSent.has(unit) || struggledUnits.has(unit) || helpedUnits.has(unit)) return;
+    smoothSent.add(unit);
+    submitOutcome({ paragraphIndex, struggled: false, reached: true, source: 'inline', knowledgeUnitId: unit });
+  }
   function probeCovered() { probe.words = 0; probe.read = []; probe.nextAt = Math.round(PROBE_EVERY_WORDS * (probeProfile()?.cooldownFactor ?? 1)); }
 
   async function checkProbe(text, paragraphIndex) {
@@ -2028,10 +2049,12 @@ export async function createHost(deps) {
       checkRetentionCandidate(text, paragraphIndex).catch(() => {});
       if (!transferPreferred) checkTransferCandidate(text, paragraphIndex).catch(() => {});
       checkProbe(text, paragraphIndex).catch(() => {});
+      try { noteSmoothReading(text, dwellMs, paragraphIndex); } catch (e) { /* never blocks reading */ }
     },
     onReturnCheck: (blurMs) => { checkReturnCheck(blurMs).catch(() => {}); },
     onStruggle: (text, paragraphIndex, substate, selfReported) => {
       sessionRecall.recordStruggle(text);
+      try { const unit = knowledgeUnitModule.computeKnowledgeUnitId(text); if (unit) struggledUnits.add(unit); } catch (e) { /* never blocks */ }
       // Item S6/E4 follow-up — see submitOutcome's own header just above.
       // substate/selfReported: already resolved by orchestrator.js at the
       // moment struggle was decided (13a's 'unclear' default translated to
