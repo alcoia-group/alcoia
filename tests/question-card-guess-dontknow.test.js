@@ -96,3 +96,14 @@ describe('outcome body', () => {
     expect(b.correct).toBeUndefined();
   });
 });
+
+describe('misconception label on the outcome', () => {
+  it('rides with a wrong option answer only', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 201, json: async () => ({ recorded: true }) }));
+    const m = createOutcomesManager({ fetchImpl, getSession: async () => ({ token: 't' }), outcomesUrl: 'https://x/o' });
+    await m.submit({ paragraphIndex: 0, questionId: 'q1', correct: false, selectedAnswer: 2, misconception: 'reverses the claim' });
+    await m.submit({ paragraphIndex: 0, questionId: 'q1', correct: true, selectedAnswer: 0, misconception: 'reverses the claim' });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).misconception).toBe('reverses the claim');
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body).misconception).toBeUndefined();
+  });
+});
