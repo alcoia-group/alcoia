@@ -697,6 +697,21 @@ export async function createHost(deps) {
   // Item 38: bug backstop, not entitlement enforcement — see the project notes'
   // "Client-side AI-call rate limiting" section for the full reasoning.
   const _summaryCache = new Map();
+  // In an assigned reading the explaining modes ask for three versions of the same explanation in one call (the class
+  // shares the stored answer). Each student's device shows one it has not shown yet, at random, so two students who need
+  // the same passage in the same style do not read the same words, and a second explanation of a passage reads differently.
+  const VERSIONED_MODES = new Set(['explain_more', 'simplify', 'repair', 'relate']);
+  const _versionsShown = new Map(); // cacheKey -> Set of version indexes already shown
+  function pickSummaryVersion(cacheKey, entry) {
+    if (!entry || typeof entry === 'string' || !Array.isArray(entry.versions)) return entry || null;
+    const { versions } = entry;
+    let shown = _versionsShown.get(cacheKey);
+    if (!shown || shown.size >= versions.length) { shown = new Set(); _versionsShown.set(cacheKey, shown); }
+    const unseen = versions.map((_, i) => i).filter((i) => !shown.has(i));
+    const i = unseen[Math.min(unseen.length - 1, Math.floor(random() * unseen.length))];
+    shown.add(i);
+    return versions[i];
+  }
   const aiCallTimestampsByPath = { summarize: [], questions: [] };
   function checkAiCallBudget(path, mode) {
     const now = Date.now();
@@ -784,7 +799,7 @@ export async function createHost(deps) {
     const cacheKey = `${mode}${style ? ':' + style : ''}${focus ? ':f:' + focus.slice(0, 60) : ''}:${text.slice(0, 80).trim()}`;
     if (_summaryCache.has(cacheKey)) {
       log(`Cache hit: ${mode}`);
-      const cached = _summaryCache.get(cacheKey);
+      const cached = pickSummaryVersion(cacheKey, _summaryCache.get(cacheKey));
       if (cached) noteAssistance(text, opts.paragraphKey);
       return cached;
     }
@@ -799,15 +814,18 @@ export async function createHost(deps) {
       // In an assigned reading the server keeps the answer for the whole class until the assignment closes (it checks
       // that the passage is part of that reading). Never sent for any other page.
       if (assignmentId) body.assignment_id = assignmentId;
+      if (assignmentId && VERSIONED_MODES.has(mode)) body.variants = 3;
       const resp = await callBackend('summarize', url, body);
       if (!resp.ok) { warn(`Server ${resp.status || ''} ${resp.error || ''}`); if (resp.status !== 429) noteGenerationFailure(mode === 'repair' ? 'repair' : mode === 'relate' ? 'relate' : mode === 'explain_more' ? 'explain' : 'summarize'); return null; }
       const j = resp.data;
       if (!j) return null;
-      const result = j.summary || j.result || null;
+      const versions = Array.isArray(j.variants) ? j.variants.filter((v) => typeof v === 'string' && v.trim()) : [];
+      const entry = versions.length > 1 ? { versions } : (j.summary || j.result || null);
+      const result = pickSummaryVersion(cacheKey, entry);
       if (!result) noteGenerationFailure(mode === 'repair' ? 'repair' : mode === 'relate' ? 'relate' : mode === 'explain_more' ? 'explain' : 'summarize');
       if (result) {
         noteAssistance(text, opts.paragraphKey);
-        _summaryCache.set(cacheKey, result);
+        _summaryCache.set(cacheKey, entry);
         if (_summaryCache.size > 100) _summaryCache.delete(_summaryCache.keys().next().value);
       }
       return result;
@@ -817,11 +835,9 @@ export async function createHost(deps) {
     }
   }
 
-  // Levels the connected server can deliver. ALCOIA_CONFIG.QUESTION_LEVELS_SUPPORTED is the single
-  // switch: it ships as ['recognition'] because alcoiaServer has no level-aware /api/questions and no
-  // /api/grade route (its the project notes section 7 keeps the higher rungs unbuilt until a level-dependent
-  // span validator exists). Add 'free_recall', 'scenario' and 'adversarial' here only together with
-  // that server work.
+  // Levels the connected server can deliver. ALCOIA_CONFIG.QUESTION_LEVELS_SUPPORTED is the single switch. It now lists
+  // all four rungs (recognition, free_recall, scenario, adversarial): the server builds each level and checks free-text
+  // answers at /api/check-answer. A level missing from the list is asked for as recognition instead.
   const supportedQuestionLevels = () => {
     const configured = self.ALCOIA_CONFIG && self.ALCOIA_CONFIG.QUESTION_LEVELS_SUPPORTED;
     return Array.isArray(configured) && configured.length ? configured : ['recognition'];

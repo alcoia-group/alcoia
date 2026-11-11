@@ -3423,6 +3423,33 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
     });
   });
 
+  describe('several versions of one explanation (assigned readings)', () => {
+    const P = 'Photosynthesis converts light energy into chemical energy, stored as glucose inside the chloroplast of plant cells.';
+    it('asks for three versions in one call and shows one of them, chosen on the device', async () => {
+      const bodies = [];
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      globalThis.__sendMessageImpl = (msg, cb) => {
+        if (msg?.body) bodies.push(msg.body);
+        cb({ ok: true, data: { summary: 'Version one of the plant explanation.', variants: ['Version one of the plant explanation.', 'Version two of the plant explanation.', 'Version three of the plant explanation.'] } });
+      };
+      mockProxyFetch(vi.fn(() => ({ ok: true, status: 200, data: {} })));
+      const { host } = await createHost(baseDeps({ assignmentId: 'assign-42', getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 999_999 }), random: () => 0.99 }));
+      document.body.innerHTML = `<p id="v">${P}</p>`;
+      expect(await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_v1' }, {}, document.getElementById('v'), 2)).toBe(true);
+      expect(bodies.find((b) => b.mode === 'explain_more')?.variants).toBe(3);
+      expect(queryAlcoia('.sra-q-explain')?.textContent).toBe('Version three of the plant explanation.');
+    });
+    it('does not ask for versions outside an assigned reading', async () => {
+      const bodies = [];
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => { bodies.push(msg.body); cb({ ok: true, data: { summary: 'One explanation of the plant.' } }); });
+      document.body.innerHTML = `<p id="v">${P}</p>`;
+      const { host } = await createHost(baseDeps());
+      expect(await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_v2' }, {}, document.getElementById('v'), 2)).toBe(true);
+      expect(bodies[0].variants).toBeUndefined();
+      expect(queryAlcoia('.sra-q-explain')?.textContent).toBe('One explanation of the plant.');
+    });
+  });
+
   describe('policy -> generation mapping', () => {
     it('policyAction "explain" calls the summarize endpoint with mode "explain_more", never the questions endpoint', async () => {
       const calls = captureRelay();
