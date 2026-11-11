@@ -80,7 +80,7 @@ export function createOutcomesManager(opts = {}) {
   async function submit({
     paragraphIndex, struggled, questionId, correct, confidence, reached,
     substate, selfReported, source, selectedAnswer, explanationPrecededAttempt,
-    knowledgeUnitId, interventionId, questionLevel, transferCheck,
+    knowledgeUnitId, interventionId, questionLevel, transferCheck, dontKnow,
   } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
@@ -97,7 +97,9 @@ export function createOutcomesManager(opts = {}) {
     if (typeof struggled === 'boolean') body.struggled = struggled;
     if (typeof questionId === 'string' && questionId) body.question_id = questionId;
     if (typeof correct === 'boolean') body.correct = correct;
-    if (confidence === 'low' || confidence === 'high') body.confidence = confidence;
+    // 'guess' is the card's "Guessing" choice; "I don't know" carries no confidence and no verdict.
+    if (dontKnow === true && body.question_id && body.correct === undefined) body.dont_know = true;
+    else if (confidence === 'low' || confidence === 'high' || confidence === 'guess') body.confidence = confidence;
     if (typeof reached === 'boolean') body.reached = reached;
 
     // A real classification: sent as-is, and self_reported rides with it
