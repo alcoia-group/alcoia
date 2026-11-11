@@ -3387,6 +3387,29 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
     document.body.innerHTML = `<p id="t">${PARAGRAPH}</p>`;
   });
 
+  describe('key words marked on the page during an explanation', () => {
+    const PHOTO = 'Photosynthesis converts light energy into chemical energy, stored as glucose inside the chloroplast of plant cells.';
+    const relay = () => {
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => cb({ ok: true, data: { summary: 'Plants turn light energy into chemical energy and keep it as glucose.' } }));
+    };
+    it('marks the passage words the explanation reuses, on by default', async () => {
+      relay();
+      document.body.innerHTML = `<p id="k">${PHOTO}</p>`;
+      const { host } = await createHost(baseDeps());
+      expect(await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_k1' }, {}, document.getElementById('k'), 2)).toBe(true);
+      const marks = [...document.querySelectorAll('#k mark.alcoia-key-term')].map((m) => m.textContent.toLowerCase());
+      expect(marks).toContain('chemical energy');
+      expect(document.getElementById('k').textContent).toBe(PHOTO);
+    });
+    it('marks nothing when the setting is off', async () => {
+      relay();
+      document.body.innerHTML = `<p id="k">${PHOTO}</p>`;
+      const { host } = await createHost(baseDeps({ settings: () => ({ assistantEnabled: true, backendUrl: 'https://api.test.invalid/api/summarize', autoKeyTerms: false }) }));
+      expect(await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_k2' }, {}, document.getElementById('k'), 2)).toBe(true);
+      expect(document.querySelectorAll('mark.alcoia-key-term')).toHaveLength(0);
+    });
+  });
+
   describe('policy -> generation mapping', () => {
     it('policyAction "explain" calls the summarize endpoint with mode "explain_more", never the questions endpoint', async () => {
       const calls = captureRelay();

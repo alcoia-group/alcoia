@@ -1050,6 +1050,7 @@ export async function createHost(deps) {
   // to paragraphKey," never a crash.
   const knowledgeUnitModule = await loadModule('src/content/signals/knowledge-unit.js');
   const { hasRelationCues } = await loadModule('src/content/relation-cues.js');
+  const keyTermsModule = await loadModule('src/content/key-terms.js');
   // Intelligence-architecture audit, step 5 — same shared id generator
   // intervention-policy.js itself uses for a policy-triggered 'ask', reused
   // here for the reader-initiated paths (runSessionRecall) that have no
@@ -1620,6 +1621,11 @@ export async function createHost(deps) {
         ...(style ? { onFeedback: (helped) => { noteStyleFeedback(mode, style, helped); try { transferTracker?.noteTap(identity.knowledgeUnitId); } catch (e) {} } } : {}),
       });
       if (shown && style) noteStyleShown(mode, style, identity.paragraphKey);
+      // The passage's key words stay marked on the page while the reader works through it (Settings can turn this off;
+      // hover shows an x and a click removes a mark). Only when the card is about a paragraph element on the page.
+      if (shown && el && s().autoKeyTerms !== false) {
+        try { keyTermsModule.markKeyTerms(el, keyTermsModule.pickKeyTerms(text, generated)); } catch (e) { /* marking is optional */ }
+      }
       // Remembered so a later transfer check can say whether this explanation carried over (assigned readings only).
       if (shown) { try { transferTracker?.noteExplained(identity.knowledgeUnitId, { text, mode, style, paragraphIndex }); } catch (e) {} }
       if (shown) {
