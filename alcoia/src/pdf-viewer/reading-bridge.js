@@ -84,6 +84,7 @@ export async function attachReadingBridge({ sourceUrl, assignmentId, debug } = {
   // wires, read the same way every other setting on this page is (storage
   // only — see the "no content script" comment further down).
   let showInterventions = true;
+  let autoKeyTerms = true; // Settings > Mark key words when explaining
   let showSelfReportButton = true;
 
   // hostApi is constructed just below and needed by ui's own fetchSummary
@@ -119,7 +120,7 @@ export async function attachReadingBridge({ sourceUrl, assignmentId, debug } = {
     esc,
     log: _log,
     warn: _warn,
-    settings: () => ({ assistantEnabled, backendUrl, showInterventions }),
+    settings: () => ({ assistantEnabled, backendUrl, showInterventions, autoKeyTerms }),
     assignmentId,
     getSession: session ? session.getSession : null,
   });
@@ -183,6 +184,7 @@ export async function attachReadingBridge({ sourceUrl, assignmentId, debug } = {
     autohideEnabled = !!res.sra_autohide;
     autohideTimeoutSec = res.sra_autohide_timeout || 12;
     showInterventions = res.sra_show_interventions !== false;
+    autoKeyTerms = res.sra_auto_key_terms !== false;
     const nextShowSelfReportButton = res.sra_show_self_report !== false;
     if (nextShowSelfReportButton !== showSelfReportButton) {
       showSelfReportButton = nextShowSelfReportButton;
@@ -194,7 +196,7 @@ export async function attachReadingBridge({ sourceUrl, assignmentId, debug } = {
     sra_enabled: true, sra_backend_url: self.ALCOIA_CONFIG.SUMMARIZE_URL,
     sra_comprehension: true, sra_debug: false,
     sra_pin_default: false, sra_autohide: false, sra_autohide_timeout: 12,
-    sra_show_interventions: true, sra_show_self_report: true,
+    sra_show_interventions: true, sra_show_self_report: true, sra_auto_key_terms: true,
   };
 
   await new Promise((resolve) => {
