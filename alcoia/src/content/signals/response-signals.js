@@ -194,7 +194,7 @@ export function createResponseSignals(opts = {}) {
     if (!target) return null;
     const correct = Number(chosenIndex) === Number(question?.answerIndex);
     const latencyMs = now() - target.askedAt;
-    const normalizedConfidence = confidence === 'low' || confidence === 'high' ? confidence : null;
+    const normalizedConfidence = confidence === 'low' || confidence === 'high' || confidence === 'guess' ? confidence : null;
 
     const record = {
       type: 'response',
@@ -234,7 +234,45 @@ export function createResponseSignals(opts = {}) {
       source: target.source,
       interventionId: target.interventionId,
     };
+    // The misunderstanding the chosen wrong option stands for, when the question carries one (server-written label,
+    // one per option). Used only to aim the explanation that follows at that one misunderstanding.
+    if (!correct && Array.isArray(question?.mistakes) && typeof question.mistakes[record.chosenIndex] === 'string' && question.mistakes[record.chosenIndex].trim()) {
+      record.misconception = question.mistakes[record.chosenIndex].trim().slice(0, 200);
+    }
 
+    history.push(record);
+    pending = record;
+    clearPending(target);
+    return record;
+  }
+
+  /* "I don't know" (LearnHarness's dontKnow): the reader says they do not hold it. A gap, never a wrong answer and
+   * never a refusal: correct stays null, it carries no confidence, and it is reported as an answered question so the
+   * next decision explains first instead of asking again. */
+  function dontKnow(interventionId) {
+    const target = resolvePending(interventionId);
+    if (!target) return null;
+    const latencyMs = now() - target.askedAt;
+    const record = {
+      type: 'response',
+      subtype: 'dont_know',
+      correct: null,
+      dontKnow: true,
+      confidence: null,
+      gradingMethod: 'none',
+      level: target.level,
+      latencyMs,
+      slow: latencyMs > slowAnswerMs,
+      revisions: target.revisions,
+      scrolledBack: target.scrolledBack,
+      span: target.span,
+      paragraphKey: target.paragraphKey,
+      knowledgeUnitId: target.knowledgeUnitId,
+      paragraphIndex: target.paragraphIndex,
+      questionId: target.questionId,
+      source: target.source,
+      interventionId: target.interventionId,
+    };
     history.push(record);
     pending = record;
     clearPending(target);
@@ -254,7 +292,7 @@ export function createResponseSignals(opts = {}) {
     const target = resolvePending(interventionId);
     if (!target) return null;
     const latencyMs = now() - target.askedAt;
-    const normalizedConfidence = confidence === 'low' || confidence === 'high' ? confidence : null;
+    const normalizedConfidence = confidence === 'low' || confidence === 'high' || confidence === 'guess' ? confidence : null;
     const normalizedVerdict = verdict === 'correct' || verdict === 'incorrect' ? verdict : 'unknown';
 
     const record = {
@@ -307,7 +345,7 @@ export function createResponseSignals(opts = {}) {
     const target = resolvePending(interventionId);
     if (!target) return null;
     const latencyMs = now() - target.askedAt;
-    const normalizedConfidence = confidence === 'low' || confidence === 'high' ? confidence : null;
+    const normalizedConfidence = confidence === 'low' || confidence === 'high' || confidence === 'guess' ? confidence : null;
 
     const record = {
       type: 'response',
@@ -380,7 +418,7 @@ export function createResponseSignals(opts = {}) {
   }
 
   return {
-    present, revise, markScrollBack, answer, answerGraded, respond, dismiss,
+    present, revise, markScrollBack, answer, answerGraded, respond, dismiss, dontKnow,
     signal, stats,
     isPending: () => asked !== null,
     history: () => history.slice(),

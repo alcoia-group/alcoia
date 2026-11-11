@@ -739,7 +739,11 @@ export async function createHost(deps) {
 
   async function fetchSummary(text, mode = 'tldr', context = '', opts = {}) {
     const style = typeof opts.style === 'string' && opts.style ? opts.style : null;
-    const cacheKey = `${mode}${style ? ':' + style : ''}:${text.slice(0, 80).trim()}`;
+    // Optional, explanation modes only (the server ignores them elsewhere): the misunderstanding a wrong option stands
+    // for, and an idea from the same document the reader already holds.
+    const misconception = typeof opts.misconception === 'string' && opts.misconception.trim() ? opts.misconception.trim().slice(0, 200) : null;
+    const held = typeof opts.held === 'string' && opts.held.trim() ? opts.held.trim().slice(0, 400) : null;
+    const cacheKey = `${mode}${style ? ':' + style : ''}${misconception ? ':m=' + misconception : ''}${held ? ':h=' + held.slice(0, 40) : ''}:${text.slice(0, 80).trim()}`;
     if (_summaryCache.has(cacheKey)) {
       log(`Cache hit: ${mode}`);
       const cached = _summaryCache.get(cacheKey);
@@ -753,6 +757,8 @@ export async function createHost(deps) {
       const body = { text: text.slice(0, 3500), mode };
       if (context) body.context = context.slice(0, 800);
       if (style) body.style = style;
+      if (misconception) body.misconception = misconception;
+      if (held) body.held = held;
       const resp = await callBackend('summarize', url, body);
       if (!resp.ok) { warn(`Server ${resp.status || ''} ${resp.error || ''}`); if (resp.status !== 429) noteGenerationFailure(mode === 'repair' ? 'repair' : mode === 'relate' ? 'relate' : mode === 'explain_more' ? 'explain' : 'summarize'); return null; }
       const j = resp.data;
@@ -1068,7 +1074,7 @@ export async function createHost(deps) {
     // same reportSelfState() affordances 1/2 already call — one signal
     // pathway, three ways to reach it.
     onSelfReport: reportSelfState,
-    fetchExplanation: (spanText) => fetchSummary(spanText, 'explain_more'),
+    fetchExplanation: (spanText, extra = {}) => fetchSummary(spanText, 'explain_more', '', { misconception: extra.misconception }),
     fetchGrading, // item 43 — free_recall/scenario only; question-card.js itself never calls this for recognition or adversarial
     onAnswered: (record) => {
       let answeredCard = null;
@@ -1138,6 +1144,7 @@ export async function createHost(deps) {
         questionId: record.questionId,
         correct: typeof record.correct === 'boolean' ? record.correct : undefined,
         confidence: record.confidence,
+        ...(record.dontKnow === true ? { dontKnow: true } : {}),
         // Item 13j-1: response-signals.js's answer() (recognition, real
         // discrete options) is the only record shape that ever carries
         // chosenIndex — answerGraded()/respond() (free_recall/scenario/
