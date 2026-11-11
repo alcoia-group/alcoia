@@ -49,6 +49,7 @@ const highlightColorToggle     = $('highlightColorToggle');
 const highlightPersistToggle   = $('highlightPersistToggle');
 const highlightSummarizeToggle = $('highlightSummarizeToggle');
 const explainOnHighlightToggle = $('explainOnHighlightToggle');
+const autoKeyTermsToggle = $('autoKeyTermsToggle');
 const showConnectionsToggle    = $('showConnectionsToggle');
 const autohideToggle           = $('autohideToggle');
 const autohideTimeout          = $('autohideTimeout');
@@ -68,6 +69,7 @@ const DEFAULTS = {
   sra_highlight_color: true, sra_highlight_summarize: false,
   sra_highlight_persist: true,
   sra_explain_on_highlight: true,
+  sra_auto_key_terms: true,
   sra_show_connections: true,
   sra_autohide: false, sra_autohide_timeout: 12,
   sra_pin_default: false, sra_debug: false, sra_enabled: true,
@@ -90,6 +92,7 @@ function paint(res) {
   highlightPersistToggle.checked   = res.sra_highlight_persist !== false;
   highlightSummarizeToggle.checked = !!res.sra_highlight_summarize;
   explainOnHighlightToggle.checked = res.sra_explain_on_highlight !== false;
+  autoKeyTermsToggle.checked = res.sra_auto_key_terms !== false;
   showConnectionsToggle.checked    = res.sra_show_connections !== false;
   autohideToggle.checked      = !!res.sra_autohide;
   autohideTimeout.value       = res.sra_autohide_timeout;
@@ -127,6 +130,7 @@ function saveAndBroadcast() {
     sra_highlight_persist:    highlightPersistToggle.checked,
     sra_highlight_summarize:  highlightSummarizeToggle.checked,
     sra_explain_on_highlight: explainOnHighlightToggle.checked,
+    sra_auto_key_terms: autoKeyTermsToggle.checked,
     sra_show_connections:     showConnectionsToggle.checked,
     sra_autohide:         autohideToggle.checked,
     sra_autohide_timeout: Number(autohideTimeout.value) || 12,
@@ -164,6 +168,7 @@ function saveAndBroadcast() {
         highlightPersist: s.sra_highlight_persist,
         highlightSummarize: s.sra_highlight_summarize,
         explainOnHighlight: s.sra_explain_on_highlight,
+        autoKeyTerms: s.sra_auto_key_terms,
         showConnections: s.sra_show_connections,
         autohide: s.sra_autohide, autohideTimeout: s.sra_autohide_timeout,
         pinDefault: s.sra_pin_default, debug: s.sra_debug,
@@ -238,7 +243,7 @@ highlightPersistToggle.addEventListener('change', () => {
   });
 });
 [selToggle, highlightToggle, highlightColorToggle, highlightSummarizeToggle,
- explainOnHighlightToggle, showConnectionsToggle,
+ explainOnHighlightToggle, autoKeyTermsToggle, showConnectionsToggle,
  debugToggle, comprehensionToggle, darkModeToggle,
  showInterventionsToggle, showSelfReportToggle]
   .forEach((el) => el.addEventListener('change', saveAndBroadcast));

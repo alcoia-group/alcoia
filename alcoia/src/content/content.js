@@ -101,6 +101,8 @@ async function boot() {
   // creates/removes it, called once below once settings load and again on
   // every live change.
   let showInterventions    = true;
+  // Settings > Mark key words when explaining (on by default). host.js reads it live.
+  let autoKeyTerms         = true;
   let showSelfReportButton = true;
   let selectionEnabled   = true;
   let highlightEnabled   = true;
@@ -294,7 +296,7 @@ async function boot() {
     warn: _warn,
     // Read live: the storage listener reassigns these at runtime. A
     // deliberately small surface — only what host.js's own code reads.
-    settings: () => ({ assistantEnabled, backendUrl, showInterventions, showConnections }),
+    settings: () => ({ assistantEnabled, backendUrl, showInterventions, showConnections, autoKeyTerms }),
     onConnections: (list) => readingMap.setConnections(showConnections ? list : []),
     // Item DC-2's passive prerequisite-gap flag — see host.js's own
     // submitOutcome call sites for where this is actually read.
@@ -395,7 +397,7 @@ async function boot() {
     sra_highlight_persist: true,
     sra_explain_on_highlight: true,
     sra_show_connections: true,
-    sra_show_interventions: true, sra_show_self_report: true,
+    sra_show_interventions: true, sra_show_self_report: true, sra_auto_key_terms: true,
   }, (res) => {
     backendUrl         = res.sra_backend_url || BACKEND_DEFAULT;
     assistantEnabled   = res.sra_enabled !== false;
@@ -418,6 +420,7 @@ async function boot() {
     darkModeEnabled = !!res.sra_dark_mode;
     if (darkModeEnabled) applyDarkMode(true);
     showInterventions    = res.sra_show_interventions !== false;
+    autoKeyTerms         = res.sra_auto_key_terms !== false;
     showSelfReportButton = res.sra_show_self_report !== false;
     if (!showSelfReportButton) setShowSelfReportButton(false);
     settingsLoaded();
@@ -1420,6 +1423,7 @@ async function boot() {
       }
       if (msg.darkMode      !== undefined) { darkModeEnabled = !!msg.darkMode; applyDarkMode(darkModeEnabled); }
       if (msg.showInterventions !== undefined) showInterventions = !!msg.showInterventions;
+      if (msg.autoKeyTerms !== undefined) autoKeyTerms = !!msg.autoKeyTerms;
       if (msg.showSelfReport !== undefined) {
         showSelfReportButton = !!msg.showSelfReport;
         setShowSelfReportButton(showSelfReportButton);
@@ -1758,6 +1762,7 @@ async function boot() {
   // The settings page lives in its own tab, so its broadcast never reaches this one; storage does.
   const onLiveSettings = (changes, area) => {
     if (area !== 'local') return;
+    if (changes.sra_auto_key_terms) autoKeyTerms = changes.sra_auto_key_terms.newValue !== false;
     if (changes.sra_explain_on_highlight) explainOnHighlightEnabled = changes.sra_explain_on_highlight.newValue !== false;
     if (changes.sra_show_connections) {
       showConnections = changes.sra_show_connections.newValue !== false;
