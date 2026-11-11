@@ -507,7 +507,8 @@ export function createQuestionCard(deps = {}) {
         <button class="sra-ctrl-btn sra-close-btn" title="${esc(L('card.dismiss'))}">✕</button>
       </div>
       <div class="sra-popup-body">
-        <div class="sra-q-explain sra-explain-text">${renderHighlightedExplanation(text, esc)}</div>
+        ${context.focusSentence ? `<div class="sra-q-about">${esc(L('card.aboutSentence'))}</div>` : ''}
+        <div class="sra-q-explain sra-explain-text">${context.focusSentence ? esc(text) : renderHighlightedExplanation(text, esc)}</div>
         ${why.html}
       </div>
       <div class="sra-popup-divider"></div>

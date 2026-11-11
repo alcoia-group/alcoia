@@ -911,3 +911,6 @@
 .sra-q-why-toggle:hover, .sra-q-why-toggle:focus-visible { color: var(--alc-accent); }
 .sra-q-why-text { font-size: 12.5px; line-height: 1.5; color: var(--alc-muted); margin: 6px 0 0; }
 .sra-q-why-text[hidden] { display: none; }
+
+/* The card says it is about the sentence marked on the page (key-terms.js centralSentence). */
+.sra-q-about { font-size: 12px; opacity: .75; margin-bottom: 4px; }
