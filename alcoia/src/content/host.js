@@ -1166,6 +1166,9 @@ export async function createHost(deps) {
         correct: typeof record.correct === 'boolean' ? record.correct : undefined,
         confidence: record.confidence,
         ...(record.dontKnow === true ? { dontKnow: true } : {}),
+        // The misunderstanding the chosen wrong option stands for (the question's own label), so the class view can
+        // say which wrong idea a misconception question shares. Wrong option answers only.
+        ...(record.correct === false && typeof record.misconception === 'string' ? { misconception: record.misconception } : {}),
         // Item 13j-1: response-signals.js's answer() (recognition, real
         // discrete options) is the only record shape that ever carries
         // chosenIndex — answerGraded()/respond() (free_recall/scenario/

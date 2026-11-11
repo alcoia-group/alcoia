@@ -80,7 +80,7 @@ export function createOutcomesManager(opts = {}) {
   async function submit({
     paragraphIndex, struggled, questionId, correct, confidence, reached,
     substate, selfReported, source, selectedAnswer, explanationPrecededAttempt,
-    knowledgeUnitId, interventionId, questionLevel, transferCheck, dontKnow,
+    knowledgeUnitId, interventionId, questionLevel, transferCheck, dontKnow, misconception,
   } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
@@ -130,6 +130,7 @@ export function createOutcomesManager(opts = {}) {
     // directly) — sent through as given, not coerced to a string here.
     if (typeof selectedAnswer === 'string' || typeof selectedAnswer === 'number') {
       body.selected_answer = selectedAnswer;
+      if (body.correct === false && typeof misconception === 'string' && misconception.trim().length >= 3) body.misconception = misconception.trim().slice(0, 160);
     } else if (selectedAnswer === null) {
       body.selected_answer = null;
     }
