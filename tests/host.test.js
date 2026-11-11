@@ -3401,6 +3401,19 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
       expect(marks).toContain('chemical energy');
       expect(document.getElementById('k').textContent).toBe(PHOTO);
     });
+    it('on a long paragraph with a central sentence, explains that sentence, marks it, and marks no words', async () => {
+      const LONG = 'Chloroplasts turn sunlight, water and carbon dioxide into glucose for the growing plant. Sunlight arrives mostly in the morning on the eastern side of the garden. Water climbs slowly from the roots through narrow tubes in each stem. Carbon dioxide enters through tiny pores that open underneath every leaf. Glucose later becomes starch that farmers harvest each autumn as potatoes.';
+      const bodies = [];
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => { bodies.push(msg.body); cb({ ok: true, data: { summary: 'Chloroplasts use light energy to make glucose.' } }); });
+      document.body.innerHTML = `<p id="k">${LONG}</p>`;
+      const { host } = await createHost(baseDeps());
+      expect(await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_k3' }, {}, document.getElementById('k'), 2)).toBe(true);
+      expect(bodies[0].focus).toMatch(/^Chloroplasts turn sunlight/);
+      expect(document.querySelectorAll('#k mark.alcoia-key-term-sentence').length).toBeGreaterThan(0);
+      expect(document.querySelectorAll('#k mark.alcoia-key-term:not(.alcoia-key-term-sentence)')).toHaveLength(0);
+      expect(queryAlcoia('.sra-q-about')?.textContent).toBe('About the marked sentence.');
+      expect(queryAlcoia('.sra-term')).toBeNull();
+    });
     it('marks nothing when the setting is off', async () => {
       relay();
       document.body.innerHTML = `<p id="k">${PHOTO}</p>`;
