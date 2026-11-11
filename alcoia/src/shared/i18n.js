@@ -43,6 +43,7 @@ const ROWS = {
   'card.notSure': ['Not sure', 'Pas sûr(e)', 'No estoy seguro', 'Nicht sicher', 'Não tenho certeza', 'Non sono sicuro', 'Niet zeker', '不确定', '自信なし', '확실하지 않음', 'غير متأكد', 'Не уверен'],
   'card.prettySure': ['Pretty sure', 'Assez sûr(e)', 'Bastante seguro', 'Ziemlich sicher', 'Bastante certeza', 'Abbastanza sicuro', 'Vrij zeker', '比较确定', 'かなり自信あり', '꽤 확신함', 'متأكد إلى حد كبير', 'Довольно уверен'],
   'card.ratherNot': ['Rather not say', 'Je préfère ne pas répondre', 'Prefiero no decirlo', 'Möchte ich nicht sagen', 'Prefiro não dizer', 'Preferisco non dirlo', 'Liever niet zeggen', '不想说', '答えない', '말하지 않을래요', 'أفضّل عدم القول', 'Не хочу говорить'],
+  'card.aboutSentence': ['About the marked sentence.', 'À propos de la phrase surlignée.', 'Sobre la frase marcada.', 'Zum markierten Satz.', 'Sobre a frase marcada.', 'Sulla frase evidenziata.', 'Over de gemarkeerde zin.', '关于标记的句子。', 'マークした文について。', '표시된 문장에 대해.', 'عن الجملة المميزة.', 'О выделенном предложении.'],
   'card.close': ['Close', 'Fermer', 'Cerrar', 'Schließen', 'Fechar', 'Chiudi', 'Sluiten', '关闭', '閉じる', '닫기', 'إغلاق', 'Закрыть'],
   'card.dismiss': ['Dismiss', 'Ignorer', 'Descartar', 'Ausblenden', 'Dispensar', 'Ignora', 'Negeren', '忽略', '閉じる', '넘기기', 'تجاهل', 'Скрыть'],
   'card.keepOpen': ['Keep open', 'Garder ouverte', 'Mantener abierta', 'Offen halten', 'Manter aberta', 'Tieni aperta', 'Open houden', '保持打开', '開いたままにする', '열어 두기', 'إبقاؤها مفتوحة', 'Не закрывать'],

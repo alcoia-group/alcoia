@@ -54,3 +54,41 @@ describe('markKeyTerms', () => {
     expect(document.querySelectorAll('#alcoia-key-term-style')).toHaveLength(1);
   });
 });
+
+import { centralSentence, markSentence, splitSentences } from '../alcoia/src/content/key-terms.js';
+
+const LONG = 'Chloroplasts turn sunlight, water and carbon dioxide into glucose for the growing plant. Sunlight arrives mostly in the morning on the eastern side of the garden. Water climbs slowly from the roots through narrow tubes in each stem. Carbon dioxide enters through tiny pores that open underneath every leaf. Glucose later becomes starch that farmers harvest each autumn as potatoes.';
+
+describe('centralSentence', () => {
+  it('splits sentences', () => {
+    expect(splitSentences('One. Two! Three?')).toEqual(['One.', 'Two!', 'Three?']);
+  });
+  it('picks the sentence the rest of a long paragraph leans on', () => {
+    expect(centralSentence(LONG)).toMatch(/^Chloroplasts turn sunlight/);
+  });
+  it('picks nothing in a short paragraph', () => {
+    expect(centralSentence('Light becomes sugar. Plants grow from that sugar.')).toBeNull();
+  });
+  it('picks nothing when no sentence clearly stands out', () => {
+    const flat = 'Cats sleep a lot during warm afternoons in summer. Dogs bark loudly at passing delivery vans outside. Birds migrate south across oceans every single autumn. Fish swim slowly near coral reefs in clear water. Horses graze quietly on open hillsides most mornings.';
+    expect(centralSentence(flat)).toBeNull();
+  });
+});
+
+describe('markSentence', () => {
+  it('marks a sentence across inline elements, and one click removes the whole mark', () => {
+    document.body.innerHTML = '<p id="s">Intro here. The <em>main</em> claim   is right here. After.</p>';
+    const p = document.getElementById('s');
+    expect(markSentence(p, 'The main claim is right here.')).toBe(true);
+    const marks = p.querySelectorAll('mark.alcoia-key-term-sentence');
+    expect(marks.length).toBeGreaterThan(1);
+    expect([...marks].map((m) => m.textContent).join('')).toBe('The main claim   is right here.');
+    marks[1].click();
+    expect(p.querySelectorAll('mark')).toHaveLength(0);
+    expect(p.textContent).toBe('Intro here. The main claim   is right here. After.');
+  });
+  it('returns false when the sentence is not on the page', () => {
+    document.body.innerHTML = '<p id="s">Nothing like it.</p>';
+    expect(markSentence(document.getElementById('s'), 'A different sentence entirely.')).toBe(false);
+  });
+});

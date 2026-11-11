@@ -76,6 +76,8 @@ function ensureStyle(doc) {
 mark.${CLASS}{background:rgba(163,177,163,.45);color:inherit;border-radius:3px;padding:0 1px;cursor:pointer;position:relative;box-decoration-break:clone;-webkit-box-decoration-break:clone}
 mark.${CLASS}:hover,mark.${CLASS}:focus-visible{background:rgba(163,177,163,.25);outline:1px dashed rgba(90,110,90,.8);outline-offset:1px}
 mark.${CLASS}:hover::after,mark.${CLASS}:focus-visible::after{content:"\\00d7";position:absolute;top:-.7em;right:-.6em;font:600 11px/14px system-ui,sans-serif;width:14px;height:14px;text-align:center;border-radius:50%;background:#333;color:#fff}
+mark.${CLASS}-sentence{background:rgba(201,190,232,.40)}
+mark.${CLASS}-sentence:hover{background:rgba(201,190,232,.22)}
 @media (prefers-reduced-motion:no-preference){mark.${CLASS}{transition:background .15s}}`;
   (doc.head || doc.documentElement).appendChild(style);
 }
@@ -125,4 +127,94 @@ export function markKeyTerms(el, terms, { title = 'Key word from the explanation
 
 export function clearKeyTerms(root) {
   for (const m of [...(root?.querySelectorAll?.(`mark.${CLASS}`) || [])]) unwrap(m);
+}
+
+// ── The central sentence ─────────────────────────────────────────────────────
+// Sometimes one sentence carries a paragraph: the others restate it, give an example of it or lead up to it. Then
+// the explanation is asked to explain THAT sentence (the rest of the paragraph only as support), the sentence is
+// marked on the page, and the card does not mark words of its own. Chosen without a model: the sentence that shares
+// the most content words with the rest of the paragraph, relative to its own length, and only when it clearly
+// stands out (at least 1.3 times the next one). Short paragraphs (under 3 sentences or 60 words) never qualify, so
+// most explanations stay about the whole paragraph.
+const MIN_SENTENCES = 3;
+const MIN_PARA_WORDS = 60;
+const MIN_SENTENCE_WORDS = 8;
+const MAX_SENTENCE_CHARS = 400;
+const LEAD = 1.3;
+
+export function splitSentences(text) {
+  const out = [];
+  const re = /[^.!?。！？]+(?:[.!?。！？]+["'”’)\]]*|$)/gu;
+  let m;
+  while ((m = re.exec(String(text || ''))) !== null) {
+    const s = m[0].trim();
+    if (s) out.push(s);
+    if (m[0].length === 0) re.lastIndex += 1;
+  }
+  return out;
+}
+
+export function centralSentence(paragraphText) {
+  const sentences = splitSentences(paragraphText);
+  if (sentences.length < MIN_SENTENCES || words(paragraphText).length < MIN_PARA_WORDS) return null;
+  const sets = sentences.map((s) => new Set(words(s).filter(ok)));
+  const scored = sentences.map((s, i) => {
+    const n = words(s).length;
+    if (n < MIN_SENTENCE_WORDS || s.length > MAX_SENTENCE_CHARS || !sets[i].size) return { s, score: 0 };
+    let shared = 0;
+    for (const w of sets[i]) if (sets.some((other, j) => j !== i && other.has(w))) shared += 1;
+    return { s, score: shared / Math.sqrt(n) };
+  }).sort((a, b) => b.score - a.score);
+  const [best, next] = scored;
+  if (!best || best.score <= 0) return null;
+  if (next && next.score > 0 && best.score < LEAD * next.score) return null;
+  return best.s;
+}
+
+// Marks `sentence` inside `el`, across inline elements if needed (one <mark> per text piece, removed together).
+// Pieces inside links and the like are left unmarked. Returns true when something was marked.
+export function markSentence(el, sentence, { title = 'The sentence this explanation is about. Click to remove this mark.' } = {}) {
+  if (!el || !sentence) return false;
+  const doc = el.ownerDocument;
+  if (!doc?.createTreeWalker) return false;
+  const nodes = [];
+  const walker = doc.createTreeWalker(el, 4);
+  let full = '';
+  let node;
+  while ((node = walker.nextNode())) { nodes.push({ node, start: full.length }); full += node.nodeValue; }
+  // Whitespace may differ between the page and the text that was read: match with flexible spaces.
+  const pattern = new RegExp(sentence.trim().split(/\s+/).map(escapeRe).join('\\s+'), 'u');
+  const m = pattern.exec(full);
+  if (!m) return false;
+  ensureStyle(doc);
+  const from = m.index;
+  const to = m.index + m[0].length;
+  const group = [];
+  for (const { node: n, start } of nodes) {
+    const end = start + n.nodeValue.length;
+    if (end <= from || start >= to) continue;
+    if (n.parentElement?.closest(SKIP)) continue;
+    let piece = n;
+    const a = Math.max(0, from - start);
+    const b = Math.min(n.nodeValue.length, to - start);
+    if (a > 0) piece = piece.splitText(a);
+    if (b - a < piece.nodeValue.length) piece.splitText(b - a);
+    if (!piece.nodeValue.trim()) continue;
+    const mark = doc.createElement('mark');
+    mark.className = `${CLASS} ${CLASS}-sentence`;
+    mark.title = title;
+    piece.parentNode.insertBefore(mark, piece);
+    mark.appendChild(piece);
+    group.push(mark);
+  }
+  if (!group.length) return false;
+  const first = group[0];
+  first.tabIndex = 0;
+  first.setAttribute('aria-label', 'Sentence this explanation is about. Press Enter to remove the mark.');
+  const removeAll = (e) => { e.preventDefault(); e.stopPropagation(); for (const g of group) unwrap(g); };
+  for (const g of group) {
+    g.addEventListener('click', removeAll);
+    g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ' || e.key === 'Delete') removeAll(e); });
+  }
+  return true;
 }
