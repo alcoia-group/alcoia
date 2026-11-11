@@ -3823,6 +3823,22 @@ describe('learner estimates reach the reading decisions (Stage B)', () => {
     expect(host.learnerEstimateFor(document.getElementById('p2'))).toBeNull(); // multiple concepts: no bleed
   });
 
+  it('a paragraph with no answer this session starts the question ladder where the server says the learner already is', async () => {
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL, QUESTION_LEVELS_SUPPORTED: ['recognition', 'free_recall', 'scenario', 'adversarial'] });
+    const asked = [];
+    globalThis.__sendMessageImpl = (msg, cb) => { if (msg?.body && 'count' in msg.body) asked.push(msg.body.level ?? 'none'); cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } }); };
+    const id1 = await unitId(P1);
+    server({ estimates: [est(id1, { level: 'progressing', action: 'gather', reason: 'unconfirmed', startLevel: 'free_recall' })] });
+    const { host } = await createHost(deps());
+    expect(host.learnerEstimateFor(document.getElementById('p1')).startLevel).toBe('free_recall');
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('p1'), 1);
+    queryAlcoia('.sra-q-skip').click();
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('p2'), 2);
+    expect(asked).toHaveLength(2);
+    expect(asked[0]).toBe('free_recall');
+    expect(asked[1]).toBe('none'); // no estimate for the other paragraph: the usual start (recognition is sent as no level)
+  });
+
   it('a failed or unavailable estimates fetch means no estimate at all (the normal behaviour), never a made-up one', async () => {
     server({ failEstimates: true });
     const { host } = await createHost(deps());
