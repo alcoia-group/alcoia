@@ -245,6 +245,37 @@ export async function createHost(deps) {
   const smoothSent = new Set();
   const SMOOTH_MIN_WORDS = 20;
   const SMOOTH_MAX_WPM = 900; // faster than this is skimming, not reading, so it is not recorded as smooth
+  // Variety on shared questions (assigned readings). The server keeps the questions for a passage for the whole class
+  // (the class cache), so every student would otherwise see the same first question with the options in the same
+  // order. Here each student gets one they have not seen yet this session, chosen at random from the set, with the
+  // options shuffled. The answer is still reported by the option's ORIGINAL position (optionOrders), so the class
+  // view's "same wrong answer" clustering means the same option for everyone. Outside an assigned reading nothing
+  // changes: the first question, options as sent.
+  const seenQuestionIds = new Set();
+  const optionOrders = new Map();
+  // Same id question-card.js gives the record (its "fingerprint"), so the answer can be mapped back.
+  const cardQuestionId = (q) => 'q-' + String(q?.span || q?.q || '').slice(0, 80).trim();
+  function pickVariant(questions) {
+    if (!Array.isArray(questions) || !questions.length) return undefined;
+    if (!assignmentId) return questions[0];
+    const seenKey = (q) => q?.id || cardQuestionId(q);
+    const fresh = questions.filter((q) => !seenQuestionIds.has(seenKey(q)));
+    const pool = fresh.length ? fresh : questions;
+    const q = pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))];
+    if (q) seenQuestionIds.add(seenKey(q));
+    if (!q || !Array.isArray(q.options) || q.options.length < 2 || !Number.isInteger(q.answerIndex)) return q;
+    const order = q.options.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i -= 1) {
+      const j = i - Math.min(i, Math.floor(random() * (i + 1))); // random() = 0 keeps the order (tests)
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    optionOrders.set(cardQuestionId(q), order);
+    return { ...q, options: order.map((i) => q.options[i]), answerIndex: order.indexOf(q.answerIndex) };
+  }
+  const originalOption = (questionId, chosen) => {
+    const order = questionId ? optionOrders.get(questionId) : null;
+    return order && Number.isInteger(order[chosen]) ? order[chosen] : chosen;
+  };
   // Any intervention reported (a question, an explanation, a review) means the reader has just had help or been
   // checked, so the scheduled quick-check window restarts (probeCovered is defined with the probe below).
   {
@@ -763,6 +794,9 @@ export async function createHost(deps) {
       const body = { text: text.slice(0, 3500), mode };
       if (context) body.context = context.slice(0, 800);
       if (style) body.style = style;
+      // In an assigned reading the server keeps the answer for the whole class until the assignment closes (it checks
+      // that the passage is part of that reading). Never sent for any other page.
+      if (assignmentId) body.assignment_id = assignmentId;
       const resp = await callBackend('summarize', url, body);
       if (!resp.ok) { warn(`Server ${resp.status || ''} ${resp.error || ''}`); if (resp.status !== 429) noteGenerationFailure(mode === 'repair' ? 'repair' : mode === 'relate' ? 'relate' : mode === 'explain_more' ? 'explain' : 'summarize'); return null; }
       const j = resp.data;
@@ -799,13 +833,15 @@ export async function createHost(deps) {
     const body = {
       text: text.slice(0, 3500),
       language: (document.documentElement.lang || '').slice(0, 5),
-      count: opts.count || 1,
+      // An assigned reading asks for three, kept for the whole class, so students can each get a different one.
+      count: opts.count || (assignmentId ? 3 : 1),
       kind: opts.kind || 'recall',
     };
     // Item 42/44: one level per call, decided by the caller — omitted
     // entirely rather than defaulted here, so a server that has never heard
     // of levels sees exactly the request shape it always has.
     if (opts.level && supportedQuestionLevels().includes(opts.level)) body.level = opts.level;
+    if (assignmentId) body.assignment_id = assignmentId; // class cache, see fetchSummary
     const resp = await callBackend('apiPost', questionsUrl(), body);
     if (!resp.ok) {
       log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
@@ -1153,7 +1189,7 @@ export async function createHost(deps) {
         // chosenIndex — answerGraded()/respond() (free_recall/scenario/
         // adversarial) never set it, so this correctly sends an explicit
         // null for those rather than fabricating an option id.
-        selectedAnswer: typeof record.chosenIndex === 'number' ? record.chosenIndex : null,
+        selectedAnswer: typeof record.chosenIndex === 'number' ? originalOption(record.questionId, record.chosenIndex) : null,
         // Item DC-2 — same paragraph-key lookup as onStruggle above.
         explanationPrecededAttempt: explanationPreceded(record.paragraphKey),
         // Knowledge-unit identity (step 3): additive, sent whenever the
@@ -1484,7 +1520,7 @@ export async function createHost(deps) {
       // chain) — reused here as-is, not regenerated, so the id genuinely
       // identifies the decision that led to this presentation.
       const interventionId = decision.interventionId;
-      const shown = questionCard.show(questions[0], {
+      const shown = questionCard.show(pickVariant(questions), {
         evidence: evidenceOverride ? [evidenceOverride] : decision.evidence,
         anchorRect,
         paragraphKey: identity.paragraphKey,
@@ -1679,7 +1715,7 @@ export async function createHost(deps) {
       const questions = await fetchQuestions(text, opts);
       if (!questions.length) return;
 
-      const shown = questionCard.show(questions[0], {
+      const shown = questionCard.show(pickVariant(questions), {
         evidence: decision.evidence,
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: identity.knowledgeUnitId,
@@ -1798,7 +1834,8 @@ export async function createHost(deps) {
       // Each try is a different question: one already asked about this paragraph is passed over.
       const questions = fetched.filter((q) => !transferTracker.askedBefore(pick.unitId, q?.q));
       if (!questions.length) return;
-      const shown = questionCard.show(questions[0], {
+      const chosen = pickVariant(questions);
+      const shown = questionCard.show(chosen, {
         evidence: decision.evidence,
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: pick.unitId,
@@ -1812,7 +1849,7 @@ export async function createHost(deps) {
       if (shown) {
         orchestratorRef.interventionPolicy.record(decision);
         pendingTransfer.set(decision.interventionId, { unitId: pick.unitId, tier: pick.hint.tier });
-        transferTracker.noteAsked(pick.unitId, questions[0].q);
+        transferTracker.noteAsked(pick.unitId, chosen.q);
         transferHints.delete(pick.unitId);
         reportIntervention(decision.interventionId, pick.unitId, pick.paragraphIndex, 'ask', pick.text, 'retrieve', 'transfer');
       }
@@ -1886,7 +1923,7 @@ export async function createHost(deps) {
       if (!questions.length) return;
       // Fetching took time: a normal card may have appeared meanwhile. It has priority, so drop the check.
       if (probeBlocked()) return;
-      const shown = questionCard.show(questions[0], {
+      const shown = questionCard.show(pickVariant(questions), {
         evidence: decision.evidence,
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: identity.knowledgeUnitId,
@@ -1933,7 +1970,7 @@ export async function createHost(deps) {
     try {
       const questions = await fetchQuestions(text, { kind: 'recall' });
       if (!questions.length || probeBlocked()) return;
-      const shown = questionCard.show(questions[0], {
+      const shown = questionCard.show(pickVariant(questions), {
         evidence: decision.evidence,
         paragraphKey: identity.paragraphKey,
         knowledgeUnitId: identity.knowledgeUnitId,

@@ -996,6 +996,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     return baseDeps({
       assignmentId: 'assign-42',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -1147,6 +1148,39 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     expect(seenBody).not.toHaveProperty('struggled');
     // Item 13j-1: the real chosen option (index 0, the one clicked above).
     expect(seenBody.selected_answer).toBe(0);
+  });
+
+  it('shared questions: each student gets an unseen one with the options shuffled, and the answer is reported by its original position', async () => {
+    const bodies = [];
+    const fetchImpl = vi.fn((url, options) => { bodies.push(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
+    const asked = [];
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg?.payload?.body) asked.push(msg.payload.body);
+      cb({ ok: true, data: { questions: [
+        { id: 'qa', q: 'First?', options: ['a1', 'a2', 'a3', 'a4'], answerIndex: 0, explanation: 'e', span: 'variety span one' },
+        { id: 'qb', q: 'Second?', options: ['b1', 'b2', 'b3', 'b4'], answerIndex: 2, explanation: 'e', span: 'variety span two' },
+      ] } });
+    };
+    mockProxyFetch(fetchImpl);
+    const { host } = await createHost(assignmentDeps({ random: () => 0.99 }));
+    document.body.innerHTML = '<p id="t">A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it at all.</p>';
+    expect(await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 3)).toBe(true);
+    const req = asked.map((b) => (typeof b === 'string' ? JSON.parse(b) : b)).find((b) => b && 'count' in b);
+    if (req) expect(req.count).toBe(3);
+    expect(queryAlcoia('.sra-q-text, .sra-q-question')?.textContent ?? document.body.textContent).toBeTruthy();
+    const options = [...document.querySelectorAll('*')].flatMap((n) => (n.shadowRoot ? [...n.shadowRoot.querySelectorAll('.sra-q-option')] : []));
+    const labels = options.map((o) => o.textContent.trim());
+    expect(labels.some((l) => l.includes('b'))).toBe(true); // random 0.99 picked the second question
+    expect(labels.map((l) => l.replace(/\W/g, '').slice(-2))).not.toEqual(['b1', 'b2', 'b3', 'b4']); // shuffled
+    const correct = options.find((o) => o.textContent.includes('b3'));
+    correct.click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+    await vi.waitFor(() => expect(bodies.some((b) => b.correct != null)).toBe(true));
+    const out = bodies.find((b) => b.correct != null);
+    expect(out.question_id).toBe('q-variety span two');
+    expect(out.correct).toBe(true);
+    expect(out.selected_answer).toBe(2); // the original position of b3, whatever position it was shown at
   });
 
   it('an incorrect answer sends correct: false explicitly, not omitted', async () => {
@@ -1565,6 +1599,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     return baseDeps({
       assignmentId: 'assign-42',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -1948,6 +1983,7 @@ describe('retention due-list periodic refresh (intelligence-architecture audit, 
     return baseDeps({
       assignmentId: 'assign-27',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -2139,6 +2175,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     return baseDeps({
       assignmentId: 'assign-12a',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -2504,6 +2541,7 @@ describe('active intervention awareness (step 9A)', () => {
     return baseDeps({
       assignmentId: 'assign-9a',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -2743,6 +2781,7 @@ describe('scroll-kinematics reporting to the server (item DC-1a)', () => {
     return baseDeps({
       assignmentId: 'assign-42',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -2826,6 +2865,7 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
     return baseDeps({
       assignmentId: 'assign-42',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -3056,6 +3096,7 @@ describe('reportExplanationEvent (item DC-2 follow-up)', () => {
     return baseDeps({
       assignmentId: 'assign-42',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -3591,6 +3632,7 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
       return baseDeps({
         assignmentId: 'assign-x24',
         getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+        random: () => 0, // the first shared question, options in the order sent
         ...overrides,
       });
     }
@@ -3948,7 +3990,7 @@ describe('ways of explaining adapt to this learner', () => {
   const PROFILE_URL = 'https://api.test.invalid/api/learner-memory/policy-profile';
   const EVENTS_URL = 'https://api.test.invalid/api/learner-memory/policy-events';
   const PARA = 'A paragraph long enough to be a real bounded extraction, used across the explanation style tests so there is real text to explain and to ask about afterwards.';
-  const deps = () => baseDeps({ assignmentId: 'assign-s', getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 999_999 }) });
+  const deps = () => baseDeps({ assignmentId: 'assign-s', random: () => 0, getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 999_999 }) });
   const styles = (first) => ({ explain_more: [{ style: first, n: 20, trials: 9, rate: 0.8 }, { style: 'analogy', n: 20, trials: 9, rate: 0.3 }], repair: [{ style: 'contrast', n: 20, trials: 9, rate: 0.7 }] });
 
   function setup(profile) {
@@ -4098,6 +4140,13 @@ describe('transfer check (follow-up question after an explanation)', () => {
     await wait(60);
   };
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('in an assigned reading, explanation requests name the assignment so the server can keep the answer for the class', async () => {
+    const env = setup();
+    await explained(env);
+    expect(env.summarize.length).toBeGreaterThan(0);
+    expect(env.summarize[0].assignment_id).toBe('assign-t');
+  });
 
   describe('smooth reading rows', () => {
     const smooth = (calls) => calls.filter((c) => c.url === OUTCOMES_URL && isSmoothBody(c.options?.body)).map((c) => JSON.parse(c.options.body));
