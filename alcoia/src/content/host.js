@@ -112,6 +112,10 @@ export async function createHost(deps) {
       level: e.level, confidence: e.confidence, action: e.action, kind: e.kind, reason: e.reason,
       // What the learner has shown on the CONCEPT this paragraph belongs to, across every reading (labels only).
       ...(e.light === true ? { light: true } : {}),
+      // A claim of the reading the learner has shown they hold, or an earlier one this paragraph rests on that they
+      // have not: the document's own text, used only to aim an explanation (start from it / explain it first).
+      ...(typeof e.heldIdea === 'string' && e.heldIdea.trim() ? { heldIdea: e.heldIdea.trim().slice(0, 400) } : {}),
+      ...(typeof e.prerequisiteIdea === 'string' && e.prerequisiteIdea.trim() ? { prerequisiteIdea: e.prerequisiteIdea.trim().slice(0, 400) } : {}),
       ...(e.concept && typeof e.concept === 'object' ? { concept: e.concept } : {}),
       // Where the question ladder starts on this paragraph when nothing was answered on it this session.
       ...(['free_recall', 'scenario'].includes(e.startLevel) ? { startLevel: e.startLevel } : {}),
@@ -272,7 +276,10 @@ export async function createHost(deps) {
       [order[i], order[j]] = [order[j], order[i]];
     }
     optionOrders.set(cardQuestionId(q), order);
-    return { ...q, options: order.map((i) => q.options[i]), answerIndex: order.indexOf(q.answerIndex) };
+    // The question's misunderstanding labels (one per option) move with their options, so the label read for the
+    // chosen option is the one for the option the student actually saw.
+    const mistakes = Array.isArray(q.mistakes) && q.mistakes.length === q.options.length ? { mistakes: order.map((i) => q.mistakes[i]) } : {};
+    return { ...q, options: order.map((i) => q.options[i]), answerIndex: order.indexOf(q.answerIndex), ...mistakes };
   }
   const originalOption = (questionId, chosen) => {
     const order = questionId ? optionOrders.get(questionId) : null;
@@ -369,6 +376,11 @@ export async function createHost(deps) {
     } catch (e) {}
   }
   let learnerEstimatesManager = null;
+  // Prediction prompts (see shared/predictions.js) and what this page has read and shown. Never persisted or sent.
+  let predictions = [];
+  let predictionToOffer = () => null;
+  const predictionReadUnits = new Set();
+  const predictionsShown = new Set();
   // Transfer checks the server says are still needed: knowledgeUnitId -> { level, tier, focus }. The server decides
   // WHETHER (a unit explained or repaired whose idea has not yet been shown to carry over) and the tier from its own
   // clock; the page adds the spacing it alone can see (transfer-check.js). transferPreferred: the instructor's focus
@@ -412,6 +424,16 @@ export async function createHost(deps) {
       fetchImpl: proxyFetchModule.backgroundFetchImpl,
     });
     await refreshLearnerEstimates();
+    // "Before you read on" prompts from the reading's document graph (document content only, nothing reported).
+    try {
+      const predictionsModule = await loadModule('src/shared/predictions.js');
+      predictionToOffer = predictionsModule.predictionToOffer;
+      predictions = await predictionsModule.createPredictionsManager({
+        getSession,
+        predictionsUrl: `${self.ALCOIA_CONFIG.ASSIGNMENTS_URL}/${encodeURIComponent(assignmentId)}/predictions`,
+        fetchImpl: proxyFetchModule.backgroundFetchImpl,
+      }).getPredictions();
+    } catch (e) { predictions = []; }
     // Step 27: the periodic half. Not covered by installListeners()'s own
     // AbortSignal (orchestrator.js's own idleTimer isn't either, for the
     // identical reason stated there: "the content script lives as long as
@@ -798,7 +820,12 @@ export async function createHost(deps) {
   async function fetchSummary(text, mode = 'tldr', context = '', opts = {}) {
     const style = typeof opts.style === 'string' && opts.style ? opts.style : null;
     const focus = typeof opts.focus === 'string' && opts.focus.trim() ? opts.focus.trim().slice(0, 400) : null;
-    const cacheKey = `${mode}${style ? ':' + style : ''}${focus ? ':f:' + focus.slice(0, 60) : ''}:${text.slice(0, 80).trim()}`;
+    // Optional, explanation modes only (the server ignores them elsewhere): the misunderstanding a wrong option stands
+    // for, and an idea from the same document the reader already holds (or an earlier one they have not shown).
+    const misconception = typeof opts.misconception === 'string' && opts.misconception.trim() ? opts.misconception.trim().slice(0, 200) : null;
+    const held = typeof opts.held === 'string' && opts.held.trim() ? opts.held.trim().slice(0, 400) : null;
+    const prerequisite = typeof opts.prerequisite === 'string' && opts.prerequisite.trim() ? opts.prerequisite.trim().slice(0, 400) : null;
+    const cacheKey = `${mode}${style ? ':' + style : ''}${focus ? ':f:' + focus.slice(0, 60) : ''}${misconception ? ':m=' + misconception : ''}${held ? ':h=' + held.slice(0, 40) : ''}${prerequisite ? ':p=' + prerequisite.slice(0, 40) : ''}:${text.slice(0, 80).trim()}`;
     if (_summaryCache.has(cacheKey)) {
       log(`Cache hit: ${mode}`);
       const cached = pickSummaryVersion(cacheKey, _summaryCache.get(cacheKey));
@@ -813,6 +840,9 @@ export async function createHost(deps) {
       if (context) body.context = context.slice(0, 800);
       if (style) body.style = style;
       if (focus) body.focus = focus;
+      if (misconception) body.misconception = misconception;
+      if (held) body.held = held;
+      if (prerequisite) body.prerequisite = prerequisite;
       // In an assigned reading the server keeps the answer for the whole class until the assignment closes (it checks
       // that the passage is part of that reading). Never sent for any other page.
       if (assignmentId) body.assignment_id = assignmentId;
@@ -1138,7 +1168,7 @@ export async function createHost(deps) {
     // same reportSelfState() affordances 1/2 already call — one signal
     // pathway, three ways to reach it.
     onSelfReport: reportSelfState,
-    fetchExplanation: (spanText) => fetchSummary(spanText, 'explain_more'),
+    fetchExplanation: (spanText, extra = {}) => fetchSummary(spanText, 'explain_more', '', { misconception: extra.misconception }),
     fetchGrading, // item 43 — free_recall/scenario only; question-card.js itself never calls this for recognition or adversarial
     onAnswered: (record) => {
       let answeredCard = null;
@@ -1208,6 +1238,10 @@ export async function createHost(deps) {
         questionId: record.questionId,
         correct: typeof record.correct === 'boolean' ? record.correct : undefined,
         confidence: record.confidence,
+        ...(record.dontKnow === true ? { dontKnow: true } : {}),
+        // The misunderstanding the chosen wrong option stands for (the question's own label), so the class view can
+        // say which wrong idea a misconception question shares. Wrong option answers only.
+        ...(record.correct === false && typeof record.misconception === 'string' ? { misconception: record.misconception } : {}),
         // Item 13j-1: response-signals.js's answer() (recognition, real
         // discrete options) is the only record shape that ever carries
         // chosenIndex — answerGraded()/respond() (free_recall/scenario/
@@ -1628,7 +1662,13 @@ export async function createHost(deps) {
       // the page, and only while "Mark key words when explaining" is on.
       const focusSentence = (mode === 'explain_more' && el && s().autoKeyTerms !== false)
         ? keyTermsModule.centralSentence(text) : null;
-      const generated = await fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey, style, focus: focusSentence });
+      // From the reading's own claims (document graph, via the estimates): a repair whose paragraph rests on an earlier
+      // idea the learner has not shown they hold explains that idea first; otherwise an explanation starts from an idea
+      // they have shown they hold. Neither is sent for 'relate', which has its own shape. Both combine with the central
+      // sentence: the earlier or held idea is the starting point, the marked sentence is what gets explained.
+      const est = learnerEstimates.get(identity.knowledgeUnitId);
+      const ideaOpts = mode === 'relate' ? {} : est?.prerequisiteIdea ? { prerequisite: est.prerequisiteIdea } : est?.heldIdea ? { held: est.heldIdea } : {};
+      const generated = await fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey, style, focus: focusSentence, ...ideaOpts });
       if (!generated) return false;
 
       let anchorRect = null;
@@ -1910,6 +1950,28 @@ export async function createHost(deps) {
   }
   function probeCovered() { probe.words = 0; probe.read = []; probe.nextAt = Math.round(PROBE_EVERY_WORDS * (probeProfile()?.cooldownFactor ?? 1)); }
 
+  /* "Before you read on" (LearnHarness's predict-then-teach, kept to the reading): once the reader has read every
+   * paragraph a later claim rests on, and before they reach it, one short question asks what they expect. Nothing to
+   * answer, nothing graded, nothing sent: the reading itself is the feedback. Spends the same interruption budget as
+   * every content-triggered card (evaluateContentTrigger), never over an open question card, never while snoozed. */
+  async function checkPrediction(text) {
+    if (!predictions.length || !text) return;
+    const unitId = computeIdentity(text).knowledgeUnitId;
+    if (!unitId) return;
+    predictionReadUnits.add(unitId);
+    const p = predictionToOffer(predictions, { justRead: unitId, readUnits: predictionReadUnits, shown: predictionsShown });
+    if (!p) return;
+    if (!s().assistantEnabled || s().showInterventions === false || !orchestratorRef?.interventionPolicy) return;
+    if (ui.hasVisibleQuestionCard()) return;
+    if (await snoozeControl.isActive()) return;
+    const decision = orchestratorRef.interventionPolicy.evaluateContentTrigger({ paragraphKey: `pred:${p.unitId}` });
+    if (!decision.allow) return;
+    predictionsShown.add(p.unitId);
+    const lead = t('pred.before', uiLang());
+    const shown = questionCard.showExplanation('explain', `${lead} ${p.prompt}`, { paragraphKey: `pred:${p.unitId}` });
+    if (shown) orchestratorRef.interventionPolicy.record(decision);
+  }
+
   async function checkProbe(text, paragraphIndex) {
     if (!assignmentId || !getSession || !text) return;
     const key = text.slice(0, 80).trim();
@@ -2125,6 +2187,7 @@ export async function createHost(deps) {
       if (!transferPreferred) checkTransferCandidate(text, paragraphIndex).catch(() => {});
       checkProbe(text, paragraphIndex).catch(() => {});
       try { noteSmoothReading(text, dwellMs, paragraphIndex); } catch (e) { /* never blocks reading */ }
+      checkPrediction(text).catch(() => {});
     },
     onReturnCheck: (blurMs) => { checkReturnCheck(blurMs).catch(() => {}); },
     onStruggle: (text, paragraphIndex, substate, selfReported) => {
