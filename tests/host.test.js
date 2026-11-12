@@ -1183,6 +1183,27 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     expect(out.selected_answer).toBe(2); // the original position of b3, whatever position it was shown at
   });
 
+  it('shuffled options keep their own misunderstanding label: the label sent is the one for the option the student chose', async () => {
+    const bodies = [];
+    const fetchImpl = vi.fn((url, options) => { bodies.push(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [
+      { id: 'qm', q: 'Which?', options: ['right', 'wrong-a', 'wrong-b', 'wrong-c'], mistakes: ['', 'mix-up A', 'mix-up B', 'mix-up C'], answerIndex: 0, explanation: 'e', span: 'mistake label span' },
+    ] } });
+    mockProxyFetch(fetchImpl);
+    const { host } = await createHost(assignmentDeps({ random: () => 0.99 }));
+    document.body.innerHTML = '<p id="t">A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it at all.</p>';
+    expect(await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 3)).toBe(true);
+    const options = [...document.querySelectorAll('*')].flatMap((n) => (n.shadowRoot ? [...n.shadowRoot.querySelectorAll('.sra-q-option')] : []));
+    expect(options.map((o) => o.textContent.trim()).join('|')).not.toMatch(/^.*right.*\|.*wrong-a.*\|.*wrong-b.*\|.*wrong-c/);
+    options.find((o) => o.textContent.includes('wrong-b')).click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+    await vi.waitFor(() => expect(bodies.some((b) => b.correct === false)).toBe(true));
+    const out = bodies.find((b) => b.correct === false);
+    expect(out.selected_answer).toBe(2);
+    expect(out.misconception).toBe('mix-up B');
+  });
+
   it('an incorrect answer sends correct: false explicitly, not omitted', async () => {
     let seenBody = null;
     const fetchImpl = vi.fn((url, options) => { seenBody = (({ event_id, ...r }) => r)(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });

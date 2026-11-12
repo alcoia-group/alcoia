@@ -223,6 +223,7 @@ export function createQuestionCard(deps = {}) {
       </div>
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
+        ${level !== 'adversarial' && responseSignals.dontKnow ? `<button type="button" class="sra-btn sra-btn-secondary sra-q-dontknow">${esc(L('card.dontKnow'))}</button>` : ''}
         <button class="sra-btn sra-btn-secondary sra-q-skip">${esc(L('card.skip'))}</button>
         ${onSnooze ? `<button type="button" class="sra-q-snooze-toggle">${esc(L('card.snooze'))}</button>` : ''}
       </div>`;
@@ -292,11 +293,13 @@ export function createQuestionCard(deps = {}) {
       step.innerHTML = `
         <div class="sra-q-confidence-label">${esc(L('card.howSure'))}</div>
         <div class="sra-q-confidence-options">
+          <button type="button" class="sra-q-conf-btn" data-conf="guess">${esc(L('card.guessing'))}</button>
           <button type="button" class="sra-q-conf-btn" data-conf="low">${esc(L('card.notSure'))}</button>
           <button type="button" class="sra-q-conf-btn" data-conf="high">${esc(L('card.prettySure'))}</button>
           <button type="button" class="sra-q-conf-skip">${esc(L('card.ratherNot'))}</button>
         </div>`;
       body.appendChild(step);
+      step.querySelector('[data-conf="guess"]').onclick = () => onCommit('guess');
       step.querySelector('[data-conf="low"]').onclick = () => onCommit('low');
       step.querySelector('[data-conf="high"]').onclick = () => onCommit('high');
       step.querySelector('.sra-q-conf-skip').onclick = () => onCommit(null);
@@ -305,6 +308,35 @@ export function createQuestionCard(deps = {}) {
     function finish() {
       const skip = root.querySelector('.sra-q-skip');
       if (skip) { skip.textContent = L('card.close'); skip.onclick = () => ui.closePopup(root, fingerprint); }
+    }
+
+    /* "I don't know": a gap, not a refusal (dismiss) and not a wrong answer. The card shows what the reading says
+     * (the correct option and its sentence for multiple choice, the cited sentence otherwise) and offers the fuller
+     * explanation, because the reader just said they do not hold it. */
+    const dontKnowBtn = root.querySelector('.sra-q-dontknow');
+    if (dontKnowBtn) {
+      dontKnowBtn.onclick = () => {
+        if (committed) return;
+        committed = true;
+        root.querySelector('.sra-q-confidence')?.remove();
+        root.querySelector('.sra-q-submit-text')?.remove();
+        dontKnowBtn.remove();
+        const record = responseSignals.dontKnow(interventionId);
+        if (record && onAnswered) onAnswered(record);
+        for (const btn of root.querySelectorAll('.sra-q-option')) {
+          btn.disabled = true;
+          btn.classList.remove('sra-q-selected');
+          if (Number(btn.dataset.index) === question.answerIndex) btn.classList.add('sra-q-correct');
+        }
+        const ta = root.querySelector('.sra-q-answer-input');
+        if (ta) ta.disabled = true;
+        const note = document.createElement('div');
+        note.className = 'sra-q-result sra-q-result-dontknow';
+        note.innerHTML = `<strong>${esc(L('res.dontKnow'))}</strong>${question.span ? `<div class="sra-q-span">“${esc(question.span)}”</div>` : ''}`;
+        body.appendChild(note);
+        offerExplanation(root, question, fetchExplanation, esc, lang);
+        finish();
+      };
     }
 
     if (level === 'recognition') {
@@ -320,7 +352,7 @@ export function createQuestionCard(deps = {}) {
         revealAnswer(root, question, selected, confidence, esc, lang);
 
         if (record && !record.correct) {
-          offerExplanation(root, question, fetchExplanation, esc, lang);
+          offerExplanation(root, question, fetchExplanation, esc, lang, record.misconception);
         }
 
         finish();
@@ -621,7 +653,7 @@ function revealResponded(root, lang = 'en') {
   body.appendChild(note);
 }
 
-async function offerExplanation(root, question, fetchExplanation, esc, lang = 'en') {
+async function offerExplanation(root, question, fetchExplanation, esc, lang = 'en', misconception = null) {
   if (!fetchExplanation) return;
   const body = root.querySelector('.sra-popup-body');
   if (!body) return;
@@ -634,7 +666,10 @@ async function offerExplanation(root, question, fetchExplanation, esc, lang = 'e
   try {
     // Scoped to the span, not the whole paragraph — the reader missed one
     // specific thing and that is what to explain.
-    const text = await fetchExplanation(question.span || question.q);
+    // misconception: the label of the wrong option chosen, so the explanation addresses that misunderstanding only.
+    const text = misconception
+      ? await fetchExplanation(question.span || question.q, { misconception })
+      : await fetchExplanation(question.span || question.q);
     // This fuller explanation is also failure-path-only (offerExplanation is
     // only ever called from the !record.correct/'incorrect' branch in
     // show()), so it gets the same highlighting treatment as the inline
