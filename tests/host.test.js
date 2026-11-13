@@ -25,6 +25,11 @@ import { createHost } from '../alcoia/src/content/host.js';
 import { createUIController } from '../alcoia/src/content/ui-controller.js';
 import { createResponseSignals } from '../alcoia/src/content/signals/response-signals.js';
 
+// A "read without difficulty" outcome (struggled: false, no question) is sent for each paragraph left smoothly.
+// Tests about answers and struggles look past those rows; the smooth-reading tests below look at them directly.
+const isSmoothBody = (body) => { try { const b = JSON.parse(body); return b.struggled === false && b.question_id == null && b.correct == null; } catch { return false; } };
+const isOutcome = (c) => String(c.url).endsWith('/outcomes') && !isSmoothBody(c.options?.body);
+
 const HOST_JS_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)), '..', 'alcoia', 'src', 'content', 'host.js',
 );
@@ -991,6 +996,7 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     return baseDeps({
       assignmentId: 'assign-42',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -1142,6 +1148,39 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     expect(seenBody).not.toHaveProperty('struggled');
     // Item 13j-1: the real chosen option (index 0, the one clicked above).
     expect(seenBody.selected_answer).toBe(0);
+  });
+
+  it('shared questions: each student gets an unseen one with the options shuffled, and the answer is reported by its original position', async () => {
+    const bodies = [];
+    const fetchImpl = vi.fn((url, options) => { bodies.push(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
+    const asked = [];
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg?.payload?.body) asked.push(msg.payload.body);
+      cb({ ok: true, data: { questions: [
+        { id: 'qa', q: 'First?', options: ['a1', 'a2', 'a3', 'a4'], answerIndex: 0, explanation: 'e', span: 'variety span one' },
+        { id: 'qb', q: 'Second?', options: ['b1', 'b2', 'b3', 'b4'], answerIndex: 2, explanation: 'e', span: 'variety span two' },
+      ] } });
+    };
+    mockProxyFetch(fetchImpl);
+    const { host } = await createHost(assignmentDeps({ random: () => 0.99 }));
+    document.body.innerHTML = '<p id="t">A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it at all.</p>';
+    expect(await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 3)).toBe(true);
+    const req = asked.map((b) => (typeof b === 'string' ? JSON.parse(b) : b)).find((b) => b && 'count' in b);
+    if (req) expect(req.count).toBe(3);
+    expect(queryAlcoia('.sra-q-text, .sra-q-question')?.textContent ?? document.body.textContent).toBeTruthy();
+    const options = [...document.querySelectorAll('*')].flatMap((n) => (n.shadowRoot ? [...n.shadowRoot.querySelectorAll('.sra-q-option')] : []));
+    const labels = options.map((o) => o.textContent.trim());
+    expect(labels.some((l) => l.includes('b'))).toBe(true); // random 0.99 picked the second question
+    expect(labels.map((l) => l.replace(/\W/g, '').slice(-2))).not.toEqual(['b1', 'b2', 'b3', 'b4']); // shuffled
+    const correct = options.find((o) => o.textContent.includes('b3'));
+    correct.click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+    await vi.waitFor(() => expect(bodies.some((b) => b.correct != null)).toBe(true));
+    const out = bodies.find((b) => b.correct != null);
+    expect(out.question_id).toBe('q-variety span two');
+    expect(out.correct).toBe(true);
+    expect(out.selected_answer).toBe(2); // the original position of b3, whatever position it was shown at
   });
 
   it('an incorrect answer sends correct: false explicitly, not omitted', async () => {
@@ -1432,15 +1471,15 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     queryAlcoia('.sra-q-option[data-index="0"]').click();
     queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
 
-    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
-    const outcomeBody = JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).options.body);
+    await vi.waitFor(() => expect(calls.some((c) => isOutcome(c))).toBe(true));
+    const outcomeBody = JSON.parse(calls.find((c) => isOutcome(c)).options.body);
     // THE LINKAGE: the exact same id the intervention was reported under.
     expect(outcomeBody.intervention_id).toBe('iv_1700000000000_abc123');
     expect(outcomeBody.paragraph_index).toBe(7);
     expect(outcomeBody.correct).toBe(true);
     // Stage A: one answer, exactly one outcome POST and one intervention report.
     await new Promise((r) => setTimeout(r, 50));
-    expect(calls.filter((c) => c.url.endsWith('/outcomes')).length).toBe(1);
+    expect(calls.filter((c) => isOutcome(c)).length).toBe(1);
     expect(calls.filter((c) => c.url.endsWith('/interventions')).length).toBe(1);
   });
 
@@ -1560,6 +1599,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     return baseDeps({
       assignmentId: 'assign-42',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -1651,8 +1691,8 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
     // resulting outcome carries the same intervention_id.
     queryAlcoia('.sra-q-option[data-index="0"]').click();
     queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
-    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
-    const outcomeBody = JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).options.body);
+    await vi.waitFor(() => expect(calls.some((c) => isOutcome(c))).toBe(true));
+    const outcomeBody = JSON.parse(calls.find((c) => isOutcome(c)).options.body);
     expect(outcomeBody.intervention_id).toBe(interventionBody.intervention_id);
     expect(outcomeBody.knowledge_unit_id).toBe(knowledgeUnitId);
   });
@@ -1706,7 +1746,7 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
       queryAlcoia('.sra-q-submit-text').click();
       queryAlcoia('.sra-q-conf-skip').click();
       await new Promise((r) => setTimeout(r, 80));
-      const outcomes = calls.filter((c) => c.url.endsWith('/outcomes')).map((c) => JSON.parse(c.options.body));
+      const outcomes = calls.filter((c) => isOutcome(c)).map((c) => JSON.parse(c.options.body));
       return { graderBodies, outcomes, shown: queryAlcoia('.sra-q-result')?.textContent ?? '' };
     }
     const verdict = (v, extra = {}) => ({ ok: true, data: { verdict: v, span: v === 'unknown' ? null : SPAN, ...extra } });
@@ -1762,9 +1802,9 @@ describe('retention scheduling (intelligence-architecture audit, step 7)', () =>
 
     queryAlcoia('.sra-q-option[data-index="0"]').click();
     queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
-    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/outcomes'))).toBe(true));
+    await vi.waitFor(() => expect(calls.some((c) => isOutcome(c))).toBe(true));
     // the outcome names the rung of the ladder it answered
-    expect(JSON.parse(calls.find((c) => c.url.endsWith('/outcomes')).options.body).question_level).toBe('recognition');
+    expect(JSON.parse(calls.find((c) => isOutcome(c)).options.body).question_level).toBe('recognition');
 
     stopAdaptationSync();
   });
@@ -1943,6 +1983,7 @@ describe('retention due-list periodic refresh (intelligence-architecture audit, 
     return baseDeps({
       assignmentId: 'assign-27',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -2134,6 +2175,7 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     return baseDeps({
       assignmentId: 'assign-12a',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -2499,6 +2541,7 @@ describe('active intervention awareness (step 9A)', () => {
     return baseDeps({
       assignmentId: 'assign-9a',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -2738,6 +2781,7 @@ describe('scroll-kinematics reporting to the server (item DC-1a)', () => {
     return baseDeps({
       assignmentId: 'assign-42',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -2821,6 +2865,7 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
     return baseDeps({
       assignmentId: 'assign-42',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -2874,7 +2919,7 @@ describe('the explanation_preceded_attempt flag (item DC-2)', () => {
     function wire() {
       const bodies = [];
       const fetchImpl = vi.fn((url, options) => {
-        if (String(url).endsWith('/outcomes')) bodies.push((({ event_id, ...r }) => r)(JSON.parse(options.body)));
+        if (String(url).endsWith('/outcomes') && !isSmoothBody(options.body)) bodies.push((({ event_id, ...r }) => r)(JSON.parse(options.body)));
         return { ok: true, status: 200, data: { recorded: true } };
       });
       chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
@@ -3051,6 +3096,7 @@ describe('reportExplanationEvent (item DC-2 follow-up)', () => {
     return baseDeps({
       assignmentId: 'assign-42',
       getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+      random: () => 0, // the first shared question, options in the order sent
       ...overrides,
     });
   }
@@ -3341,6 +3387,42 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
     document.body.innerHTML = `<p id="t">${PARAGRAPH}</p>`;
   });
 
+  describe('key words marked on the page during an explanation', () => {
+    const PHOTO = 'Photosynthesis converts light energy into chemical energy, stored as glucose inside the chloroplast of plant cells.';
+    const relay = () => {
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => cb({ ok: true, data: { summary: 'Plants turn light energy into chemical energy and keep it as glucose.' } }));
+    };
+    it('marks the passage words the explanation reuses, on by default', async () => {
+      relay();
+      document.body.innerHTML = `<p id="k">${PHOTO}</p>`;
+      const { host } = await createHost(baseDeps());
+      expect(await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_k1' }, {}, document.getElementById('k'), 2)).toBe(true);
+      const marks = [...document.querySelectorAll('#k mark.alcoia-key-term')].map((m) => m.textContent.toLowerCase());
+      expect(marks).toContain('chemical energy');
+      expect(document.getElementById('k').textContent).toBe(PHOTO);
+    });
+    it('on a long paragraph with a central sentence, explains that sentence, marks it, and marks no words', async () => {
+      const LONG = 'Chloroplasts turn sunlight, water and carbon dioxide into glucose for the growing plant. Sunlight arrives mostly in the morning on the eastern side of the garden. Water climbs slowly from the roots through narrow tubes in each stem. Carbon dioxide enters through tiny pores that open underneath every leaf. Glucose later becomes starch that farmers harvest each autumn as potatoes.';
+      const bodies = [];
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => { bodies.push(msg.body); cb({ ok: true, data: { summary: 'Chloroplasts use light energy to make glucose.' } }); });
+      document.body.innerHTML = `<p id="k">${LONG}</p>`;
+      const { host } = await createHost(baseDeps());
+      expect(await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_k3' }, {}, document.getElementById('k'), 2)).toBe(true);
+      expect(bodies[0].focus).toMatch(/^Chloroplasts turn sunlight/);
+      expect(document.querySelectorAll('#k mark.alcoia-key-term-sentence').length).toBeGreaterThan(0);
+      expect(document.querySelectorAll('#k mark.alcoia-key-term:not(.alcoia-key-term-sentence)')).toHaveLength(0);
+      expect(queryAlcoia('.sra-q-about')?.textContent).toBe('About the marked sentence.');
+      expect(queryAlcoia('.sra-term')).toBeNull();
+    });
+    it('marks nothing when the setting is off', async () => {
+      relay();
+      document.body.innerHTML = `<p id="k">${PHOTO}</p>`;
+      const { host } = await createHost(baseDeps({ settings: () => ({ assistantEnabled: true, backendUrl: 'https://api.test.invalid/api/summarize', autoKeyTerms: false }) }));
+      expect(await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_k2' }, {}, document.getElementById('k'), 2)).toBe(true);
+      expect(document.querySelectorAll('mark.alcoia-key-term')).toHaveLength(0);
+    });
+  });
+
   describe('policy -> generation mapping', () => {
     it('policyAction "explain" calls the summarize endpoint with mode "explain_more", never the questions endpoint', async () => {
       const calls = captureRelay();
@@ -3586,6 +3668,7 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
       return baseDeps({
         assignmentId: 'assign-x24',
         getSession: async () => ({ token: 'tok-1', email: 'reader@example.com', expiresAt: Date.now() + 999_999 }),
+        random: () => 0, // the first shared question, options in the order sent
         ...overrides,
       });
     }
@@ -3943,7 +4026,7 @@ describe('ways of explaining adapt to this learner', () => {
   const PROFILE_URL = 'https://api.test.invalid/api/learner-memory/policy-profile';
   const EVENTS_URL = 'https://api.test.invalid/api/learner-memory/policy-events';
   const PARA = 'A paragraph long enough to be a real bounded extraction, used across the explanation style tests so there is real text to explain and to ask about afterwards.';
-  const deps = () => baseDeps({ assignmentId: 'assign-s', getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 999_999 }) });
+  const deps = () => baseDeps({ assignmentId: 'assign-s', random: () => 0, getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 999_999 }) });
   const styles = (first) => ({ explain_more: [{ style: first, n: 20, trials: 9, rate: 0.8 }, { style: 'analogy', n: 20, trials: 9, rate: 0.3 }], repair: [{ style: 'contrast', n: 20, trials: 9, rate: 0.7 }] });
 
   function setup(profile) {
@@ -4067,7 +4150,7 @@ describe('transfer check (follow-up question after an explanation)', () => {
     return { calls, summarize, questions, estimates };
   }
   const events = (calls) => calls.filter((c) => c.url === EVENTS_URL).flatMap((c) => JSON.parse(c.options.body).events);
-  const outcomes = (calls) => calls.filter((c) => c.url === OUTCOMES_URL).map((c) => JSON.parse(c.options.body));
+  const outcomes = (calls) => calls.filter((c) => c.url === OUTCOMES_URL && !isSmoothBody(c.options?.body)).map((c) => JSON.parse(c.options.body));
 
   async function explained(env, { tap = false, over } = {}) {
     vi.spyOn(Math, 'random').mockReturnValue(0.99);
@@ -4093,6 +4176,47 @@ describe('transfer check (follow-up question after an explanation)', () => {
     await wait(60);
   };
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('in an assigned reading, explanation requests name the assignment so the server can keep the answer for the class', async () => {
+    const env = setup();
+    await explained(env);
+    expect(env.summarize.length).toBeGreaterThan(0);
+    expect(env.summarize[0].assignment_id).toBe('assign-t');
+  });
+
+  describe('smooth reading rows', () => {
+    const smooth = (calls) => calls.filter((c) => c.url === OUTCOMES_URL && isSmoothBody(c.options?.body)).map((c) => JSON.parse(c.options.body));
+    it('a paragraph left without difficulty is recorded once as read without difficulty, with no text', async () => {
+      const env = setup();
+      const h = await createHost(deps());
+      await wait(20);
+      h.host.onParagraphRead(OTHER(1), 5000, 11);
+      h.host.onParagraphRead(OTHER(1), 5000, 11);
+      await vi.waitFor(() => expect(smooth(env.calls)).toHaveLength(1));
+      await wait(30);
+      const [row] = smooth(env.calls);
+      expect(row).toMatchObject({ paragraph_index: 11, struggled: false, reached: true, knowledge_unit_id: await unitOf(OTHER(1)) });
+      expect(JSON.stringify(row)).not.toContain('Another paragraph');
+      expect(smooth(env.calls)).toHaveLength(1);
+    });
+    it('no smooth row for a paragraph with a struggle signal, or one skimmed too fast to be read', async () => {
+      const env = setup();
+      const h = await createHost(deps());
+      await wait(20);
+      h.host.onStruggle(OTHER(2), 12, null, false);
+      h.host.onParagraphRead(OTHER(2), 5000, 12);
+      h.host.onParagraphRead(OTHER(3), 300, 13);
+      await wait(60);
+      expect(smooth(env.calls)).toHaveLength(0);
+    });
+    it('no smooth row for a paragraph a card was shown about', async () => {
+      const env = setup();
+      const h = await explained(env);
+      h.host.onParagraphRead(PARA, 8000, 2);
+      await wait(60);
+      expect(smooth(env.calls).filter((r) => r.paragraph_index === 2)).toHaveLength(0);
+    });
+  });
 
   it('same-session success: a scenario question is asked after the spacing, reported with the marker, and counts as an inferred "helped" for the style used', async () => {
     const env = setup();
