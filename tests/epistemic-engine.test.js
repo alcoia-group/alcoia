@@ -152,6 +152,18 @@ describe('isSystematicallyOverconfident', () => {
   });
 });
 
+describe('pickLevelForConcept with a start level from the server', () => {
+  it('starts there when this concept has no graded attempt this session, and the session ladder takes over after one', () => {
+    expect(pickLevelForConcept('p', [], { startLevel: 'free_recall' })).toBe('free_recall');
+    expect(pickLevelForConcept('p', [], { startLevel: 'scenario' })).toBe('scenario');
+    expect(pickLevelForConcept('p', [{ paragraphKey: 'p', level: 'scenario', correct: null }], { startLevel: 'scenario' })).toBe('free_recall');
+  });
+  it('never starts at the challenge step, and ignores anything it does not know', () => {
+    expect(pickLevelForConcept('p', [], { startLevel: 'adversarial' })).toBe('recognition');
+    expect(pickLevelForConcept('p', [], { startLevel: 'hard' })).toBe('recognition');
+  });
+});
+
 describe('pickLevelForConcept — the response-signals-history-shaped convenience wrapper', () => {
   it('a concept never seen before gets recognition', () => {
     expect(pickLevelForConcept('para-1', [])).toBe('recognition');
