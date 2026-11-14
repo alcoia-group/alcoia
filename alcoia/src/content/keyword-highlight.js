@@ -27,9 +27,13 @@
  * file ever introduces are its own literal `<span class="sra-term">`.
  */
 
+import { STOP } from './key-terms.js';
+
 const MIN_TERMS = 2;
 const MAX_TERMS = 4;
 const MIN_TERM_LENGTH = 4;
+// A short explanation is read whole anyway; marking most of its words adds noise, not emphasis.
+const MIN_WORDS_TO_HIGHLIGHT = 12;
 
 // Common English function words. Deliberately not exhaustive — missing one
 // just means an occasional short connector gets highlighted alongside the
@@ -54,12 +58,13 @@ function escapeRegExp(s) {
 export function pickLoadBearingTerms(text) {
   if (!text) return [];
   const words = text.match(/[A-Za-zÀ-ÖØ-öø-ÿ]+(?:['’][A-Za-zÀ-ÖØ-öø-ÿ]+)?/g) || [];
+  if (words.length < MIN_WORDS_TO_HIGHLIGHT) return [];
 
   const seen = new Map(); // lowercase -> first-seen original casing
   for (const w of words) {
     if (w.length < MIN_TERM_LENGTH) continue;
     const lower = w.toLowerCase();
-    if (STOPWORDS.has(lower)) continue;
+    if (STOPWORDS.has(lower) || STOP.has(lower)) continue;
     if (!seen.has(lower)) seen.set(lower, w);
   }
 
