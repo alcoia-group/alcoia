@@ -230,12 +230,23 @@ describe('keyword highlighting', () => {
     const card = createQuestionCard({
       ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
     });
-    card.show(QUESTION);
+    card.show({ ...QUESTION, explanation: 'The relationship holds, but it weakens as the measurement apparatus becomes cheaper and noisier than laboratory equipment.' });
     pick(ui.root, 1);
     rate(ui.root, null);
 
     const result = ui.root.querySelector('.sra-q-result');
     expect(result.innerHTML).toContain('class="sra-term"');
+  });
+
+  it('marks nothing in a one-line explanation (too short for emphasis)', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(QUESTION);
+    pick(ui.root, 1);
+    rate(ui.root, null);
+    expect(ui.root.querySelector('.sra-q-result').innerHTML).not.toContain('class="sra-term"');
   });
 
   it('never highlights anything on a correct answer', () => {

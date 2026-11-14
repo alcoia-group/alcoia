@@ -19,7 +19,7 @@
 const MAX_TERMS = 3;
 const MIN_LEN = 4;
 const MAX_LEN = 40;
-const STOP = new Set([
+export const STOP = new Set([
   'this', 'that', 'these', 'those', 'with', 'from', 'have', 'has', 'had', 'will', 'would', 'could', 'should',
   'about', 'into', 'onto', 'over', 'under', 'after', 'before', 'while', 'because', 'since', 'than', 'then',
   'were', 'been', 'being', 'they', 'them', 'their', 'there', 'where', 'when', 'what', 'which', 'whom', 'whose',
