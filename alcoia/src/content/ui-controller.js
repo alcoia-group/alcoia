@@ -607,6 +607,20 @@ export function createUIController(deps = {}) {
     });
   }
 
+  /* A plain line under the open question card (the then-and-now note). Quiet: serif, muted, no motion. */
+  function addNoteToQuestionCard(text) {
+    for (const { el, kind } of openPopups.values()) {
+      if (kind !== 'question' || !el?.isConnected) continue;
+      const p = document.createElement('p');
+      p.className = 'sra-then-now';
+      p.style.cssText = 'margin:10px 0 0;font:14px/1.45 Georgia,serif;color:inherit;opacity:.8';
+      p.textContent = text;
+      el.appendChild(p);
+      return true;
+    }
+    return false;
+  }
+
   return {
     openPopups,
     installResizeWatcher,
@@ -614,6 +628,7 @@ export function createUIController(deps = {}) {
     placePopup, closePopup, flashPopup, hidePopup,
     reservePopup, showPopup, resetAutohide,
     hasVisibleQuestionCard,
+    addNoteToQuestionCard,
     renderPopup,
     showNudge, showSimulateToast, showStatusToast,
     ensureSelfReportTrigger,

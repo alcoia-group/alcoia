@@ -53,6 +53,15 @@ const QUIZ_MIN_QUESTIONS = 5;
 // history in this codebase) lives in quiz.js, the writer — this file only
 // ever reads, never trims, so there is nothing to bound here.
 
+// "2026-11-03" -> "3 November" in the reader's interface language (falls back to the raw date).
+function friendlyDate(iso, lang) {
+  try {
+    const d = new Date(`${iso}T12:00:00Z`);
+    if (Number.isNaN(d.getTime())) return iso;
+    return new Intl.DateTimeFormat(lang || 'en', { day: 'numeric', month: 'long', timeZone: 'UTC' }).format(d);
+  } catch (e) { return iso; }
+}
+
 export async function createHost(deps) {
   const {
     loadModule,
@@ -147,7 +156,11 @@ export async function createHost(deps) {
       // memory-off submission simply leaves the unit without an estimate, i.e. the normal behaviour.
       if (fields.knowledgeUnitId && fields.questionId) learnerEstimates.delete(fields.knowledgeUnitId);
       return outcomesManager.submit(fields)
-        .then((r) => { if (r && r.learnerEstimate) noteLearnerEstimate(r.learnerEstimate); return r; })
+        .then((r) => {
+          if (r && r.learnerEstimate) noteLearnerEstimate(r.learnerEstimate);
+          if (r && r.thenAndNow && r.thenAndNow.missedAt) { try { ui.addNoteToQuestionCard(t('then.line', uiLang(), { date: friendlyDate(r.thenAndNow.missedAt, uiLang()) })); } catch (e) { /* the note is optional */ } }
+          return r;
+        })
         .catch(() => null);
     };
   }
@@ -622,6 +635,19 @@ export async function createHost(deps) {
     profileRecord({ scope: 'card', key: c.type, answered: 1, correct });
     if (c.state) profileRecord({ scope: 'detector', key: `${c.state}:${c.basis ?? 'unknown'}`, answered: 1, correct });
     poolAdd('card_answered', c.type);
+    // Detector measurement: a detector-triggered card, or a probe on an on-pace paragraph, answered wrong (or "I don't
+    // know", or right but guessed) versus right and sure. Counts by state and detection basis; a proxy, not accuracy.
+    try {
+      const basis = ['personal_z', 'personal_ratio', 'generic'].includes(c.basis) ? c.basis : 'unknown';
+      const where = c.type === 'probe' ? `on_pace:${basis}` : c.state && ['struggling', 'drifting'].includes(c.state) ? `${c.state}:${basis}` : null;
+      const wrong = record.correct === false || record.dontKnow === true || (record.correct === true && record.confidence === 'guess');
+      const rightSure = record.correct === true && record.confidence === 'high';
+      if (where && (wrong || rightSure)) {
+        const kind = c.type === 'probe' ? 'probe' : 'flag';
+        poolAdd(`${kind}_${wrong ? 'wrong' : 'right_sure'}`, where);
+        try { decisionLog.record({ kind: 'answered', basis: c.basis ?? null, cardType: `${kind}_${wrong ? 'wrong' : 'right_sure'}` }); } catch (e) {}
+      }
+    } catch (e) {}
     cardsShown.delete(record.interventionId);
     return c.type;
   }
@@ -1292,6 +1318,7 @@ export async function createHost(deps) {
       try { decisionLog.record({ kind: 'dismissed', basis: lastShownBasis, cardType: dismissedCard }); } catch (e) {}
       try { orchestratorRef?.interventionPolicy.recordDismissal(); } catch (e) {}
     },
+    // No onKnown: the card already offers Skip and "I don't know"; a third way out made the card harder to read.
     onSnooze: (durationMs, label) => { startSnooze(durationMs, label); },
   });
 
@@ -1653,7 +1680,7 @@ export async function createHost(deps) {
       // An explanation for a paragraph built on a relationship (cause, dependence, contrast...) points the reader
       // at how the ideas connect; any other explanation, and every repair, is unchanged.
       const relate = kind !== 'repair' && hasRelationCues(text);
-      const mode = kind === 'repair' ? 'repair' : relate ? 'relate' : 'explain_more';
+      const mode = kind === 'repair' ? 'repair' : decision?.summaryMode === 'simplify' ? 'simplify' : relate ? 'relate' : 'explain_more';
       // The way of explaining is chosen from THIS learner's own results (their account profile), mostly the best so far and
       // sometimes another so the order can change. Only explain and repair have styles; with no profile there is none.
       const style = mode === 'relate' ? null : pickExplanationStyle(mode, identity.knowledgeUnitId);
@@ -2124,6 +2151,18 @@ export async function createHost(deps) {
     findParagraphAt,
     // Stage B: the server's estimate for the knowledge unit of this paragraph element, or null when there is
     // none (no assignment, no account, learner memory off, or simply no evidence yet).
+    // Alt+M: the reader marks the paragraph they are on as hard. No card now; it is weighted up for the end-of-session
+    // check (the same recall path struggles use) and counted locally. Returns true when there was a paragraph to mark.
+    markParagraph: () => {
+      try {
+        const text = currentParagraphText();
+        if (!text) return false;
+        sessionRecall.recordStruggle(text);
+        try { decisionLog.record({ kind: 'marked' }); } catch (e) {}
+        try { ui.showStatusToast(t('mark.done', uiLang())); } catch (e) {}
+        return true;
+      } catch (e) { return false; }
+    },
     learnerEstimateFor: (el) => {
       try {
         const text = el ? (el.innerText || el.textContent || '').trim() : '';

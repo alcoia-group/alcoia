@@ -10,7 +10,7 @@ const STATUS_KEY = 'sra_pool_status';
 /* The reader's own switch. Counts are sent unless this is explicitly false; turning it off also drops anything not yet sent. */
 export const SHARE_KEY = 'sra_pool_share';
 const DAY = 86400000;
-export const METRICS = ['generation_failure', 'card_shown', 'card_answered', 'card_dismissed', 'card_quick_dismissed', 'style_shown', 'style_helped', 'style_not_helped', 'card_held_back', 'transfer_result'];
+export const METRICS = ['generation_failure', 'card_shown', 'card_answered', 'card_dismissed', 'card_quick_dismissed', 'style_shown', 'style_helped', 'style_not_helped', 'card_held_back', 'transfer_result', 'flag_wrong', 'flag_right_sure', 'probe_wrong', 'probe_right_sure'];
 
 export function createPoolReporter(opts = {}) {
   const callBackend = opts.callBackend; // (action, url, body) => { ok, data }
