@@ -379,11 +379,18 @@ describe('substate (item 13a) is inert here — this file never reads it', () =>
     expect(withSubstate).toEqual(without);
   });
 
-  it('a struggling state with substate: "confusion" or "overload" is evaluated exactly the same way — this file does not branch on it', () => {
+  it('confusion and an absent substate are evaluated the same way; overload turns a question into a plainer explanation', () => {
     const base = createInterventionPolicy({ now: fixedClock().now, random: () => 0 }).evaluate(struggling());
-    for (const substate of ['confusion', 'overload', null, undefined]) {
+    for (const substate of ['confusion', null, undefined]) {
       const p = createInterventionPolicy({ now: fixedClock().now, random: () => 0 });
       expect(p.evaluate(struggling({ substate }))).toEqual(base);
+    }
+    const over = createInterventionPolicy({ now: fixedClock().now, random: () => 0 }).evaluate(struggling({ substate: 'overload' }));
+    if (base.policyAction === 'retrieve') {
+      expect(over.policyAction).toBe('explain');
+      expect(over.summaryMode).toBe('simplify');
+    } else {
+      expect(over.policyAction).toBe(base.policyAction);
     }
   });
 });

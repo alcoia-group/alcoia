@@ -199,7 +199,8 @@ export function createOutcomesManager(opts = {}) {
       const learnerEstimate = data && data.learnerEstimate && typeof data.learnerEstimate === 'object' ? data.learnerEstimate : null;
       // For a transfer check the server also says how it went: 'carried', 'retry' (one more try) or 'did_not_carry'.
       const transfer = data && ['carried', 'retry', 'did_not_carry'].includes(data.transfer) ? data.transfer : null;
-      return { ok: true, ...(learnerEstimate ? { learnerEstimate } : {}), ...(transfer ? { transfer } : {}) };
+      const thenAndNow = data && data.thenAndNow && typeof data.thenAndNow.missedAt === 'string' ? { missedAt: data.thenAndNow.missedAt } : null;
+      return { ok: true, ...(learnerEstimate ? { learnerEstimate } : {}), ...(thenAndNow ? { thenAndNow } : {}), ...(transfer ? { transfer } : {}) };
     } catch (e) {
       return { ok: false, error: 'network_error' };
     }

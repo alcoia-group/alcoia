@@ -94,11 +94,12 @@ export function createQuestionCard(deps = {}) {
     fetchGrading,       // async ({ passage, span, spanRole, question, answer, level }) => { verdict, span } — item 43
     onAnswered,         // (record) => void — hands the signal to the engine
     onDismissed,        // (record) => void
+    onKnown,            // (record) => void — "I know this": leaves without a dismissal and without credit
     onSnooze,           // (durationMs, label) => void — item 18
     onSelfReport,       // (subtype) => void — item 13a, affordance 3 (active surfacing)
   } = deps;
 
-  /* question: { q, options[4], answerIndex, explanation, span, level?, span_role? }
+  /* question: { q, options[3 or 4] (the stored question bank has three), answerIndex, explanation, span, level?, span_role? }
    * context: { evidence[], anchorRect, paragraphKey, knowledgeUnitId, interventionId,
    *            passage?, showSelfReport?, contextLine? } — item 13a:
    *            showSelfReport renders the self-report options alongside this
@@ -136,10 +137,10 @@ export function createQuestionCard(deps = {}) {
     const level = FREE_TEXT_LEVELS.includes(question.level) ? question.level : 'recognition';
 
     if (level === 'recognition') {
-      if (!Array.isArray(question.options) || question.options.length !== 4
+      if (!Array.isArray(question.options) || question.options.length < 3 || question.options.length > 4
         || question.options.some((o) => typeof o !== 'string' || !o.trim())
         || !Number.isInteger(question.answerIndex)
-        || question.answerIndex < 0 || question.answerIndex > 3
+        || question.answerIndex < 0 || question.answerIndex >= question.options.length
       ) return false;
     } else if (typeof question.span !== 'string' || !question.span.trim()) {
       return false;
@@ -224,6 +225,7 @@ export function createQuestionCard(deps = {}) {
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
         ${level !== 'adversarial' && responseSignals.dontKnow ? `<button type="button" class="sra-btn sra-btn-secondary sra-q-dontknow">${esc(L('card.dontKnow'))}</button>` : ''}
+        ${onKnown ? `<button type="button" class="sra-btn sra-btn-secondary sra-q-known">${esc(L('card.known'))}</button>` : ''}
         <button class="sra-btn sra-btn-secondary sra-q-skip">${esc(L('card.skip'))}</button>
         ${onSnooze ? `<button type="button" class="sra-q-snooze-toggle">${esc(L('card.snooze'))}</button>` : ''}
       </div>`;
@@ -251,6 +253,17 @@ export function createQuestionCard(deps = {}) {
 
     root.querySelector('.sra-close-btn').onclick = dismiss;
     root.querySelector('.sra-q-skip').onclick = dismiss;
+    // "I know this": leaves the card without counting as a dismissal (no back-off) and without any evidence credit.
+    const knownBtn = root.querySelector('.sra-q-known');
+    if (knownBtn) {
+      knownBtn.onclick = () => {
+        if (!committed) {
+          const record = responseSignals.dismiss(interventionId);
+          try { onKnown(record); } catch (e) { /* optional */ }
+        }
+        ui.closePopup(root, fingerprint);
+      };
+    }
 
     const body = root.querySelector('.sra-popup-body');
 
