@@ -623,6 +623,19 @@ export async function createHost(deps) {
     profileRecord({ scope: 'card', key: c.type, answered: 1, correct });
     if (c.state) profileRecord({ scope: 'detector', key: `${c.state}:${c.basis ?? 'unknown'}`, answered: 1, correct });
     poolAdd('card_answered', c.type);
+    // Detector measurement: a detector-triggered card, or a probe on an on-pace paragraph, answered wrong (or "I don't
+    // know", or right but guessed) versus right and sure. Counts by state and detection basis; a proxy, not accuracy.
+    try {
+      const basis = ['personal_z', 'personal_ratio', 'generic'].includes(c.basis) ? c.basis : 'unknown';
+      const where = c.type === 'probe' ? `on_pace:${basis}` : c.state && ['struggling', 'drifting'].includes(c.state) ? `${c.state}:${basis}` : null;
+      const wrong = record.correct === false || record.dontKnow === true || (record.correct === true && record.confidence === 'guess');
+      const rightSure = record.correct === true && record.confidence === 'high';
+      if (where && (wrong || rightSure)) {
+        const kind = c.type === 'probe' ? 'probe' : 'flag';
+        poolAdd(`${kind}_${wrong ? 'wrong' : 'right_sure'}`, where);
+        try { decisionLog.record({ kind: 'answered', basis: c.basis ?? null, cardType: `${kind}_${wrong ? 'wrong' : 'right_sure'}` }); } catch (e) {}
+      }
+    } catch (e) {}
     cardsShown.delete(record.interventionId);
     return c.type;
   }
