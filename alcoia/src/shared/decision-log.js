@@ -14,7 +14,7 @@
 
 const STORAGE_KEY = 'sra_decision_log';
 const MAX_ENTRIES = 300;
-const KINDS = new Set(['decision', 'shown', 'answered', 'dismissed', 'self_report']);
+const KINDS = new Set(['decision', 'shown', 'answered', 'dismissed', 'self_report', 'flag_known']);
 const URL_PATTERN = /https?:\/\/\S+/gi;
 const tag = (v, n = 40) => (v == null ? null : String(v).replace(URL_PATTERN, '').slice(0, n));
 const round2 = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
