@@ -127,6 +127,9 @@
     // Evidence pool: anonymous daily counters. The server says whether it is on; nothing is sent while it is off.
     POOL_STATUS_URL: BACKEND_ORIGIN + '/api/pool/status',
     POOL_COUNTERS_URL: BACKEND_ORIGIN + '/api/pool/counters',
+    // BETA-FEEDBACK: the short questions asked during the beta (alcoiaServer docs/beta-feedback-plan.md). Remove with the beta.
+    BETA_FEEDBACK_STATUS_URL: BACKEND_ORIGIN + '/api/beta-feedback/status',
+    BETA_FEEDBACK_URL: BACKEND_ORIGIN + '/api/beta-feedback',
     // The workspace app (workspace.alcoia.app, repo alcoiaAssignments). The
     // popup asks the server for a one-time handoff code
     // (POST ASSIGNMENTS_URL/:id/reader-handoff -> { code, expiresAt }) and

@@ -43,6 +43,7 @@ const assistantToggle          = $('assistantToggle');
 const comprehensionToggle      = $('comprehensionToggle');
 const showInterventionsToggle  = $('showInterventionsToggle');
 const showSelfReportToggle     = $('showSelfReportToggle');
+const betaQuestionsToggle      = $('betaQuestionsToggle'); // BETA-FEEDBACK
 const selToggle                = $('selToggle');
 const highlightToggle          = $('highlightToggle');
 const highlightColorToggle     = $('highlightColorToggle');
@@ -74,7 +75,7 @@ const DEFAULTS = {
   sra_autohide: false, sra_autohide_timeout: 12,
   sra_pin_default: false, sra_debug: false, sra_enabled: true,
   sra_comprehension: true,
-  sra_show_interventions: true, sra_show_self_report: true,
+  sra_show_interventions: true, sra_show_self_report: true, sra_beta_questions: true, // BETA-FEEDBACK
   sra_dyslexia: false, sra_dyslexia_color: 'rgba(255,243,180,0.12)',
   sra_dark_mode: false,
   sra_pdf_takeover: true,
@@ -86,6 +87,7 @@ function paint(res) {
   comprehensionToggle.checked = res.sra_comprehension !== false;
   showInterventionsToggle.checked = res.sra_show_interventions !== false;
   showSelfReportToggle.checked    = res.sra_show_self_report !== false;
+  if (betaQuestionsToggle) betaQuestionsToggle.checked = res.sra_beta_questions !== false; // BETA-FEEDBACK
   selToggle.checked           = res.sra_selection !== false;
   highlightToggle.checked     = res.sra_highlight_para !== false;
   highlightColorToggle.checked     = res.sra_highlight_color !== false;
@@ -139,6 +141,7 @@ function saveAndBroadcast() {
     sra_comprehension:    comprehensionToggle.checked,
     sra_show_interventions: showInterventionsToggle.checked,
     sra_show_self_report:   showSelfReportToggle.checked,
+    ...(betaQuestionsToggle ? { sra_beta_questions: betaQuestionsToggle.checked } : {}), // BETA-FEEDBACK
     sra_dyslexia:         dyslexiaToggle.checked,
     sra_dyslexia_color:   dyslexiaColorSelect.value,
     sra_dark_mode:        darkModeToggle.checked,
@@ -247,6 +250,7 @@ highlightPersistToggle.addEventListener('change', () => {
  debugToggle, comprehensionToggle, darkModeToggle,
  showInterventionsToggle, showSelfReportToggle]
   .forEach((el) => el.addEventListener('change', saveAndBroadcast));
+betaQuestionsToggle?.addEventListener('change', saveAndBroadcast); // BETA-FEEDBACK
 [autohideTimeout, dyslexiaColorSelect]
   .forEach((el) => el.addEventListener('change', saveAndBroadcast));
 
