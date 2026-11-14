@@ -80,7 +80,7 @@ export function createOutcomesManager(opts = {}) {
   async function submit({
     paragraphIndex, struggled, questionId, correct, confidence, reached,
     substate, selfReported, source, selectedAnswer, explanationPrecededAttempt,
-    knowledgeUnitId, interventionId, questionLevel, transferCheck,
+    knowledgeUnitId, interventionId, questionLevel, transferCheck, dontKnow, misconception,
   } = {}) {
     if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) {
       return { ok: false, error: 'invalid_paragraph_index' };
@@ -97,7 +97,9 @@ export function createOutcomesManager(opts = {}) {
     if (typeof struggled === 'boolean') body.struggled = struggled;
     if (typeof questionId === 'string' && questionId) body.question_id = questionId;
     if (typeof correct === 'boolean') body.correct = correct;
-    if (confidence === 'low' || confidence === 'high') body.confidence = confidence;
+    // 'guess' is the card's "Guessing" choice; "I don't know" carries no confidence and no verdict.
+    if (dontKnow === true && body.question_id && body.correct === undefined) body.dont_know = true;
+    else if (confidence === 'low' || confidence === 'high' || confidence === 'guess') body.confidence = confidence;
     if (typeof reached === 'boolean') body.reached = reached;
 
     // A real classification: sent as-is, and self_reported rides with it
@@ -128,6 +130,7 @@ export function createOutcomesManager(opts = {}) {
     // directly) — sent through as given, not coerced to a string here.
     if (typeof selectedAnswer === 'string' || typeof selectedAnswer === 'number') {
       body.selected_answer = selectedAnswer;
+      if (body.correct === false && typeof misconception === 'string' && misconception.trim().length >= 3) body.misconception = misconception.trim().slice(0, 160);
     } else if (selectedAnswer === null) {
       body.selected_answer = null;
     }
@@ -196,7 +199,8 @@ export function createOutcomesManager(opts = {}) {
       const learnerEstimate = data && data.learnerEstimate && typeof data.learnerEstimate === 'object' ? data.learnerEstimate : null;
       // For a transfer check the server also says how it went: 'carried', 'retry' (one more try) or 'did_not_carry'.
       const transfer = data && ['carried', 'retry', 'did_not_carry'].includes(data.transfer) ? data.transfer : null;
-      return { ok: true, ...(learnerEstimate ? { learnerEstimate } : {}), ...(transfer ? { transfer } : {}) };
+      const thenAndNow = data && data.thenAndNow && typeof data.thenAndNow.missedAt === 'string' ? { missedAt: data.thenAndNow.missedAt } : null;
+      return { ok: true, ...(learnerEstimate ? { learnerEstimate } : {}), ...(thenAndNow ? { thenAndNow } : {}), ...(transfer ? { transfer } : {}) };
     } catch (e) {
       return { ok: false, error: 'network_error' };
     }

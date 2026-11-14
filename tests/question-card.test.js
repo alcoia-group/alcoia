@@ -230,12 +230,23 @@ describe('keyword highlighting', () => {
     const card = createQuestionCard({
       ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
     });
-    card.show(QUESTION);
+    card.show({ ...QUESTION, explanation: 'The relationship holds, but it weakens as the measurement apparatus becomes cheaper and noisier than laboratory equipment.' });
     pick(ui.root, 1);
     rate(ui.root, null);
 
     const result = ui.root.querySelector('.sra-q-result');
     expect(result.innerHTML).toContain('class="sra-term"');
+  });
+
+  it('marks nothing in a one-line explanation (too short for emphasis)', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({
+      ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {},
+    });
+    card.show(QUESTION);
+    pick(ui.root, 1);
+    rate(ui.root, null);
+    expect(ui.root.querySelector('.sra-q-result').innerHTML).not.toContain('class="sra-term"');
   });
 
   it('never highlights anything on a correct answer', () => {
@@ -1115,5 +1126,42 @@ describe('contextLineFor', () => {
   });
   it('uses no label words', () => {
     expect(contextLineFor('Some words here about things')).not.toMatch(/quick check|review|retrieval|from earlier/i);
+  });
+});
+
+
+describe('stored question bank items have three options', () => {
+  const THREE = { ...QUESTION, options: ['Right answer', 'Wrong one', 'Also wrong'] };
+  it('a three-option question is shown, and answering it reports the answer', () => {
+    const ui = fakeUI();
+    const onAnswered = vi.fn();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed: () => {} });
+    expect(card.show(THREE)).not.toBe(false);
+    expect(ui.root.querySelectorAll('.sra-q-option').length).toBe(3);
+    pick(ui.root, 0);
+    rate(ui.root, 'high');
+    expect(onAnswered).toHaveBeenCalled();
+  });
+  it('a question with two options or an answer index beyond its options is refused', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {} });
+    expect(card.show({ ...THREE, options: ['a', 'b'] })).toBe(false);
+    expect(card.show({ ...THREE, answerIndex: 3 })).toBe(false);
+  });
+});
+
+describe('"I know this"', () => {
+  it('leaves the card with no dismissal and no answer; absent when the host gives no handler', () => {
+    const ui = fakeUI();
+    const onDismissed = vi.fn(); const onAnswered = vi.fn(); const onKnown = vi.fn();
+    createQuestionCard({ ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed, onKnown }).show(QUESTION);
+    ui.root.querySelector('.sra-q-known').click();
+    expect(onKnown).toHaveBeenCalledTimes(1);
+    expect(onDismissed).not.toHaveBeenCalled();
+    expect(onAnswered).not.toHaveBeenCalled();
+
+    const ui2 = fakeUI();
+    createQuestionCard({ ui: ui2, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {} }).show(QUESTION);
+    expect(ui2.root.querySelector('.sra-q-known')).toBeNull();
   });
 });

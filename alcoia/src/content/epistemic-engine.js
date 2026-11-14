@@ -157,7 +157,11 @@ function matchesConcept(record, identity) {
  * its quiz generation path (runQuiz) — the "same engine, same rules"
  * requirement is satisfied structurally, by both calling this one function,
  * not by two hand-written copies that could drift apart. */
-export function pickLevelForConcept(identity, history = []) {
+// `startLevel` (optional): where to start when this concept has no graded attempt this session. It comes from the
+// server's estimate of what the learner has already shown (an applied or recalled answer on this paragraph or on its
+// concept elsewhere). Recognition, free recall or scenario only: the challenge step is always earned in the session.
+const START_LEVELS = new Set(['recognition', 'free_recall', 'scenario']);
+export function pickLevelForConcept(identity, history = [], { startLevel = null } = {}) {
   const graded = (history || []).filter((h) => h && h.subtype !== 'dismissed');
 
   const attemptsForConcept = graded.filter((h) => matchesConcept(h, identity));
@@ -167,6 +171,7 @@ export function pickLevelForConcept(identity, history = []) {
 
   const sessionAnswers = graded.map((h) => ({ confidence: h.confidence, correct: h.correct }));
 
+  if (!lastAttempt && START_LEVELS.has(startLevel)) return startLevel;
   return nextLevel(lastAttempt ? { level: lastAttempt.level, correct: lastAttempt.correct } : null, sessionAnswers);
 }
 
