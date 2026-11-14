@@ -94,6 +94,7 @@ export function createQuestionCard(deps = {}) {
     fetchGrading,       // async ({ passage, span, spanRole, question, answer, level }) => { verdict, span } — item 43
     onAnswered,         // (record) => void — hands the signal to the engine
     onDismissed,        // (record) => void
+    onKnown,            // (record) => void — "I know this": leaves without a dismissal and without credit
     onSnooze,           // (durationMs, label) => void — item 18
     onSelfReport,       // (subtype) => void — item 13a, affordance 3 (active surfacing)
   } = deps;
@@ -224,6 +225,7 @@ export function createQuestionCard(deps = {}) {
       <div class="sra-popup-divider"></div>
       <div class="sra-actions">
         ${level !== 'adversarial' && responseSignals.dontKnow ? `<button type="button" class="sra-btn sra-btn-secondary sra-q-dontknow">${esc(L('card.dontKnow'))}</button>` : ''}
+        ${onKnown ? `<button type="button" class="sra-btn sra-btn-secondary sra-q-known">${esc(L('card.known'))}</button>` : ''}
         <button class="sra-btn sra-btn-secondary sra-q-skip">${esc(L('card.skip'))}</button>
         ${onSnooze ? `<button type="button" class="sra-q-snooze-toggle">${esc(L('card.snooze'))}</button>` : ''}
       </div>`;
@@ -251,6 +253,17 @@ export function createQuestionCard(deps = {}) {
 
     root.querySelector('.sra-close-btn').onclick = dismiss;
     root.querySelector('.sra-q-skip').onclick = dismiss;
+    // "I know this": leaves the card without counting as a dismissal (no back-off) and without any evidence credit.
+    const knownBtn = root.querySelector('.sra-q-known');
+    if (knownBtn) {
+      knownBtn.onclick = () => {
+        if (!committed) {
+          const record = responseSignals.dismiss(interventionId);
+          try { onKnown(record); } catch (e) { /* optional */ }
+        }
+        ui.closePopup(root, fingerprint);
+      };
+    }
 
     const body = root.querySelector('.sra-popup-body');
 

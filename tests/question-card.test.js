@@ -1138,3 +1138,19 @@ describe('stored question bank items have three options', () => {
     expect(card.show({ ...THREE, answerIndex: 3 })).toBe(false);
   });
 });
+
+describe('"I know this"', () => {
+  it('leaves the card with no dismissal and no answer; absent when the host gives no handler', () => {
+    const ui = fakeUI();
+    const onDismissed = vi.fn(); const onAnswered = vi.fn(); const onKnown = vi.fn();
+    createQuestionCard({ ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed, onKnown }).show(QUESTION);
+    ui.root.querySelector('.sra-q-known').click();
+    expect(onKnown).toHaveBeenCalledTimes(1);
+    expect(onDismissed).not.toHaveBeenCalled();
+    expect(onAnswered).not.toHaveBeenCalled();
+
+    const ui2 = fakeUI();
+    createQuestionCard({ ui: ui2, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {} }).show(QUESTION);
+    expect(ui2.root.querySelector('.sra-q-known')).toBeNull();
+  });
+});

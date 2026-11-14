@@ -1293,6 +1293,9 @@ export async function createHost(deps) {
       try { decisionLog.record({ kind: 'dismissed', basis: lastShownBasis, cardType: dismissedCard }); } catch (e) {}
       try { orchestratorRef?.interventionPolicy.recordDismissal(); } catch (e) {}
     },
+    onKnown: (record) => {
+      try { decisionLog.record({ kind: 'flag_known', basis: lastShownBasis, cardType: record?.interventionId ? noteCardDismissed(record) : null }); } catch (e) {}
+    },
     onSnooze: (durationMs, label) => { startSnooze(durationMs, label); },
   });
 
