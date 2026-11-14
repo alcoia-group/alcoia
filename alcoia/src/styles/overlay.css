@@ -210,7 +210,14 @@
   font-size: 11px;
   color: var(--alc-muted);
   margin: 0 0 6px;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
+.sra-self-report-options[hidden] { display: none; }
 .sra-self-report-options { display: flex; flex-wrap: wrap; gap: 6px; }
 .sra-self-report-btn {
   padding: 5px 10px;
@@ -473,7 +480,7 @@
    carries no distinct color either (plain text, same as this) — this system
    never uses alarming styling for a wrong or inconclusive answer, at any
    level. */
-.sra-q-result-unknown, .sra-q-result-responded { color: var(--alc-muted); }
+.sra-q-result-unknown, .sra-q-result-responded, .sra-q-result-dontknow { color: var(--alc-muted); }
 .sra-q-check { margin-right: 5px; font-weight: 700; }
 .sra-q-span {
   margin-top: 9px;

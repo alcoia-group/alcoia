@@ -495,6 +495,13 @@ async function boot() {
         return;
       }
 
+      // Alt+M: mark the paragraph you are on as hard (no card now; offered in the end-of-session check)
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        try { hostApi.host.markParagraph(); } catch (err) { /* optional */ }
+        return;
+      }
+
       // Alt+I: show the reading receipt for this session
       if (e.key === 'i' || e.key === 'I') {
         e.preventDefault();

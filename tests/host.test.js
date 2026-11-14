@@ -965,6 +965,17 @@ describe('onIntervention — the 12-callback surface, branching', () => {
   });
 });
 
+describe('mark a paragraph (Alt+M)', () => {
+  it('marks the current paragraph with no card, and says so; nothing to mark gives false', async () => {
+    document.body.innerHTML = '<p id="t">A paragraph long enough to count as read, with plenty of words so that it could be offered again at the end of a reading session if the reader asked.</p>';
+    const { host } = await createHost(baseDeps()); const markParagraph = () => host.markParagraph();
+    expect(markParagraph()).toBe(false); // no current paragraph yet
+    host.setCurrentParagraph({ type: 'dom', data: document.getElementById('t') });
+    expect(markParagraph()).toBe(true);
+    expect(document.querySelector('.sra-question-card, .sra-q-text')).toBeNull(); // no card is shown in response
+  });
+});
+
 describe('the host surface, structurally', () => {
   it('exposes exactly what orchestrator.js destructures', async () => {
     const { host } = await createHost(baseDeps());
@@ -1181,6 +1192,27 @@ describe('outcome reporting to the server (item S6/E4 follow-up)', () => {
     expect(out.question_id).toBe('q-variety span two');
     expect(out.correct).toBe(true);
     expect(out.selected_answer).toBe(2); // the original position of b3, whatever position it was shown at
+  });
+
+  it('shuffled options keep their own misunderstanding label: the label sent is the one for the option the student chose', async () => {
+    const bodies = [];
+    const fetchImpl = vi.fn((url, options) => { bodies.push(JSON.parse(options.body)); return { ok: true, status: 200, data: { recorded: true } }; });
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => cb({ ok: true, data: { questions: [
+      { id: 'qm', q: 'Which?', options: ['right', 'wrong-a', 'wrong-b', 'wrong-c'], mistakes: ['', 'mix-up A', 'mix-up B', 'mix-up C'], answerIndex: 0, explanation: 'e', span: 'mistake label span' },
+    ] } });
+    mockProxyFetch(fetchImpl);
+    const { host } = await createHost(assignmentDeps({ random: () => 0.99 }));
+    document.body.innerHTML = '<p id="t">A paragraph with enough text in it to pass the length floor fetchQuestions enforces before it will even try to generate a question about it at all.</p>';
+    expect(await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'), 3)).toBe(true);
+    const options = [...document.querySelectorAll('*')].flatMap((n) => (n.shadowRoot ? [...n.shadowRoot.querySelectorAll('.sra-q-option')] : []));
+    expect(options.map((o) => o.textContent.trim()).join('|')).not.toMatch(/^.*right.*\|.*wrong-a.*\|.*wrong-b.*\|.*wrong-c/);
+    options.find((o) => o.textContent.includes('wrong-b')).click();
+    queryAlcoia('.sra-q-conf-btn[data-conf="high"]').click();
+    await vi.waitFor(() => expect(bodies.some((b) => b.correct === false)).toBe(true));
+    const out = bodies.find((b) => b.correct === false);
+    expect(out.selected_answer).toBe(2);
+    expect(out.misconception).toBe('mix-up B');
   });
 
   it('an incorrect answer sends correct: false explicitly, not omitted', async () => {
@@ -3423,6 +3455,33 @@ describe('explain / repair generation (Learning Intelligence step 24)', () => {
     });
   });
 
+  describe('several versions of one explanation (assigned readings)', () => {
+    const P = 'Photosynthesis converts light energy into chemical energy, stored as glucose inside the chloroplast of plant cells.';
+    it('asks for three versions in one call and shows one of them, chosen on the device', async () => {
+      const bodies = [];
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+      globalThis.__sendMessageImpl = (msg, cb) => {
+        if (msg?.body) bodies.push(msg.body);
+        cb({ ok: true, data: { summary: 'Version one of the plant explanation.', variants: ['Version one of the plant explanation.', 'Version two of the plant explanation.', 'Version three of the plant explanation.'] } });
+      };
+      mockProxyFetch(vi.fn(() => ({ ok: true, status: 200, data: {} })));
+      const { host } = await createHost(baseDeps({ assignmentId: 'assign-42', getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 999_999 }), random: () => 0.99 }));
+      document.body.innerHTML = `<p id="v">${P}</p>`;
+      expect(await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_v1' }, {}, document.getElementById('v'), 2)).toBe(true);
+      expect(bodies.find((b) => b.mode === 'explain_more')?.variants).toBe(3);
+      expect(queryAlcoia('.sra-q-explain')?.textContent).toBe('Version three of the plant explanation.');
+    });
+    it('does not ask for versions outside an assigned reading', async () => {
+      const bodies = [];
+      chrome.runtime.sendMessage = vi.fn((msg, cb) => { bodies.push(msg.body); cb({ ok: true, data: { summary: 'One explanation of the plant.' } }); });
+      document.body.innerHTML = `<p id="v">${P}</p>`;
+      const { host } = await createHost(baseDeps());
+      expect(await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_v2' }, {}, document.getElementById('v'), 2)).toBe(true);
+      expect(bodies[0].variants).toBeUndefined();
+      expect(queryAlcoia('.sra-q-explain')?.textContent).toBe('One explanation of the plant.');
+    });
+  });
+
   describe('policy -> generation mapping', () => {
     it('policyAction "explain" calls the summarize endpoint with mode "explain_more", never the questions endpoint', async () => {
       const calls = captureRelay();
@@ -3794,6 +3853,22 @@ describe('learner estimates reach the reading decisions (Stage B)', () => {
     expect(hit[0].options.headers.Authorization).toBe('Bearer tok-1');
     expect(host.learnerEstimateFor(document.getElementById('p1'))).toMatchObject({ action: 'abstain', level: 'established' });
     expect(host.learnerEstimateFor(document.getElementById('p2'))).toBeNull(); // multiple concepts: no bleed
+  });
+
+  it('a paragraph with no answer this session starts the question ladder where the server says the learner already is', async () => {
+    vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL, QUESTION_LEVELS_SUPPORTED: ['recognition', 'free_recall', 'scenario', 'adversarial'] });
+    const asked = [];
+    globalThis.__sendMessageImpl = (msg, cb) => { if (msg?.body && 'count' in msg.body) asked.push(msg.body.level ?? 'none'); cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } }); };
+    const id1 = await unitId(P1);
+    server({ estimates: [est(id1, { level: 'progressing', action: 'gather', reason: 'unconfirmed', startLevel: 'free_recall' })] });
+    const { host } = await createHost(deps());
+    expect(host.learnerEstimateFor(document.getElementById('p1')).startLevel).toBe('free_recall');
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('p1'), 1);
+    queryAlcoia('.sra-q-skip').click();
+    await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('p2'), 2);
+    expect(asked).toHaveLength(2);
+    expect(asked[0]).toBe('free_recall');
+    expect(asked[1]).toBe('none'); // no estimate for the other paragraph: the usual start (recognition is sent as no level)
   });
 
   it('a failed or unavailable estimates fetch means no estimate at all (the normal behaviour), never a made-up one', async () => {

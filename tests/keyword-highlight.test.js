@@ -87,7 +87,7 @@ describe('renderHighlightedExplanation', () => {
   });
 
   it('wraps qualifying terms in the escaped output', () => {
-    const text = 'The measurement apparatus in the laboratory was noisy and imprecise.';
+    const text = 'The measurement apparatus in the laboratory was noisy and imprecise, so readings drifted badly.';
     const html = renderHighlightedExplanation(text, esc);
     expect(html).toContain('<span class="sra-term">');
     expect(html).not.toContain('<script');
