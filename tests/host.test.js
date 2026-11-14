@@ -3969,6 +3969,65 @@ describe('scheduled quick checks (probes)', () => {
     expect(JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body).type).toBe('probe');
   });
 
+  // BETA-FEEDBACK: remove this test with the beta.
+  it('at the end of a reading asks the beta question and sends which card came at a bad time and what triggered it', async () => {
+    vi.stubGlobal('ALCOIA_CONFIG', { ...globalThis.ALCOIA_CONFIG, BETA_FEEDBACK_STATUS_URL: 'https://api.test.invalid/api/beta-feedback/status', BETA_FEEDBACK_URL: 'https://api.test.invalid/api/beta-feedback' });
+    const { calls } = setup();
+    mockProxyFetch(vi.fn((url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith('/beta-feedback/status')) return { ok: true, status: 200, data: { open: true } };
+      return { ok: true, status: 200, data: { candidates: [], estimates: [], recorded: true } };
+    }));
+    const host = await build();
+    for (let i = 0; i < 5; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    queryAlcoia('.sra-close-btn').click();
+    host.onQuizOfferEligible({ key: 'doc' });
+    await vi.waitFor(() => expect(queryAlcoia('.sra-quiz-start-btn')).not.toBeNull());
+    queryAlcoia('.sra-quiz-start-btn').closest('.sra-popup, [class*="popup"]')?.querySelector('.sra-q-skip')?.click()
+      ?? queryAllAlcoia('.sra-q-skip').at(-1).click();
+    await vi.waitFor(() => expect(queryAlcoia('.sra-beta-tag')).not.toBeNull());
+    expect(queryAlcoia('.sra-q-text').textContent).toMatch(/interrupt you at a bad time/);
+    queryAlcoia('[data-a="yes"]').click();
+    const first = queryAllAlcoia('.sra-beta-choice')[0];
+    expect(first.textContent).toMatch(/Quick check/);
+    first.click();
+    queryAllAlcoia('.sra-beta-choice')[0].click(); // "I was reading fine"
+    queryAlcoia('.sra-beta-note').value = 'I was in the middle of a sentence';
+    queryAlcoia('.sra-beta-send').click();
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/api/beta-feedback') && c.options?.method === 'POST')).toBe(true));
+    const body = JSON.parse(calls.find((c) => c.url.endsWith('/api/beta-feedback')).options.body);
+    expect(body).toMatchObject({ surface: 'extension', kind: 'wrong_moment', answer: 'yes', assignmentId: 'assign-42', note: 'I was in the middle of a sentence', details: { cardType: 'probe', policyAction: 'retrieve', situation: 'reading_fine' } });
+    expect(typeof body.knowledgeUnitId).toBe('string');
+    expect(JSON.stringify(body)).not.toMatch(/Paragraph number/); // the card's words stay on the device
+    expect(queryAlcoia('.sra-q-text').textContent).toMatch(/Thank you/);
+  });
+
+  it('does not ask the beta question when the reader turned beta questions off, or when nothing was shown', async () => {
+    vi.stubGlobal('ALCOIA_CONFIG', { ...globalThis.ALCOIA_CONFIG, BETA_FEEDBACK_STATUS_URL: 'https://api.test.invalid/api/beta-feedback/status', BETA_FEEDBACK_URL: 'https://api.test.invalid/api/beta-feedback' });
+    setup();
+    mockProxyFetch(vi.fn((url) => (url.endsWith('/status') ? { ok: true, status: 200, data: { open: true } } : { ok: true, status: 200, data: { candidates: [], estimates: [] } })));
+    const quiet = await build();
+    quiet.onQuizOfferEligible({ key: 'doc' });
+    await vi.waitFor(() => expect(queryAlcoia('.sra-quiz-start-btn')).not.toBeNull());
+    queryAlcoia('.sra-quiz-start-btn').closest('.sra-popup, [class*="popup"]')?.querySelector('.sra-q-skip')?.click()
+      ?? queryAllAlcoia('.sra-q-skip').at(-1).click();
+    await new Promise((r) => setTimeout(r, 600));
+    expect(queryAlcoia('.sra-beta-tag')).toBeNull(); // no card was shown on this page
+    document.body.innerHTML = '';
+    chrome.storage.local.set({ sra_beta_questions: false });
+    const host = await build();
+    for (let i = 0; i < 5; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    queryAlcoia('.sra-close-btn').click();
+    host.onQuizOfferEligible({ key: 'doc2' });
+    await vi.waitFor(() => expect(queryAlcoia('.sra-quiz-start-btn')).not.toBeNull());
+    queryAlcoia('.sra-quiz-start-btn').closest('.sra-popup, [class*="popup"]')?.querySelector('.sra-q-skip')?.click()
+      ?? queryAllAlcoia('.sra-q-skip').at(-1).click();
+    await new Promise((r) => setTimeout(r, 600));
+    expect(queryAlcoia('.sra-beta-tag')).toBeNull();
+  });
+
   it('asks about a paragraph chosen at random from those already read, not the one just read', async () => {
     for (const [r, expectedIndex] of [[0, 0], [0.5, 2], [0.999, 4]]) {
       document.body.innerHTML = '';
