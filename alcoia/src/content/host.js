@@ -147,7 +147,11 @@ export async function createHost(deps) {
       // memory-off submission simply leaves the unit without an estimate, i.e. the normal behaviour.
       if (fields.knowledgeUnitId && fields.questionId) learnerEstimates.delete(fields.knowledgeUnitId);
       return outcomesManager.submit(fields)
-        .then((r) => { if (r && r.learnerEstimate) noteLearnerEstimate(r.learnerEstimate); return r; })
+        .then((r) => {
+          if (r && r.learnerEstimate) noteLearnerEstimate(r.learnerEstimate);
+          if (r && r.thenAndNow && r.thenAndNow.missedAt) { try { ui.addNoteToQuestionCard(t('then.line', uiLang(), { date: r.thenAndNow.missedAt })); } catch (e) { /* the note is optional */ } }
+          return r;
+        })
         .catch(() => null);
     };
   }
