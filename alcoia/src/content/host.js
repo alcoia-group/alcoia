@@ -1670,7 +1670,7 @@ export async function createHost(deps) {
       // An explanation for a paragraph built on a relationship (cause, dependence, contrast...) points the reader
       // at how the ideas connect; any other explanation, and every repair, is unchanged.
       const relate = kind !== 'repair' && hasRelationCues(text);
-      const mode = kind === 'repair' ? 'repair' : relate ? 'relate' : 'explain_more';
+      const mode = kind === 'repair' ? 'repair' : decision?.summaryMode === 'simplify' ? 'simplify' : relate ? 'relate' : 'explain_more';
       // The way of explaining is chosen from THIS learner's own results (their account profile), mostly the best so far and
       // sometimes another so the order can change. Only explain and repair have styles; with no profile there is none.
       const style = mode === 'relate' ? null : pickExplanationStyle(mode, identity.knowledgeUnitId);
