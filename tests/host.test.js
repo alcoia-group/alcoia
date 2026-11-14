@@ -965,6 +965,17 @@ describe('onIntervention — the 12-callback surface, branching', () => {
   });
 });
 
+describe('mark a paragraph (Alt+M)', () => {
+  it('marks the current paragraph with no card, and says so; nothing to mark gives false', async () => {
+    document.body.innerHTML = '<p id="t">A paragraph long enough to count as read, with plenty of words so that it could be offered again at the end of a reading session if the reader asked.</p>';
+    const { host } = await createHost(baseDeps()); const markParagraph = () => host.markParagraph();
+    expect(markParagraph()).toBe(false); // no current paragraph yet
+    host.setCurrentParagraph({ type: 'dom', data: document.getElementById('t') });
+    expect(markParagraph()).toBe(true);
+    expect(document.querySelector('.sra-question-card, .sra-q-text')).toBeNull(); // no card is shown in response
+  });
+});
+
 describe('the host surface, structurally', () => {
   it('exposes exactly what orchestrator.js destructures', async () => {
     const { host } = await createHost(baseDeps());
