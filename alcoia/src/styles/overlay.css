@@ -210,7 +210,14 @@
   font-size: 11px;
   color: var(--alc-muted);
   margin: 0 0 6px;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
+.sra-self-report-options[hidden] { display: none; }
 .sra-self-report-options { display: flex; flex-wrap: wrap; gap: 6px; }
 .sra-self-report-btn {
   padding: 5px 10px;

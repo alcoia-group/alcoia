@@ -201,8 +201,8 @@ export function createQuestionCard(deps = {}) {
     // separate signals about two separate things.
     const selfReport = context.showSelfReport && onSelfReport
       ? `<div class="sra-self-report-inline">
-          <div class="sra-self-report-prompt">${esc(L('sr.prompt'))}</div>
-          <div class="sra-self-report-options">
+          <button type="button" class="sra-self-report-prompt" aria-expanded="false">${esc(L('sr.prompt'))}</button>
+          <div class="sra-self-report-options" hidden>
             <button type="button" class="sra-self-report-btn" data-self-report="overload">${esc(L('sr.overload'))}</button>
             <button type="button" class="sra-self-report-btn" data-self-report="confusion">${esc(L('sr.confusion'))}</button>
             <button type="button" class="sra-self-report-btn" data-self-report="disengaged">${esc(L('sr.disengaged'))}</button>
@@ -231,6 +231,10 @@ export function createQuestionCard(deps = {}) {
       </div>`;
 
     if (selfReport) {
+      // The three "how it feels" choices stay folded behind their prompt, so the card leads with the question.
+      const prompt = root.querySelector('.sra-self-report-prompt');
+      const opts = root.querySelector('.sra-self-report-options');
+      prompt.onclick = () => { opts.hidden = !opts.hidden; prompt.setAttribute('aria-expanded', String(!opts.hidden)); };
       for (const btn of root.querySelectorAll('[data-self-report]')) {
         btn.onclick = () => {
           onSelfReport(btn.dataset.selfReport);
@@ -319,6 +323,7 @@ export function createQuestionCard(deps = {}) {
     }
 
     function finish() {
+      root.querySelector('.sra-q-dontknow')?.remove(); // answered: "I don't know" no longer applies
       const skip = root.querySelector('.sra-q-skip');
       if (skip) { skip.textContent = L('card.close'); skip.onclick = () => ui.closePopup(root, fingerprint); }
     }
