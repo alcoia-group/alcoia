@@ -31,6 +31,7 @@
     autohide: 'sra_autohide',
     autohide_timeout: 'sra_autohide_timeout',
     highlight_color: 'sra_highlight_color',
+    beta_questions: 'sra_beta_questions', // BETA-FEEDBACK
   });
   const STORAGE_TO_SETTING = Object.fromEntries(Object.entries(SETTING_KEYS).map(([a, b]) => [b, a]));
   const BASELINE_KEYS = ['sra_baseline_wpm', 'sra_baseline_wpm_by_lang'];

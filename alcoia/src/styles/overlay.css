@@ -921,3 +921,16 @@
 
 /* The card says it is about the sentence marked on the page (key-terms.js centralSentence). */
 .sra-q-about { font-size: 12px; opacity: .75; margin-bottom: 4px; }
+
+/* BETA-FEEDBACK (start): the beta question card. Remove this block when the beta ends. */
+.sra-beta-tag { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: #6b5a8e; margin-bottom: 6px; }
+.sra-beta-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.sra-beta-choice { text-align: left; font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid #d8d3cb; border-radius: 6px; background: #fff; color: #2d2a26; cursor: pointer; }
+.sra-beta-choice:hover { background: #f4f1ec; }
+.sra-beta-choice[aria-pressed="true"] { border-color: #6b5a8e; background: #f1edf7; }
+.sra-beta-choice span { color: #5b564f; }
+.sra-beta-choice em { font-style: normal; color: #8a847b; font-size: 12px; }
+.sra-beta-note-label { display: block; margin-top: 10px; font-size: 12px; color: #5b564f; }
+.sra-beta-note { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid #d8d3cb; border-radius: 6px; resize: vertical; }
+.sra-beta-off { display: block; margin: 8px 0 0; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: #8a847b; text-decoration: underline; cursor: pointer; }
+/* BETA-FEEDBACK (end) */

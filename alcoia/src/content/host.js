@@ -80,6 +80,8 @@ export async function createHost(deps) {
     // Picks the paragraph a scheduled quick check asks about (0 <= x < 1). Injectable for tests.
     random = Math.random,
     getSession = null,
+    // BETA-FEEDBACK: which product is asking ('extension' or 'workspace').
+    surface = 'extension',
     // Item DC-2's passive prerequisite-gap flag. Defaults to reporting
     // "unknown" (undefined), not false — a caller that never passed this
     // dependency at all (every caller before this item existed) has not
@@ -310,6 +312,7 @@ export async function createHost(deps) {
       // (a 'focus' card is an ordinary 'ask' on the wire).
       try { noteCardShown(args[0], args[6] || (args[3] === 'ask' ? (args[5] === 'repair' ? 'repair' : args[5] === 'explain' ? 'explain' : 'ask') : args[3])); } catch (e) { /* never blocks reporting */ }
       try { if (args[1]) helpedUnits.add(args[1]); } catch (e) { /* never blocks reporting */ }
+      try { betaFeedback?.noteCard(args[0], { type: args[6] || (args[3] === 'ask' ? (args[5] === 'repair' || args[5] === 'explain' ? 'explain' : 'ask') : args[3]), policyAction: args[5], unitId: args[1], text: args[4] }); } catch (e) { /* BETA-FEEDBACK */ }
       return baseReport(...args);
     };
   }
@@ -602,6 +605,8 @@ export async function createHost(deps) {
   // type, and, when the SERVER says the evidence pool is on, into anonymous daily counters (pool-counters.js).
   const QUICK_DISMISS_MS = 4000;
   const cardsShown = new Map(); // interventionId -> { type, at, state, basis }
+  let betaFeedback = null; // BETA-FEEDBACK
+  let betaLabels = null; // BETA-FEEDBACK
   let lastCardId = null;
   let policyProfileManager = null;
   let styleModule = null;
@@ -668,6 +673,7 @@ export async function createHost(deps) {
     if (!c || !state) return;
     c.state = state;
     c.basis = basis ?? null;
+    try { betaFeedback?.noteDetector(lastCardId, state, basis); } catch (e) { /* BETA-FEEDBACK */ }
     profileRecord({ scope: 'detector', key: `${state}:${basis ?? 'unknown'}`, shown: 1 });
   }
   // The reader said they were struggling while the detector saw nothing: a missed detection (a proxy, not a measure).
@@ -743,6 +749,99 @@ export async function createHost(deps) {
     try { if (visibilityHandler) document.removeEventListener('visibilitychange', visibilityHandler); } catch (err) {}
     visibilityHandler = null;
   }
+
+  // BETA-FEEDBACK (start): the beta question asked once at the end of a reading. Remove this block, the
+  // betaFeedback calls marked BETA-FEEDBACK above and below, and src/shared/beta-feedback.js when the beta ends.
+  try {
+    const betaModule = await loadModule('src/shared/beta-feedback.js');
+    const betaSessionModule = await loadModule('src/shared/session.js');
+    const betaProxy = await loadModule('src/shared/proxy-fetch.js');
+    betaFeedback = betaModule.createBetaFeedback({
+      getSession: getSession || betaSessionModule.createSessionManager().getSession,
+      fetchImpl: betaProxy.backgroundFetchImpl,
+      statusUrl: self.ALCOIA_CONFIG.BETA_FEEDBACK_STATUS_URL,
+      postUrl: self.ALCOIA_CONFIG.BETA_FEEDBACK_URL,
+      surface,
+      assignmentId,
+    });
+    betaLabels = { cards: betaModule.CARD_LABEL, situations: betaModule.SITUATIONS };
+  } catch (e) { betaFeedback = null; }
+
+  async function maybeAskBeta() {
+    try {
+      if (!betaFeedback || !s().assistantEnabled || !(await betaFeedback.shouldAsk())) return;
+      showBetaQuestion();
+    } catch (e) { /* a beta question never gets in the way */ }
+  }
+
+  function showBetaQuestion() {
+    const fingerprint = 'beta-question';
+    const root = reservePopup(fingerprint);
+    if (!root) return;
+    betaFeedback.markAsked();
+    const close = () => closePopup(root, fingerprint);
+    const ago = (at) => { const m = Math.round((Date.now() - at) / 60000); return m < 1 ? 'just now' : m === 1 ? '1 min ago' : `${m} min ago`; };
+    const frame = (inner, actions) => `
+      <div class="sra-controls"><button class="sra-ctrl-btn sra-close-btn" title="Close">✕</button></div>
+      <div class="sra-popup-body"><div class="sra-beta-tag">Beta question</div>${inner}</div>
+      <div class="sra-popup-divider"></div>
+      <div class="sra-actions">${actions}</div>
+      <button type="button" class="sra-beta-off">Don't ask me these again</button>`;
+    const wire = () => {
+      root.querySelector('.sra-close-btn').onclick = close;
+      root.querySelector('.sra-beta-off').onclick = () => { betaFeedback.turnOff(); close(); };
+    };
+    const thanks = () => {
+      root.innerHTML = frame('<div class="sra-q-text">Thank you. This helps us decide when Alcoia should stay quiet.</div>',
+        '<button class="sra-btn sra-btn-secondary sra-beta-done">Close</button>');
+      wire();
+      root.querySelector('.sra-beta-done').onclick = close;
+    };
+    const finish = (answer, card, situation, note) => {
+      betaFeedback.send('wrong_moment', answer, { card, situation, note });
+      // A card the reader says came at a bad time also counts against that detector in their own profile.
+      if (answer === 'yes' && card?.state) profileRecord({ scope: 'detector', key: `${card.state}:${card.basis ?? 'unknown'}`, dismissed: 1 });
+      thanks();
+    };
+    const askSituation = (card) => {
+      root.innerHTML = frame(
+        `<div class="sra-q-text">What was going on?</div>
+         <div class="sra-beta-list">${betaLabels.situations.map(([k, label]) => `<button type="button" class="sra-beta-choice" data-k="${esc(k)}">${esc(label)}</button>`).join('')}</div>
+         <label class="sra-beta-note-label">Anything else? (optional)<textarea class="sra-beta-note" maxlength="500" rows="2"></textarea></label>`,
+        '<button class="sra-btn sra-btn-primary sra-beta-send">Send</button>');
+      wire();
+      let situation = null;
+      root.querySelectorAll('.sra-beta-choice').forEach((b) => {
+        b.onclick = () => {
+          situation = b.dataset.k;
+          root.querySelectorAll('.sra-beta-choice').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+        };
+      });
+      root.querySelector('.sra-beta-send').onclick = () => finish('yes', card, situation, root.querySelector('.sra-beta-note').value);
+    };
+    const askWhich = () => {
+      const cards = betaFeedback.list().slice(-8).reverse();
+      root.innerHTML = frame(
+        `<div class="sra-q-text">Which one?</div>
+         <div class="sra-beta-list">${cards.map((c, i) => `<button type="button" class="sra-beta-choice" data-i="${i}"><strong>${esc(betaLabels.cards[c.type] || 'Card')}</strong>${c.words ? ` <span>“${esc(c.words)}”</span>` : ''} <em>${esc(ago(c.at))}</em></button>`).join('')}
+         <button type="button" class="sra-beta-choice" data-i="-1">I'm not sure which</button></div>`,
+        '');
+      wire();
+      root.querySelectorAll('.sra-beta-choice').forEach((b) => {
+        b.onclick = () => askSituation(Number(b.dataset.i) >= 0 ? cards[Number(b.dataset.i)] : null);
+      });
+    };
+    root.innerHTML = frame('<div class="sra-q-text">Did Alcoia interrupt you at a bad time on this page?</div>',
+      `<button class="sra-btn sra-btn-secondary" data-a="yes">Yes</button>
+       <button class="sra-btn sra-btn-secondary" data-a="no">No</button>
+       <button class="sra-btn sra-btn-secondary" data-a="not_sure">Not sure</button>`);
+    wire();
+    root.querySelectorAll('[data-a]').forEach((b) => {
+      b.onclick = () => (b.dataset.a === 'yes' ? askWhich() : finish(b.dataset.a, null, null, null));
+    });
+    showPopup(root, null);
+  }
+  // BETA-FEEDBACK (end)
 
   // Item 38: bug backstop, not entitlement enforcement — see the project notes'
   // "Client-side AI-call rate limiting" section for the full reasoning.
@@ -1438,7 +1537,7 @@ export async function createHost(deps) {
     if (!s().assistantEnabled) return;
     const fingerprint = 'quiz-offer-' + (result.key || 'doc');
     const root = reservePopup(fingerprint);
-    if (!root) return;
+    if (!root) { maybeAskBeta(); return; } // BETA-FEEDBACK
 
     root.innerHTML = `
       <div class="sra-controls">
@@ -1453,7 +1552,7 @@ export async function createHost(deps) {
         <button class="sra-btn sra-btn-secondary sra-q-skip">Not now</button>
       </div>`;
 
-    const dismiss = () => closePopup(root, fingerprint);
+    const dismiss = () => { closePopup(root, fingerprint); setTimeout(maybeAskBeta, 400); }; // BETA-FEEDBACK: the beta question waits for this card
     root.querySelector('.sra-close-btn').onclick = dismiss;
     root.querySelector('.sra-q-skip').onclick = dismiss;
     root.querySelector('.sra-quiz-start-btn').onclick = async () => {
@@ -2318,6 +2417,7 @@ export async function createHost(deps) {
     // page, same as that one.
     stopRetentionRefresh,
     stopAdaptationSync,
+    askBetaQuestion: () => maybeAskBeta(), // BETA-FEEDBACK: the workspace asks at the end of a reading itself
     fetchSummary,
     fetchQuestions,
     fetchGrading,
