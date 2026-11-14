@@ -1117,3 +1117,24 @@ describe('contextLineFor', () => {
     expect(contextLineFor('Some words here about things')).not.toMatch(/quick check|review|retrieval|from earlier/i);
   });
 });
+
+
+describe('stored question bank items have three options', () => {
+  const THREE = { ...QUESTION, options: ['Right answer', 'Wrong one', 'Also wrong'] };
+  it('a three-option question is shown, and answering it reports the answer', () => {
+    const ui = fakeUI();
+    const onAnswered = vi.fn();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals(), onAnswered, onDismissed: () => {} });
+    expect(card.show(THREE)).not.toBe(false);
+    expect(ui.root.querySelectorAll('.sra-q-option').length).toBe(3);
+    pick(ui.root, 0);
+    rate(ui.root, 'high');
+    expect(onAnswered).toHaveBeenCalled();
+  });
+  it('a question with two options or an answer index beyond its options is refused', () => {
+    const ui = fakeUI();
+    const card = createQuestionCard({ ui, esc, responseSignals: createResponseSignals(), onAnswered: () => {}, onDismissed: () => {} });
+    expect(card.show({ ...THREE, options: ['a', 'b'] })).toBe(false);
+    expect(card.show({ ...THREE, answerIndex: 3 })).toBe(false);
+  });
+});
