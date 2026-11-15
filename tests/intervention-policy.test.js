@@ -294,28 +294,31 @@ describe('dismissal-aware backoff', () => {
     p.recordDismissal();
     const d = p.evaluate(struggling({ confidence: 0.99, signal: { text: 'x' } }));
     expect(d.allow).toBe(false);
-    expect(d.reason).toMatch(/holding off/);
+    expect(d.reason).toMatch(/holding off|no more automatic cards/);
   });
 
-  it('does not touch nudge actions (drifting readers are not being tested)', () => {
+  it('does not touch nudge actions while cards are only reduced (drifting readers are not being tested)', () => {
     const p = createInterventionPolicy({ now: fixedClock().now });
     p.recordDismissal();
     p.recordDismissal();
-    p.recordDismissal();
+    expect(p.stats().quietStage).toBe(1);
     const d = p.evaluate({ label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting' } });
     expect(d.allow).toBe(true);
     expect(d.action).toBe('nudge');
   });
 
-  it('any answer, right or wrong, clears the backoff', () => {
+  it('an answer clears the run of dismissals, but cards stopped on a page stay stopped', () => {
     const p = createInterventionPolicy({ now: fixedClock().now });
     p.recordDismissal();
-    p.recordDismissal();
-    p.recordDismissal();
-    expect(p.evaluate(dense()).allow).toBe(false);
-
     p.recordAnswered();
+    expect(p.stats().consecutiveDismissals).toBe(0);
     expect(p.evaluate(dense()).allow).toBe(true);
+
+    const q = createInterventionPolicy({ now: fixedClock().now });
+    q.recordDismissal(); q.recordDismissal(); q.recordDismissal();
+    q.recordAnswered();
+    expect(q.evaluate(dense()).allow).toBe(false);
+    expect(q.evaluate({ label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting' } }).allow).toBe(false);
   });
 
   it('reports the running count in stats', () => {
@@ -566,7 +569,7 @@ describe('evaluateRetentionCandidate (step 7)', () => {
     p.recordDismissal();
     const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1' });
     expect(d.allow).toBe(false);
-    expect(d.reason).toMatch(/declined 3 questions in a row/);
+    expect(d.reason).toMatch(/declined 3 questions in a row|no more automatic cards/);
   });
 
   it('a real answer resets the backoff, unblocking a subsequent retention candidate', () => {
@@ -931,7 +934,7 @@ describe('active intervention awareness (step 9A)', () => {
     p.recordDismissal();
     const d = p.evaluate(struggling({ confidence: 0.99, signal: { text: 'x' } }), { questionCardVisible: true });
     expect(d.allow).toBe(false);
-    expect(d.reason).toMatch(/holding off/);
+    expect(d.reason).toMatch(/holding off|no more automatic cards/);
   });
 
   it('sits after Step 8 failure-backoff checks -- repeated wrong answers still report their own reason at a low-confidence candidate, not the active-card one', () => {
@@ -992,7 +995,7 @@ describe('active intervention awareness (step 9A)', () => {
       p.recordDismissal();
       const d = p.evaluateRetentionCandidate({ paragraphKey: 'k1', questionCardVisible: true });
       expect(d.allow).toBe(false);
-      expect(d.reason).toMatch(/declined 3 questions in a row/);
+      expect(d.reason).toMatch(/declined 3 questions in a row|no more automatic cards/);
     });
   });
 });
@@ -1247,7 +1250,7 @@ describe('learner estimate in the policy (Stage B)', () => {
     for (let i = 0; i < 6; i += 1) p.recordDismissal();
     const d = p.evaluate(struggling(), { learnerEstimate: gather });
     expect(d.allow).toBe(false);
-    expect(d.reason).toMatch(/declined|raised bar/);
+    expect(d.reason).toMatch(/declined|raised bar|no more automatic cards/);
   });
 });
 
@@ -1291,5 +1294,61 @@ describe('transfer check candidates (second try on the same paragraph)', () => {
     clock.advance(10 * 60_000);
     expect(p.evaluateRetentionCandidate({ paragraphKey: 'k1', kind: 'retention' }).allow).toBe(false);
     expect(p.evaluateRetentionCandidate({ paragraphKey: 'k1', kind: 'transfer' }).allow).toBe(true);
+  });
+});
+
+describe('turning cards away within one reading: fewer cards, then none', () => {
+  const GAP = 180000;
+  const dense = () => struggling({ confidence: 0.9, signal: { text: 'dense ' + Math.random() } });
+  const drifting = () => ({ label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting ' + Math.random() } });
+
+  it('three closes on the page (not in a row) reduce the cards, and the next close stops them', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    expect(p.recordDismissal()).toBeNull();
+    p.recordAnswered();
+    expect(p.recordDismissal()).toBeNull();
+    p.recordAnswered();
+    expect(p.recordDismissal()).toBe('reduced');
+    expect(p.stats().quietStage).toBe(1);
+    expect(p.recordDismissal()).toBe('stopped');
+    expect(p.stats().quietStage).toBe(2);
+    expect(p.recordDismissal()).toBeNull();
+  });
+
+  it('a snooze reduces the cards; a second snooze, or a close after the first, stops them', () => {
+    const a = createInterventionPolicy({ now: fixedClock().now });
+    expect(a.recordSnooze()).toBe('reduced');
+    expect(a.recordSnooze()).toBe('stopped');
+    const b = createInterventionPolicy({ now: fixedClock().now });
+    b.recordSnooze();
+    expect(b.recordDismissal()).toBe('stopped');
+  });
+
+  it('reduced: the gap between cards is doubled; stopped: no automatic card of any kind', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    p.recordSnooze();
+    const d1 = p.evaluate(drifting());
+    expect(d1.allow).toBe(true);
+    p.record(d1);
+    clock.advance(GAP + 1000);
+    expect(p.evaluate(drifting()).allow).toBe(false);
+    clock.advance(GAP);
+    expect(p.evaluate(drifting()).allow).toBe(true);
+
+    p.recordSnooze();
+    clock.advance(GAP * 3);
+    expect(p.evaluate(drifting()).allow).toBe(false);
+    expect(p.evaluate(dense()).allow).toBe(false);
+    expect(p.evaluateContentTrigger({ paragraphKey: 'x' }).allow).toBe(false);
+    expect(p.evaluateRetentionCandidate({ kind: 'probe', paragraphKey: 'y' }).allow).toBe(false);
+  });
+
+  it('a new reading (reset) starts again with normal cards', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    p.recordSnooze(); p.recordSnooze();
+    p.reset();
+    expect(p.stats().quietStage).toBe(0);
+    expect(p.evaluate(dense()).allow).toBe(true);
   });
 });

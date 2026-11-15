@@ -764,7 +764,7 @@ export async function createHost(deps) {
       surface,
       assignmentId,
     });
-    betaLabels = { cards: betaModule.CARD_LABEL, situations: betaModule.SITUATIONS };
+    betaLabels = { cards: betaModule.CARD_LABEL, situations: betaModule.SITUATIONS, frequency: betaModule.FREQUENCY };
   } catch (e) { betaFeedback = null; }
 
   async function maybeAskBeta() {
@@ -831,13 +831,22 @@ export async function createHost(deps) {
         b.onclick = () => askSituation(Number(b.dataset.i) >= 0 ? cards[Number(b.dataset.i)] : null);
       });
     };
-    root.innerHTML = frame('<div class="sra-q-text">Did Alcoia interrupt you at a bad time on this page?</div>',
-      `<button class="sra-btn sra-btn-secondary" data-a="yes">Yes</button>
-       <button class="sra-btn sra-btn-secondary" data-a="no">No</button>
-       <button class="sra-btn sra-btn-secondary" data-a="not_sure">Not sure</button>`);
+    const askMoment = () => {
+      root.innerHTML = frame('<div class="sra-q-text">Did Alcoia interrupt you at a bad time on this page?</div>',
+        `<button class="sra-btn sra-btn-secondary" data-a="yes">Yes</button>
+         <button class="sra-btn sra-btn-secondary" data-a="no">No</button>
+         <button class="sra-btn sra-btn-secondary" data-a="not_sure">Not sure</button>`);
+      wire();
+      root.querySelectorAll('[data-a]').forEach((b) => {
+        b.onclick = () => (b.dataset.a === 'yes' ? askWhich() : finish(b.dataset.a, null, null, null));
+      });
+    };
+    // First: how often. Then: was any card at a bad time.
+    root.innerHTML = frame('<div class="sra-q-text">How often did Alcoia interrupt you on this page?</div>',
+      (betaLabels.frequency || []).map(([k, label]) => `<button class="sra-btn sra-btn-secondary" data-f="${esc(k)}">${esc(label)}</button>`).join(''));
     wire();
-    root.querySelectorAll('[data-a]').forEach((b) => {
-      b.onclick = () => (b.dataset.a === 'yes' ? askWhich() : finish(b.dataset.a, null, null, null));
+    root.querySelectorAll('[data-f]').forEach((b) => {
+      b.onclick = () => { betaFeedback.send('interruptions', b.dataset.f); askMoment(); };
     });
     showPopup(root, null);
   }
@@ -1075,8 +1084,22 @@ export async function createHost(deps) {
    * only from in-page UI today. */
   async function startSnooze(durationMs, label) {
     const until = await snoozeControl.snooze(durationMs);
-    showStatusToast(`Snoozed${label ? ' for ' + label : ''}. Reminders paused.`);
+    try { betaFeedback?.noteSnooze(); } catch (e) {} // BETA-FEEDBACK
+    let quiet = null;
+    try { quiet = orchestratorRef?.interventionPolicy.recordSnooze(); } catch (e) {}
+    if (quiet) tellQuietStage(quiet, true, label);
+    else showStatusToast(`Snoozed${label ? ' for ' + label : ''}. Reminders paused.`);
     return until;
+  }
+
+  /* The reader turned cards away (closed or snoozed). The policy answers 'reduced' (fewer cards on this page from now
+   * on) or 'stopped' (no more automatic cards on this page). Say so once, plainly. Reading signals for the class view
+   * are not affected: they are sent whether or not a card is shown. */
+  function tellQuietStage(stage, snoozed, label) {
+    try { betaFeedback?.noteQuietStage(stage); } catch (e) {} // BETA-FEEDBACK
+    try { decisionLog.record({ kind: stage === 'stopped' ? 'cards_stopped' : 'cards_reduced' }); } catch (e) {}
+    const lead = snoozed ? `Snoozed${label ? ' for ' + label : ''}. ` : '';
+    showStatusToast(lead + t(stage === 'stopped' ? 'cards.stopped' : 'cards.reduced', uiLang()));
   }
 
   // ── orchestrator reference — see this file's own header ───────────────
@@ -1415,7 +1438,10 @@ export async function createHost(deps) {
       let dismissedCard = null;
       try { dismissedCard = noteCardDismissed(record); } catch (e) {}
       try { decisionLog.record({ kind: 'dismissed', basis: lastShownBasis, cardType: dismissedCard }); } catch (e) {}
-      try { orchestratorRef?.interventionPolicy.recordDismissal(); } catch (e) {}
+      try { betaFeedback?.noteClosed(); } catch (e) {} // BETA-FEEDBACK
+      let quiet = null;
+      try { quiet = orchestratorRef?.interventionPolicy.recordDismissal(); } catch (e) {}
+      if (quiet) tellQuietStage(quiet, false);
     },
     // No onKnown: the card already offers Skip and "I don't know"; a third way out made the card harder to read.
     onSnooze: (durationMs, label) => { startSnooze(durationMs, label); },
@@ -1535,6 +1561,8 @@ export async function createHost(deps) {
    * does dismissing this card. */
   function showQuizOffer(result) {
     if (!s().assistantEnabled) return;
+    // After cards were turned away again on this page, the end-of-reading offer is not shown either.
+    try { if (orchestratorRef?.interventionPolicy.stats().quietStage >= 2) { maybeAskBeta(); return; } } catch (e) {}
     const fingerprint = 'quiz-offer-' + (result.key || 'doc');
     const root = reservePopup(fingerprint);
     if (!root) { maybeAskBeta(); return; } // BETA-FEEDBACK
