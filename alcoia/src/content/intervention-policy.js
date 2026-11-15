@@ -286,6 +286,17 @@ export const POLICY_ACTIONS = Object.freeze({
  * no second card while one is open) stays on either way. */
 export const SESSION_CAP_ENABLED = false;
 
+/* Turning cards away within one reading (one page load; reset() starts a new one). Two steps, decided by the reader:
+ *   1. "fewer cards": after READING_DISMISSALS_TO_REDUCE closes without an answer on this page, the raised dismissal
+ *      bar (consecutive closes), or a snooze. The gap between automatic cards is multiplied by REDUCED_GAP_FACTOR and a
+ *      question needs the raised confidence.
+ *   2. "no more cards": a further close or snooze while cards are already reduced. No automatic card of any kind is
+ *      shown again on this page; the reader can still ask for help.
+ * Detection and the reading signals the class view uses do not depend on this: the orchestrator reports a struggle
+ * before the policy is asked, and smooth-reading rows are sent from paragraph reads. Placeholders, unvalidated. */
+export const READING_DISMISSALS_TO_REDUCE = 3;
+export const REDUCED_GAP_FACTOR = 2;
+
 export const DEFAULT_BUDGET = Object.freeze({
   minGapMs:          180000,  // 3 minutes
   // The cap for a session that has read nothing yet — and the floor under
@@ -414,6 +425,10 @@ export function createInterventionPolicy(config = {}) {
   let msRead = 0;
 
   let consecutiveDismissals = 0;
+  let readingDismissals = 0;
+  let quietStage = 0; // 0 normal, 1 fewer cards, 2 no more cards on this page
+  const quietGap = () => (quietStage === 1 ? REDUCED_GAP_FACTOR : 1);
+  const STOPPED_REASON = 'cards were turned away again after they were reduced; no more automatic cards on this page';
   // Step 8: two more small, session-local counters, fed the same way
   // consecutiveDismissals already is (a terminal call from host.js after a
   // real answer) — see recordAnswered()'s own header for exactly what each
@@ -476,6 +491,7 @@ export function createInterventionPolicy(config = {}) {
     const deny = (reason) =>
       ({ allow: false, action: 'none', policyAction: POLICY_ACTIONS.NONE, reason, evidence: [], paragraphKey: null, interventionId: null });
 
+    if (quietStage >= 2) return deny(STOPPED_REASON);
     if (!state || !state.label) return deny('no state');
     if (state.label === STATES.UNKNOWN) return deny('state is unknown');
     // The reader is not at the page: nothing is shown, and nothing is spent.
@@ -529,7 +545,7 @@ export function createInterventionPolicy(config = {}) {
       if (consecutiveDismissals >= stopAskingAfter) {
         return deny(`declined ${consecutiveDismissals} questions in a row — holding off until answered`);
       }
-      if (consecutiveDismissals >= raiseConfidenceAfter && conf < raisedMinConfidence) {
+      if ((consecutiveDismissals >= raiseConfidenceAfter || quietStage === 1) && conf < raisedMinConfidence) {
         return deny(`confidence ${conf.toFixed(2)} below the raised bar of ${raisedMinConfidence} after ${consecutiveDismissals} consecutive dismissals`);
       }
 
@@ -665,7 +681,7 @@ export function createInterventionPolicy(config = {}) {
       return deny(`session budget spent (${count}/${cap}, ceiling ${budget.absoluteCeiling})`);
     }
 
-    const gap = budget.minGapMs * cardFactor(cardType);
+    const gap = budget.minGapMs * cardFactor(cardType) * quietGap();
     const since = now() - lastAt;
     if (lastAt !== 0 && since < gap) {
       return deny(`only ${Math.round(since / 1000)}s since the last interruption`);
@@ -720,6 +736,7 @@ export function createInterventionPolicy(config = {}) {
   function evaluateContentTrigger(ctx = {}) {
     const deny = (reason) =>
       ({ allow: false, action: 'pretest', reason, evidence: ctx.evidence || [], paragraphKey: null });
+    if (quietStage >= 2) return deny(STOPPED_REASON);
 
     const cap = sessionCap();
     if (count >= cap) {
@@ -727,7 +744,7 @@ export function createInterventionPolicy(config = {}) {
     }
 
     const since = now() - lastAt;
-    if (lastAt !== 0 && since < budget.minGapMs) {
+    if (lastAt !== 0 && since < budget.minGapMs * quietGap()) {
       return deny(`only ${Math.round(since / 1000)}s since the last interruption`);
     }
 
@@ -777,6 +794,7 @@ export function createInterventionPolicy(config = {}) {
 
     // The kind of card, for this learner's history with that kind (retention, focus, probe, return_check).
     const cardType = ['focus', 'probe', 'return_check', 'transfer'].includes(ctx.kind) ? ctx.kind : 'retention';
+    if (quietStage >= 2) return deny(STOPPED_REASON);
     // A kind the learner reliably turns away is not shown. The one exception is an instructor-flagged concept the
     // learner's own evidence says they do not know (mode support or repair): that is help, not a check.
     const needsHelp = ctx.kind === 'focus' && (ctx.mode === 'support' || ctx.mode === 'repair');
@@ -790,7 +808,7 @@ export function createInterventionPolicy(config = {}) {
     }
 
     const since = now() - lastAt;
-    if (lastAt !== 0 && since < budget.minGapMs * cardFactor(cardType)) {
+    if (lastAt !== 0 && since < budget.minGapMs * cardFactor(cardType) * quietGap()) {
       return deny(`only ${Math.round(since / 1000)}s since the last interruption`);
     }
 
@@ -939,6 +957,20 @@ export function createInterventionPolicy(config = {}) {
    * that: an instruction, not an inference. */
   function recordDismissal() {
     consecutiveDismissals += 1;
+    readingDismissals += 1;
+    if (quietStage === 1) { quietStage = 2; return 'stopped'; }
+    if (quietStage === 0 && (consecutiveDismissals >= effectiveBackoff().raiseConfidenceAfter || readingDismissals >= READING_DISMISSALS_TO_REDUCE)) {
+      quietStage = 1; return 'reduced';
+    }
+    return null;
+  }
+
+  /* The reader paused cards (the card's snooze control). The first snooze on a page means fewer cards once it ends;
+   * a snooze when cards are already reduced means none on this page. */
+  function recordSnooze() {
+    if (quietStage === 0) { quietStage = 1; return 'reduced'; }
+    if (quietStage === 1) { quietStage = 2; return 'stopped'; }
+    return null;
   }
 
   /* Any answer — correct or incorrect — is engagement with the card, which
@@ -986,6 +1018,7 @@ export function createInterventionPolicy(config = {}) {
     record,
     recordCoverage,
     recordDismissal,
+    recordSnooze,
     recordAnswered,
     setAdaptation,
     stats: () => ({
@@ -994,13 +1027,14 @@ export function createInterventionPolicy(config = {}) {
       absoluteCeiling: budget.absoluteCeiling,
       remaining: sessionCap() === Infinity ? Infinity : Math.max(0, sessionCap() - count),
       paragraphsRead, msRead,
-      consecutiveDismissals,
+      consecutiveDismissals, readingDismissals, quietStage,
       // Step 8.
       consecutiveIncorrectAnswers, lastAnswerCorrect,
     }),
     reset() {
       lastAt = 0; count = 0; seenParagraphs.clear();
       paragraphsRead = 0; msRead = 0; consecutiveDismissals = 0;
+      readingDismissals = 0; quietStage = 0;
       consecutiveIncorrectAnswers = 0; lastAnswerCorrect = null;
     },
   };
