@@ -10,7 +10,7 @@ import { mountLearningMemory } from '../alcoia/src/popup/learning-memory-ui.js';
 import { createLearningMemoryManager } from '../alcoia/src/shared/learning-memory.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const html = fs.readFileSync(path.join(dir, '..', 'alcoia', 'src', 'popup', 'settings.html'), 'utf8');
+const html = fs.readFileSync(path.join(dir, '..', 'alcoia', 'src', 'popup', 'settings.html'), 'utf8').replace(/\r\n/g, '\n'); // CRLF on Windows checkouts
 const card = html.match(/<div class="settings-card" id="learningMemory"[\s\S]*?\n  <\/div>\n\n/)[0];
 const SCOPE = 4;
 
