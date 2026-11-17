@@ -3987,6 +3987,11 @@ describe('scheduled quick checks (probes)', () => {
     queryAlcoia('.sra-quiz-start-btn').closest('.sra-popup, [class*="popup"]')?.querySelector('.sra-q-skip')?.click()
       ?? queryAllAlcoia('.sra-q-skip').at(-1).click();
     await vi.waitFor(() => expect(queryAlcoia('.sra-beta-tag')).not.toBeNull());
+    expect(queryAlcoia('.sra-q-text').textContent).toMatch(/How often did Alcoia interrupt you/);
+    queryAlcoia('[data-f="too_often"]').click();
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/api/beta-feedback') && /interruptions/.test(c.options?.body || ''))).toBe(true));
+    const often = JSON.parse(calls.find((c) => /interruptions/.test(c.options?.body || '')).options.body);
+    expect(often).toMatchObject({ surface: 'extension', kind: 'interruptions', answer: 'too_often', details: { cardsShown: 1, cardsClosed: 1, snoozes: 0, quietStage: 'normal' } });
     expect(queryAlcoia('.sra-q-text').textContent).toMatch(/interrupt you at a bad time/);
     queryAlcoia('[data-a="yes"]').click();
     const first = queryAllAlcoia('.sra-beta-choice')[0];
@@ -3996,7 +4001,8 @@ describe('scheduled quick checks (probes)', () => {
     queryAlcoia('.sra-beta-note').value = 'I was in the middle of a sentence';
     queryAlcoia('.sra-beta-send').click();
     await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/api/beta-feedback') && c.options?.method === 'POST')).toBe(true));
-    const body = JSON.parse(calls.find((c) => c.url.endsWith('/api/beta-feedback')).options.body);
+    await vi.waitFor(() => expect(calls.some((c) => /wrong_moment/.test(c.options?.body || ''))).toBe(true));
+    const body = JSON.parse(calls.find((c) => /wrong_moment/.test(c.options?.body || '')).options.body);
     expect(body).toMatchObject({ surface: 'extension', kind: 'wrong_moment', answer: 'yes', assignmentId: 'assign-42', note: 'I was in the middle of a sentence', details: { cardType: 'probe', policyAction: 'retrieve', situation: 'reading_fine' } });
     expect(typeof body.knowledgeUnitId).toBe('string');
     expect(JSON.stringify(body)).not.toMatch(/Paragraph number/); // the card's words stay on the device
