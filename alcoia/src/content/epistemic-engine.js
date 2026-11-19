@@ -31,9 +31,13 @@
  * or across days — there is no schema, no storage key, and no plan to add
  * one. That is Level C and is out of scope by design (the project notes §5).
  *
- * Adversarial is reached ONLY from `scenario` + a correct grade + a
- * SYSTEMATIC (not one-off) pattern of high-confidence wrong answers
- * elsewhere in the session. A failing reader is structurally unable to
+ * Adversarial (the challenge question) is reached only after a correct
+ * answer: from `scenario` with a SYSTEMATIC (not one-off) pattern of
+ * high-confidence wrong answers elsewhere in the session, or, once per
+ * session, from a correct `scenario` or `free_recall` answer about a
+ * paragraph that argues for a position (19 November 2026: a reader who is
+ * doing well should also be asked to test an argument, not only one who is
+ * overconfident; factual paragraphs keep the old ladder). A failing reader is structurally unable to
  * reach it — the branch that returns 'adversarial' is guarded by
  * `correct === true` above it, so there is no path from a wrong or
  * inconclusive answer at any level to a challenge question. That guard is
@@ -79,9 +83,15 @@ export function isSystematicallyOverconfident(sessionAnswers = []) {
  * `sessionAnswers`: see isSystematicallyOverconfident above — only consulted
  * at the scenario rung, where it is the entire justification for ever
  * reaching adversarial. */
-export function nextLevel(lastAttempt, sessionAnswers = []) {
+export function nextLevel(lastAttempt, sessionAnswers = [], { argues = false } = {}) {
   if (!lastAttempt || !LADDER.includes(lastAttempt.level)) return 'recognition';
   const { level, correct } = lastAttempt;
+  // One challenge per session for a reader who is doing WELL on a paragraph that argues for a position
+  // (argument-cues.js): a correct answer there is not the end of thinking about the claim. Factual paragraphs (a
+  // definition, a procedure, the role of an organ) keep the old ladder exactly: there is no position to push back on.
+  // Still guarded by `correct === true`, still once per session, and it replaces the next question rather than
+  // adding one, so it never adds an interruption and never follows a wrong answer.
+  const challengedThisSession = sessionAnswers.some((a) => a && a.level === 'adversarial');
 
   if (level === 'recognition') {
     // Nowhere below recognition to descend to — a wrong answer here just
@@ -94,7 +104,8 @@ export function nextLevel(lastAttempt, sessionAnswers = []) {
     // inconclusive grade — the reader already demonstrated recognition to
     // get here, and re-litigating that would read as punishment for a
     // single miss rather than a difficulty adjustment.
-    return correct === true ? 'scenario' : 'free_recall';
+    if (correct !== true) return 'free_recall';
+    return argues && !challengedThisSession ? 'adversarial' : 'scenario';
   }
 
   if (level === 'scenario') {
@@ -103,7 +114,9 @@ export function nextLevel(lastAttempt, sessionAnswers = []) {
     // first place (item 43) — either way, "failing" a scenario returns the
     // reader to recall, one rung down, never told they went backwards.
     if (correct !== true) return 'free_recall';
-    return isSystematicallyOverconfident(sessionAnswers) ? 'adversarial' : 'scenario';
+    if (isSystematicallyOverconfident(sessionAnswers)) return 'adversarial';
+    if (!challengedThisSession && argues) return 'adversarial';
+    return 'scenario';
   }
 
   if (level === 'adversarial') {
@@ -169,10 +182,15 @@ export function pickLevelForConcept(identity, history = [], { startLevel = null 
     ? attemptsForConcept[attemptsForConcept.length - 1]
     : null;
 
-  const sessionAnswers = graded.map((h) => ({ confidence: h.confidence, correct: h.correct }));
+  const sessionAnswers = graded.map((h) => ({ confidence: h.confidence, correct: h.correct, level: h.level }));
+  const argues = identity !== null && typeof identity === 'object' && identity.argues === true;
 
   if (!lastAttempt && START_LEVELS.has(startLevel)) return startLevel;
-  return nextLevel(lastAttempt ? { level: lastAttempt.level, correct: lastAttempt.correct } : null, sessionAnswers);
+  return nextLevel(
+    lastAttempt ? { level: lastAttempt.level, correct: lastAttempt.correct, confidence: lastAttempt.confidence } : null,
+    sessionAnswers,
+    { argues },
+  );
 }
 
 /* Item 44's own tone requirement: adversarial must never read as hostile,
