@@ -34,11 +34,10 @@
  * Adversarial (the challenge question) is reached only after a correct
  * answer: from `scenario` with a SYSTEMATIC (not one-off) pattern of
  * high-confidence wrong answers elsewhere in the session, or, once per
- * session, from a correct `scenario` answer given with high confidence or
- * about a paragraph that argues for a position, or from a correct
- * `free_recall` answer about such a paragraph (19 November 2026: a reader
- * who is doing well should also be asked to test a claim, not only one who
- * is overconfident). A failing reader is structurally unable to
+ * session, from a correct `scenario` or `free_recall` answer about a
+ * paragraph that argues for a position (19 November 2026: a reader who is
+ * doing well should also be asked to test an argument, not only one who is
+ * overconfident; factual paragraphs keep the old ladder). A failing reader is structurally unable to
  * reach it — the branch that returns 'adversarial' is guarded by
  * `correct === true` above it, so there is no path from a wrong or
  * inconclusive answer at any level to a challenge question. That guard is
@@ -87,10 +86,11 @@ export function isSystematicallyOverconfident(sessionAnswers = []) {
 export function nextLevel(lastAttempt, sessionAnswers = [], { argues = false } = {}) {
   if (!lastAttempt || !LADDER.includes(lastAttempt.level)) return 'recognition';
   const { level, correct } = lastAttempt;
-  // One challenge per session for a reader who is doing WELL, not only for one who is overconfident: right and sure
-  // at scenario, or right about a paragraph that argues for a position (argument-cues.js). The point is that a
-  // correct answer is not the end of thinking about a claim. Still guarded by `correct === true`, still once per
-  // session, so it stays occasional and is never a reaction to a wrong answer.
+  // One challenge per session for a reader who is doing WELL on a paragraph that argues for a position
+  // (argument-cues.js): a correct answer there is not the end of thinking about the claim. Factual paragraphs (a
+  // definition, a procedure, the role of an organ) keep the old ladder exactly: there is no position to push back on.
+  // Still guarded by `correct === true`, still once per session, and it replaces the next question rather than
+  // adding one, so it never adds an interruption and never follows a wrong answer.
   const challengedThisSession = sessionAnswers.some((a) => a && a.level === 'adversarial');
 
   if (level === 'recognition') {
@@ -115,7 +115,7 @@ export function nextLevel(lastAttempt, sessionAnswers = [], { argues = false } =
     // reader to recall, one rung down, never told they went backwards.
     if (correct !== true) return 'free_recall';
     if (isSystematicallyOverconfident(sessionAnswers)) return 'adversarial';
-    if (!challengedThisSession && (lastAttempt.confidence === 'high' || argues)) return 'adversarial';
+    if (!challengedThisSession && argues) return 'adversarial';
     return 'scenario';
   }
 
