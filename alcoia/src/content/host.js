@@ -467,6 +467,19 @@ export async function createHost(deps) {
     retentionRefreshTimer = null;
   }
 
+  // Cards the reader pinned at the last read of this document come back, the way the document comes back to the page
+  // they were on. Kept on this device only (pinned-cards.js). A pinned question nobody had answered is shown again so it
+  // can be answered; any other card comes back as a plain copy. Closing a card removes it for good. Not run when the
+  // assistant is off or interventions are hidden.
+  function restorePinnedCards() {
+    if (!s().assistantEnabled || s().showInterventions === false) return;
+    if (typeof ui.restorePinned !== 'function') return;
+    ui.restorePinned({
+      restoreQuestion: (restore) => questionCard.show(restore.question, { ...restore.context, restored: true }),
+    }).catch(() => {});
+  }
+  setTimeout(restorePinnedCards, 1500);
+
   // ── Teaching focus (instructor Teaching Intent, ASSIGNED readings only) ──
   // Hashes of paragraphs the instructor marked important. Fetched once, and only when there is an
   // assignment, so ordinary web pages never ask. It never creates a new kind of interruption:
@@ -1693,6 +1706,30 @@ export async function createHost(deps) {
    * question, not instead of it. Costs no extra budget: it rides the SAME
    * 'ask' interruption intervention-policy.js already gated before this
    * function was ever called. */
+  // A card that takes too long to make is dropped, not shown late. The three automatic paths (question, explanation or
+  // repair, scheduled review) all ask the server and wait. A slow answer (a rate limit and a retry, a bad connection)
+  // used to put a card up after the reader had scrolled far past the paragraph, or opened another page. Now, after
+  // GENERATION_MAX_MS the result is thrown away and nothing is shown or counted, and a result that does arrive in time
+  // is shown only if the paragraph it is about is still near the screen. A card the reader asked for (a selection, a
+  // button) is not affected: they are waiting for it.
+  const GENERATION_MAX_MS = 15000;
+  function withDeadline(promise, fallback) {
+    return new Promise((resolve) => {
+      const t = setTimeout(() => resolve(fallback), GENERATION_MAX_MS);
+      Promise.resolve(promise).then((v) => { clearTimeout(t); resolve(v); }, () => { clearTimeout(t); resolve(fallback); });
+    });
+  }
+  function generationIsStale(el, startedAt) {
+    if (Date.now() - startedAt > GENERATION_MAX_MS) return true;
+    if (!el) return false;
+    try {
+      const r = el.getBoundingClientRect();
+      const vh = window.innerHeight || 800;
+      if (r.width === 0 && r.height === 0) return false; // not laid out (a test, a hidden frame): nothing to judge
+      return r.bottom < -vh * 0.5 || r.top > vh * 1.5;
+    } catch (e) { return false; }
+  }
+
   async function handleAsk(decision, state, target, paragraphIndex) {
     const el = target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
     const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
@@ -1721,8 +1758,10 @@ export async function createHost(deps) {
       const level = decision.light ? 'recognition' : await pickLevel(identity);
       const opts = level !== 'recognition' ? { level } : {};
 
-      const questions = await fetchQuestions(text, opts);
+      const startedAt = Date.now();
+      const questions = await withDeadline(fetchQuestions(text, opts), []);
       if (!questions.length) return false;
+      if (generationIsStale(el, startedAt)) return false;
 
       let anchorRect = null;
       try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
@@ -1825,8 +1864,10 @@ export async function createHost(deps) {
       // sentence: the earlier or held idea is the starting point, the marked sentence is what gets explained.
       const est = learnerEstimates.get(identity.knowledgeUnitId);
       const ideaOpts = mode === 'relate' ? {} : est?.prerequisiteIdea ? { prerequisite: est.prerequisiteIdea } : est?.heldIdea ? { held: est.heldIdea } : {};
-      const generated = await fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey, style, focus: focusSentence, ...ideaOpts });
+      const startedAt = Date.now();
+      const generated = await withDeadline(fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey, style, focus: focusSentence, ...ideaOpts }), null);
       if (!generated) return false;
+      if (generationIsStale(el, startedAt)) return false;
 
       let anchorRect = null;
       try { if (el) anchorRect = el.getBoundingClientRect(); } catch (e) {}
@@ -1947,8 +1988,10 @@ export async function createHost(deps) {
       // A light check (a flagged idea the learner already knows) is one short, easy confirmation, never a stretch.
       const level = decision.light ? 'recognition' : await pickLevel(identity);
       const opts = level !== 'recognition' ? { level } : {};
-      const questions = await fetchQuestions(text, opts);
+      const startedAt = Date.now();
+      const questions = await withDeadline(fetchQuestions(text, opts), []);
       if (!questions.length) return;
+      if (generationIsStale(null, startedAt)) return;
 
       const shown = questionCard.show(pickVariant(questions), {
         evidence: decision.evidence,

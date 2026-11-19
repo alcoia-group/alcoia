@@ -22,9 +22,13 @@
 
 import { createShadowHost, setDarkMode as setShadowDarkMode } from './shadow-host.js';
 import { t, uiLang, isRtl } from '../shared/i18n.js';
+import { createPinnedStore } from './pinned-cards.js';
 
 const POPUP_MARGIN = 14;
-const MAX_POPUPS   = 5;      // hard cap before the oldest unpinned is evicted
+// A card goes only when the reader closes it, or when it was too slow to be worth showing (host.js drops those before
+// they reach here). So reaching the cap no longer closes the oldest card to make room: the new card waits its turn
+// (reservePopup returns null) and everything on screen stays. Cards can be dragged and pinned, so several at once is normal.
+const MAX_POPUPS   = 8;
 
 // Original z-index values, preserved per element rather than given one
 // blanket value — see shadow-host.js's createShadowHost() header for why
@@ -68,6 +72,8 @@ export function createUIController(deps = {}) {
   const maxPopups = deps.maxPopups ?? MAX_POPUPS;
   const sharedStyles = deps.sharedStyles || '';
   const onPopupShown = deps.onPopupShown || null; // optional local history hook
+  // Pinned cards are remembered on this device and come back at the next read of the same document (pinned-cards.js).
+  const pinnedStore = deps.pinnedStore || createPinnedStore();
 
   /* fingerprint -> { el }. The single record of what is on screen. */
   const openPopups = new Map();
@@ -199,8 +205,14 @@ export function createUIController(deps = {}) {
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
   function closePopup(el, fingerprint) {
-    if (fingerprint) openPopups.delete(fingerprint);
+    const fp = fingerprint || findFingerprint(el);
+    if (fp) {
+      openPopups.delete(fp);
+      // A card the reader closes is no longer kept for the next read of this document.
+      if (el.dataset && el.dataset.pinned === 'true') pinnedStore.remove(fp);
+    }
     clearTimeout(el._hideT);
+    unwatchPinned(el);
     el.classList.remove('show');
     // Removing just el would leave its now-empty shadow host behind.
     setTimeout(() => { try { (el._shadowHost || el).remove(); } catch (e) {} }, 250);
@@ -244,25 +256,9 @@ export function createUIController(deps = {}) {
     }
 
     if (openPopups.size >= maxPopups) {
-      for (const [fp, { el, kind: openKind }] of openPopups.entries()) {
-        if (!el || !el.isConnected) { openPopups.delete(fp); break; }
-        // Step 29 (student intervention experience audit): a live,
-        // unanswered retrieval question (kind: 'question') is never
-        // silently evicted to make room for something else — question-
-        // card.js's own rule 1 is "the reader can always leave", on their
-        // own terms (the close/skip buttons, or Escape), never because a
-        // LATER, unrelated popup happened to need the slot. Evicting it
-        // here used to leave response-signals.js's pending answer record
-        // dangling forever (resolved as neither an answer nor a
-        // dismissal) and the reader's in-progress selection discarded
-        // with no trace. Skip past it and keep looking for something
-        // genuinely evictable instead of evicting the first entry found.
-        if (el.dataset.pinned === 'true' || openKind === 'question') continue;
-        closePopup(el, fp);
-        break;
-      }
-      // Every remaining slot is pinned/protected and we are at the cap —
-      // do not add another.
+      // Drop entries whose card has already left the page, but never close a card the reader can still see: a card
+      // stays until it is closed (see MAX_POPUPS above). At the cap the new card does not appear.
+      for (const [fp, { el }] of [...openPopups.entries()]) if (!el || !el.isConnected) openPopups.delete(fp);
       if (openPopups.size >= maxPopups) return null;
     }
 
@@ -302,9 +298,178 @@ export function createUIController(deps = {}) {
    * elsewhere in this file. */
   function hasVisibleQuestionCard() {
     for (const { el, kind } of openPopups.values()) {
-      if (kind === 'question' && el && el.isConnected) return true;
+      // A pinned card is one the reader parked beside the page. It does not stop the next question from coming.
+      if (kind === 'question' && el && el.isConnected && el.dataset.pinned !== 'true') return true;
     }
     return false;
+  }
+
+  // -- Pin, drag and restore ---------------------------------------------------------------------------------------
+  // Every card can be moved by its top strip and pinned. A pinned card stays where it was put, does not stop the next
+  // question, and is remembered on this device so it comes back at the next read of the same document (pinned-cards.js).
+  // Only closing a card removes it. Nothing about a pin is sent anywhere.
+  const PIN_ICON = '\u{1F4CC}';
+  const MAX_SNAPSHOT_CHARS = 20000;
+
+  function sanitizeStored(html) {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = String(html || '').slice(0, MAX_SNAPSHOT_CHARS);
+    for (const n of tpl.content.querySelectorAll('script,style,iframe,object,embed,link,meta,form')) n.remove();
+    for (const n of tpl.content.querySelectorAll('*')) {
+      for (const a of [...n.attributes]) if (/^on/i.test(a.name) || /^\s*javascript:/i.test(a.value)) n.removeAttribute(a.name);
+    }
+    return tpl.innerHTML;
+  }
+
+  // What is drawn again at the next read: for a question nobody has answered yet, the question itself; for anything else,
+  // a plain copy of the card's body (no buttons: the copy is a reminder, not a live card).
+  function snapshotOf(root, fp) {
+    const vw = window.innerWidth || 1, vh = window.innerHeight || 1;
+    const r = root.getBoundingClientRect();
+    const entry = { id: fp, kind: openPopups.get(fp)?.kind || 'plain', x: r.left / vw, y: r.top / vh, w: Math.round(r.width) };
+    if (root._restore && root._restore.type === 'question') { entry.restore = root._restore; return entry; }
+    const body = root.querySelector('.sra-popup-body');
+    if (!body) return null;
+    const copy = body.cloneNode(true);
+    for (const n of copy.querySelectorAll('button,textarea,input,select,.sra-q-snooze-options,.sra-self-report-inline')) n.remove();
+    entry.html = copy.innerHTML.slice(0, MAX_SNAPSHOT_CHARS);
+    return entry;
+  }
+
+  function savePinned(root, fp) {
+    try { const e = snapshotOf(root, fp); if (e) pinnedStore.save(e); } catch (err) { /* a pin never breaks the card */ }
+  }
+
+  function setPinned(root, pinned) {
+    const fp = findFingerprint(root);
+    root.dataset.pinned = pinned ? 'true' : 'false';
+    const btn = root.querySelector('.sra-pin-btn');
+    if (btn) { btn.classList.toggle('active', pinned); btn.setAttribute('aria-pressed', String(pinned)); }
+    clearTimeout(root._hideT);
+    if (!fp) return;
+    if (pinned) { savePinned(root, fp); watchPinned(root); }
+    else { unwatchPinned(root); pinnedStore.remove(fp); resetAutohide(root, fp); }
+  }
+
+  // A pinned card is saved again a moment after its content changes (an answer, feedback, a note), so what comes back
+  // at the next read is the card as the reader left it.
+  function watchPinned(root) {
+    if (root._pinWatch || typeof MutationObserver === 'undefined') return;
+    let t;
+    root._pinWatch = new MutationObserver(() => { clearTimeout(t); t = setTimeout(() => touchPinned(root), 600); });
+    root._pinWatch.observe(root, { childList: true, subtree: true, characterData: true });
+  }
+  function unwatchPinned(root) { try { root._pinWatch?.disconnect(); } catch (e) {} root._pinWatch = null; }
+
+  // Called by a card whose content changed while pinned (a question that was just answered), so the copy kept for the
+  // next read is the card as it is now.
+  function touchPinned(root) {
+    if (!root || root.dataset.pinned !== 'true') return;
+    const fp = findFingerprint(root);
+    if (fp) savePinned(root, fp);
+  }
+
+  function positionFromEntry(root, e) {
+    const vw = window.innerWidth || 1, vh = window.innerHeight || 1;
+    if (root.classList.contains('sra-sheet') || !Number.isFinite(e.x) || !Number.isFinite(e.y)) return;
+    const pw = root.offsetWidth || e.w || 360, ph = root.offsetHeight || 150, m = margin;
+    root.style.left = clamp(Math.round(e.x * vw), m, Math.max(m, vw - pw - m)) + 'px';
+    root.style.top = clamp(Math.round(e.y * vh), m, Math.max(m, vh - ph - m)) + 'px';
+    root.dataset.moved = '1';
+  }
+
+  function attachDrag(root, handle) {
+    let dragging = false, sx = 0, sy = 0, ol = 0, ot = 0, pid = null;
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (root.classList.contains('sra-sheet')) return; // on a phone the card is a sheet at the bottom
+      const r = root.getBoundingClientRect();
+      sx = e.clientX; sy = e.clientY; ol = r.left; ot = r.top; dragging = true; pid = e.pointerId;
+      try { handle.setPointerCapture(pid); } catch (err) { /* not every environment has it */ }
+      root.classList.add('sra-dragging');
+      e.preventDefault();
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const vw = window.innerWidth, vh = window.innerHeight, pw = root.offsetWidth, ph = root.offsetHeight;
+      root.style.left = clamp(ol + e.clientX - sx, 4, Math.max(4, vw - pw - 4)) + 'px';
+      root.style.top = clamp(ot + e.clientY - sy, 4, Math.max(4, vh - ph - 4)) + 'px';
+      root.dataset.moved = '1';
+    });
+    const end = () => {
+      if (!dragging) return;
+      dragging = false;
+      root.classList.remove('sra-dragging');
+      try { handle.releasePointerCapture(pid); } catch (err) { /* already released */ }
+      if (root.dataset.pinned === 'true') { const fp = findFingerprint(root); if (fp) savePinned(root, fp); }
+    };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  }
+
+  // Adds the move strip and the pin button to a card that was built without them (every card except the plain summary
+  // card, which already carries its own pin button). Runs once per card, from showPopup().
+  function decorateCard(root) {
+    const controls = root.querySelector('.sra-controls');
+    if (!controls) return;
+    const lang = uiLang();
+    let pinBtn = root.querySelector('.sra-pin-btn');
+    if (!pinBtn) {
+      pinBtn = document.createElement('button');
+      pinBtn.type = 'button';
+      pinBtn.className = 'sra-ctrl-btn sra-pin-btn';
+      pinBtn.title = t('card.keepOpen', lang);
+      pinBtn.textContent = PIN_ICON;
+      controls.insertBefore(pinBtn, controls.firstChild);
+    }
+    if (!pinBtn._wired) {
+      pinBtn._wired = true;
+      pinBtn.setAttribute('aria-pressed', root.dataset.pinned === 'true' ? 'true' : 'false');
+      pinBtn.classList.toggle('active', root.dataset.pinned === 'true');
+      pinBtn.onclick = () => setPinned(root, root.dataset.pinned !== 'true');
+    }
+    if (!root.querySelector('.sra-drag-handle')) {
+      const h = document.createElement('div');
+      h.className = 'sra-drag-handle';
+      h.title = t('card.move', lang);
+      h.innerHTML = '<span class="sra-grip"></span>';
+      root.insertBefore(h, root.firstChild);
+      attachDrag(root, h);
+    }
+  }
+
+  // At the next read: draw the cards the reader pinned last time. `restoreQuestion(restore, entry)` is supplied by the
+  // host, which owns the question card; it returns true if it showed the question again.
+  async function restorePinned({ restoreQuestion } = {}) {
+    let entries = [];
+    try { entries = await pinnedStore.load(); } catch (err) { return 0; }
+    let n = 0;
+    for (const e of entries) {
+      if (openPopups.has(e.id)) continue;
+      if (e.restore && e.restore.type === 'question') {
+        if (!restoreQuestion) continue;
+        let ok = false;
+        try { ok = restoreQuestion(e.restore, e); } catch (err) { ok = false; }
+        const root = ok ? openPopups.get(e.id)?.el : null;
+        if (root) { positionFromEntry(root, e); setPinned(root, true); n++; }
+        continue;
+      }
+      if (typeof e.html !== 'string' || !e.html) continue;
+      const root = reservePopup(e.id, e.kind === 'question' ? undefined : e.kind);
+      if (!root) continue;
+      const lang = uiLang();
+      if (isRtl(lang)) root.setAttribute('dir', 'rtl');
+      root.innerHTML = `
+        <div class="sra-controls"><button class="sra-ctrl-btn sra-close-btn" title="${esc(t('card.close', lang))}">\u2715</button></div>
+        <div class="sra-popup-body" dir="auto">${sanitizeStored(e.html)}</div>`;
+      root.querySelector('.sra-close-btn').onclick = () => closePopup(root, e.id);
+      shownBefore.add(root); // a card brought back is not a new card: it does not count as one shown
+      showPopup(root, null);
+      positionFromEntry(root, e);
+      setPinned(root, true);
+      n++;
+    }
+    return n;
   }
 
   /* Show, place and start the autohide countdown. */
@@ -314,6 +479,7 @@ export function createUIController(deps = {}) {
       .map((e) => e.el.getBoundingClientRect());
 
     placePopup(root, anchorRect, avoidRects);
+    decorateCard(root);
     if (onPopupShown && !shownBefore.has(root)) {
       shownBefore.add(root);
       try { onPopupShown(root); } catch { /* never break the popup */ }
@@ -387,21 +553,7 @@ export function createUIController(deps = {}) {
 
     root.querySelector('.sra-close-btn').onclick = () => closePopup(root, fingerprint);
 
-    const pinBtn = root.querySelector('.sra-pin-btn');
-    if (getSettings().pinDefault) { root.dataset.pinned = 'true'; pinBtn.classList.add('active'); }
-    pinBtn.onclick = () => {
-      const pinned = root.dataset.pinned !== 'true';
-      root.dataset.pinned = pinned.toString();
-      pinBtn.classList.toggle('active', pinned);
-      clearTimeout(root._hideT);
-      if (!pinned) {
-        // Unpin always starts a countdown — the autohide time when enabled, else
-        // a generous 60s so forgotten cards do not accumulate forever.
-        const { autohideEnabled, autohideTimeoutSec } = getSettings();
-        const secs = autohideEnabled ? Math.max(3, autohideTimeoutSec || 12) : 60;
-        root._hideT = setTimeout(() => closePopup(root, fingerprint), secs * 1000);
-      }
-    };
+    if (getSettings().pinDefault) root.dataset.pinned = 'true'; // decorateCard() wires the pin button and marks it
 
     root.querySelector('.sra-explain-btn').onclick = async () => {
       const btn = root.querySelector('.sra-explain-btn');
@@ -628,6 +780,7 @@ export function createUIController(deps = {}) {
     placePopup, closePopup, flashPopup, hidePopup,
     reservePopup, showPopup, resetAutohide,
     hasVisibleQuestionCard,
+    restorePinned, touchPinned, setPinned,
     addNoteToQuestionCard,
     renderPopup,
     showNudge, showSimulateToast, showStatusToast,

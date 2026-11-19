@@ -177,6 +177,13 @@ export function createQuestionCard(deps = {}) {
     // persisted server-side). See response-signals.js's own header.
     responseSignals.present(question, { ...context, questionId: fingerprint });
 
+    // Kept on the card so a pinned question nobody has answered yet can be shown again at the next read of this document
+    // (ui-controller.js, pinned-cards.js). Cleared when the question is answered.
+    root._restore = { type: 'question', question, context: {
+      evidence: context.evidence, paragraphKey: context.paragraphKey, knowledgeUnitId: context.knowledgeUnitId,
+      paragraphIndex: context.paragraphIndex, interventionId: context.interventionId, passage: context.passage, contextLine: context.contextLine,
+    } };
+
     if (isRtl(lang)) root.setAttribute?.('dir', 'rtl');
     root.setAttribute?.('role', 'group');
     root.setAttribute?.('aria-label', 'Question');
@@ -336,6 +343,8 @@ export function createQuestionCard(deps = {}) {
       dontKnowBtn.onclick = () => {
         if (committed) return;
         committed = true;
+
+        root._restore = null; ui.touchPinned?.(root);
         root.querySelector('.sra-q-confidence')?.remove();
         root.querySelector('.sra-q-submit-text')?.remove();
         dontKnowBtn.remove();
@@ -362,6 +371,8 @@ export function createQuestionCard(deps = {}) {
       const commit = (confidence) => {
         if (committed || selected === null) return;
         committed = true;
+
+        root._restore = null; ui.touchPinned?.(root);
         root.querySelector('.sra-q-confidence')?.remove();
 
         const record = responseSignals.answer(selected, question, confidence, interventionId);
@@ -411,6 +422,8 @@ export function createQuestionCard(deps = {}) {
         const answerText = textarea.value.trim().slice(0, MAX_ANSWER_CHARS);
         if (!answerText) return;
         committed = true;
+
+        root._restore = null; ui.touchPinned?.(root);
         root.querySelector('.sra-q-confidence')?.remove();
         submitBtn.remove();
 
