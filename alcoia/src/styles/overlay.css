@@ -966,3 +966,6 @@
 .sra-beta-note { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid #d8d3cb; border-radius: 6px; resize: vertical; }
 .sra-beta-off { display: block; margin: 8px 0 0; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: #8a847b; text-decoration: underline; cursor: pointer; }
 /* BETA-FEEDBACK (end) */
+
+.sra-pin-btn .sra-pin-icon { display: block; margin: auto; }
+.sra-pin-btn.active .sra-pin-icon path { fill: currentColor; }
