@@ -114,6 +114,38 @@
   transition: opacity 190ms ease, transform 190ms cubic-bezier(.2,.9,.3,1);
 }
 .sra-popup.show { opacity: 1; transform: none; }
+
+/* The card's edge. The card is a warm off-white and the page it sits on is often white, so the old hairline (12% grey)
+   all but vanished. The edge is now the same lilac the small self-report button uses, with a faint halo, so a card is
+   easy to find on a white page, a grey one and a dark one. */
+.sra-popup {
+  box-shadow:
+    0 0 0 1px var(--alc-border-2),
+    0 0 0 4px rgba(126,96,174,0.10),
+    0 2px 5px rgba(51,51,51,0.07),
+    0 16px 36px -16px rgba(51,51,51,0.24);
+}
+/* A pinned card stays until it is closed: a stronger edge says so. */
+.sra-popup[data-pinned="true"] {
+  box-shadow:
+    0 0 0 2px var(--alc-accent),
+    0 0 0 5px rgba(126,96,174,0.14),
+    0 2px 5px rgba(51,51,51,0.07),
+    0 16px 36px -16px rgba(51,51,51,0.24);
+}
+
+/* The strip along the top of every card: drag it to move the card. Hidden on a phone, where the card is a sheet. */
+.sra-drag-handle {
+  position: absolute; top: 0; left: 0; right: 76px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: grab; touch-action: none; z-index: 1;
+}
+.sra-drag-handle .sra-grip { width: 30px; height: 4px; border-radius: 2px; background: var(--alc-border-2); opacity: 0.8; transition: opacity 0.15s; }
+.sra-drag-handle:hover .sra-grip { opacity: 1; background: var(--alc-accent); }
+.sra-popup.sra-dragging { transition: none; user-select: none; -webkit-user-select: none; }
+.sra-popup.sra-dragging .sra-drag-handle { cursor: grabbing; }
+.sra-popup.sra-sheet .sra-drag-handle { display: none; }
+
 .sra-popup *, .sra-popup *::before, .sra-popup *::after { box-sizing: border-box; }
 
 /* ── Evidence badge ──────────────────────────────────────────────────────
