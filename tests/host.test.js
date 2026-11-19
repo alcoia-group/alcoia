@@ -494,7 +494,9 @@ describe('the epistemic engine wired into host.js (item 44)', () => {
 
       // The target concept's own last attempt: correct at scenario.
       responseSignals.present({ q: 'scenario Q', span: 'scenario span', level: 'scenario' }, { paragraphKey: PARAGRAPH_KEY });
-      responseSignals.answerGraded('a well-reasoned answer', 'correct', 'high');
+      // Unsure in the calibrated case: since 19 November 2026 a correct AND sure scenario answer earns one challenge
+      // too (epistemic-engine.js), so the "stays at scenario" case is a correct but unsure answer.
+      responseSignals.answerGraded('a well-reasoned answer', 'correct', overconfident ? 'high' : 'low');
 
       document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;
       await host.onIntervention({ action: 'ask', evidence: ['because'] }, {}, document.getElementById('t'));
@@ -762,7 +764,8 @@ describe('quiz evidence reaches the epistemic engine (step 2 — evidence-silo f
 
     const rs = createResponseSignals();
     rs.present({ q: 'scenario Q', span: 'scenario span', level: 'scenario' }, { paragraphKey: PARAGRAPH_KEY, source: 'quiz' });
-    const record = rs.answerGraded('a well-reasoned answer', 'correct', 'high');
+    // Unsure: a correct and sure answer would now earn one challenge (epistemic-engine.js, 19 November 2026).
+    const record = rs.answerGraded('a well-reasoned answer', 'correct', 'low');
     seedQuizEvidence([{ documentKey: DOC_KEY, ...record }]);
 
     document.body.innerHTML = `<p id="t">${LONG_PARAGRAPH}</p>`;

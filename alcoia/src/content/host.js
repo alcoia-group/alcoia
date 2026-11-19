@@ -1248,6 +1248,7 @@ export async function createHost(deps) {
   // to paragraphKey," never a crash.
   const knowledgeUnitModule = await loadModule('src/content/signals/knowledge-unit.js');
   const { hasRelationCues } = await loadModule('src/content/relation-cues.js');
+  const { hasArgumentCues } = await loadModule('src/content/argument-cues.js');
   const keyTermsModule = await loadModule('src/content/key-terms.js');
   // Intelligence-architecture audit, step 5 — same shared id generator
   // intervention-policy.js itself uses for a policy-triggered 'ask', reused
@@ -1258,6 +1259,8 @@ export async function createHost(deps) {
     return {
       paragraphKey: text.slice(0, 80).trim(),
       knowledgeUnitId: knowledgeUnitModule.computeKnowledgeUnitId(text),
+      // The paragraph takes a side: a correct answer about it may lead to one challenge question (epistemic-engine.js).
+      argues: hasArgumentCues(text),
     };
   }
 
