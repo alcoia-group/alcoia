@@ -159,6 +159,33 @@ export function createUIController(deps = {}) {
       return null;
     }
 
+    // First choice: the far right edge of the window, on the half of the screen away from the paragraph. A paragraph in
+    // the lower half puts the card near the top, one in the upper half puts it near the bottom, so the card is never on
+    // the line being read and never in the middle of the page. It floats over the page rather than sitting in the margin.
+    // It is used only if it clears the paragraph the card is about and every other card; otherwise the older rules below
+    // (beside the paragraph, above or below it, a narrowed card in the larger margin) still apply.
+    if (anchorRect) {
+      const edge = 28;
+      const cl = vw - pw - edge;
+      const awayTop = (a.top + a.bottom) / 2 > vh / 2;
+      let y = awayTop ? 64 : vh - ph - 28;
+      const hit = (r, x0, y0) => x0 < r.right + m && x0 + pw > r.left - m && y0 < r.bottom + m && y0 + ph > r.top - m;
+      for (let k = 0; k < 6; k++) {
+        const blocker = av.find((r) => hit(r, cl, y));
+        if (!blocker) break;
+        y = awayTop ? blocker.bottom + m : blocker.top - m - ph;
+      }
+      const inside = cl >= m && y >= m && y + ph <= vh - m;
+      const clear = !av.some((r) => hit(r, cl, y)) && !(cl < a.right && cl + pw > a.left && y < a.bottom && y + ph > a.top);
+      if (inside && clear) {
+        root.style.left = cl + 'px';
+        root.style.top = y + 'px';
+        root.style.position = 'fixed';
+        root.style.visibility = '';
+        return;
+      }
+    }
+
     const candidates = [];
     if (a.right  + m + pw <= vw - m) candidates.push({ left: a.right + m,     top: clamp(a.top, m, vh - ph - m) });
     if (a.left   - m - pw >= m)      candidates.push({ left: a.left - m - pw, top: clamp(a.top, m, vh - ph - m) });
@@ -475,7 +502,7 @@ export function createUIController(deps = {}) {
   /* Show, place and start the autohide countdown. */
   function showPopup(root, anchorRect) {
     const avoidRects = [...openPopups.values()]
-      .filter((e) => e.el !== root && e.el.isConnected && e.el.classList.contains('show'))
+      .filter((e) => e.el !== root && e.el.isConnected && (e.el.classList.contains('show') || e.el.style.left !== ''))
       .map((e) => e.el.getBoundingClientRect());
 
     placePopup(root, anchorRect, avoidRects);
