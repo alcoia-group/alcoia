@@ -317,3 +317,34 @@ describe('pickLevelForConcept — knowledgeUnitId compatibility layer (step 3)',
     expect(byObject).toBe('adversarial');
   });
 });
+
+describe('nextLevel — a reader who is doing well is also challenged, once per session (19 November 2026)', () => {
+  it('right and sure at scenario leads to one challenge', () => {
+    expect(nextLevel({ level: 'scenario', correct: true, confidence: 'high' }, [])).toBe('adversarial');
+  });
+  it('right but unsure at scenario does not (unless the paragraph argues)', () => {
+    expect(nextLevel({ level: 'scenario', correct: true, confidence: 'low' }, [])).toBe('scenario');
+    expect(nextLevel({ level: 'scenario', correct: true, confidence: 'low' }, [], { argues: true })).toBe('adversarial');
+  });
+  it('right at free recall about a paragraph that argues leads to a challenge; otherwise to scenario', () => {
+    expect(nextLevel({ level: 'free_recall', correct: true }, [], { argues: true })).toBe('adversarial');
+    expect(nextLevel({ level: 'free_recall', correct: true }, [])).toBe('scenario');
+  });
+  it('only once per session', () => {
+    const challenged = [{ level: 'adversarial', confidence: 'high', correct: null }];
+    expect(nextLevel({ level: 'scenario', correct: true, confidence: 'high' }, challenged)).toBe('scenario');
+    expect(nextLevel({ level: 'free_recall', correct: true }, challenged, { argues: true })).toBe('scenario');
+  });
+  it('never after a wrong or inconclusive answer', () => {
+    for (const correct of [false, null]) {
+      for (const level of ['recognition', 'free_recall', 'scenario']) {
+        expect(nextLevel({ level, correct, confidence: 'high' }, [], { argues: true })).not.toBe('adversarial');
+      }
+    }
+  });
+  it('pickLevelForConcept reads argues from the identity', () => {
+    const history = [{ paragraphKey: 'p', level: 'free_recall', correct: true, confidence: 'low' }];
+    expect(pickLevelForConcept({ paragraphKey: 'p', argues: true }, history)).toBe('adversarial');
+    expect(pickLevelForConcept({ paragraphKey: 'p' }, history)).toBe('scenario');
+  });
+});
