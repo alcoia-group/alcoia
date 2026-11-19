@@ -308,7 +308,7 @@ export function createUIController(deps = {}) {
   // Every card can be moved by its top strip and pinned. A pinned card stays where it was put, does not stop the next
   // question, and is remembered on this device so it comes back at the next read of the same document (pinned-cards.js).
   // Only closing a card removes it. Nothing about a pin is sent anywhere.
-  const PIN_ICON = '\u{1F4CC}';
+  const PIN_ICON = '<svg class="sra-pin-icon" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" focusable="false"><path d="M7 3h6l-1 5 3 3v1H5v-1l3-3-1-5zM10 12v5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'; // drawn, not an emoji: it takes the card's colour and looks the same everywhere
   const MAX_SNAPSHOT_CHARS = 20000;
 
   function sanitizeStored(html) {
@@ -419,7 +419,7 @@ export function createUIController(deps = {}) {
       pinBtn.type = 'button';
       pinBtn.className = 'sra-ctrl-btn sra-pin-btn';
       pinBtn.title = t('card.keepOpen', lang);
-      pinBtn.textContent = PIN_ICON;
+      pinBtn.innerHTML = PIN_ICON;
       controls.insertBefore(pinBtn, controls.firstChild);
     }
     if (!pinBtn._wired) {
@@ -541,7 +541,7 @@ export function createUIController(deps = {}) {
 
     root.innerHTML = `
       <div class="sra-controls">
-        <button class="sra-ctrl-btn sra-pin-btn" title="${esc(L('card.keepOpen'))}">📌</button>
+        <button class="sra-ctrl-btn sra-pin-btn" title="${esc(L('card.keepOpen'))}"><svg class="sra-pin-icon" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" focusable="false"><path d="M7 3h6l-1 5 3 3v1H5v-1l3-3-1-5zM10 12v5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <button class="sra-ctrl-btn sra-close-btn" title="${esc(L('card.close'))}">✕</button>
       </div>
       <div class="sra-popup-body" dir="auto">${badge}${html}</div>
