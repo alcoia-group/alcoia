@@ -318,13 +318,13 @@ describe('pickLevelForConcept — knowledgeUnitId compatibility layer (step 3)',
   });
 });
 
-describe('nextLevel — a reader who is doing well is also challenged, once per session (19 November 2026)', () => {
-  it('right and sure at scenario leads to one challenge', () => {
-    expect(nextLevel({ level: 'scenario', correct: true, confidence: 'high' }, [])).toBe('adversarial');
+describe('nextLevel — a reader who is doing well on an argument is challenged, once per session (19 November 2026)', () => {
+  it('right and sure at scenario on a factual paragraph keeps the old ladder', () => {
+    expect(nextLevel({ level: 'scenario', correct: true, confidence: 'high' }, [])).toBe('scenario');
   });
-  it('right but unsure at scenario does not (unless the paragraph argues)', () => {
-    expect(nextLevel({ level: 'scenario', correct: true, confidence: 'low' }, [])).toBe('scenario');
+  it('right at scenario on a paragraph that argues leads to one challenge, sure or not', () => {
     expect(nextLevel({ level: 'scenario', correct: true, confidence: 'low' }, [], { argues: true })).toBe('adversarial');
+    expect(nextLevel({ level: 'scenario', correct: true, confidence: 'high' }, [], { argues: true })).toBe('adversarial');
   });
   it('right at free recall about a paragraph that argues leads to a challenge; otherwise to scenario', () => {
     expect(nextLevel({ level: 'free_recall', correct: true }, [], { argues: true })).toBe('adversarial');
@@ -332,7 +332,7 @@ describe('nextLevel — a reader who is doing well is also challenged, once per 
   });
   it('only once per session', () => {
     const challenged = [{ level: 'adversarial', confidence: 'high', correct: null }];
-    expect(nextLevel({ level: 'scenario', correct: true, confidence: 'high' }, challenged)).toBe('scenario');
+    expect(nextLevel({ level: 'scenario', correct: true, confidence: 'high' }, challenged, { argues: true })).toBe('scenario');
     expect(nextLevel({ level: 'free_recall', correct: true }, challenged, { argues: true })).toBe('scenario');
   });
   it('never after a wrong or inconclusive answer', () => {

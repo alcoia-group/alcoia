@@ -8,7 +8,9 @@
  * interrupt, so a miss costs nothing. Other languages fall back to the ordinary ladder.
  */
 const STANCE = [
-  /\b(should|ought to|must not|must be|need to|needs to|has to be)\b/i,
+  // Plain modal verbs ("you should enable encryption", "the key must be rotated") are NOT counted: how-to and
+  // reference text uses them for instructions, not positions. Only wording that says someone holds a view counts.
+  /\b(ought to|it is (wrong|right|unfair|unjust|a mistake|essential that|crucial that))\b/i,
   /\b(we argue|i argue|the author argues|argues that|we believe|i believe|in my view|in our view|i think|we think|we contend|we propose)\b/i,
   /\b(it is clear that|clearly|undoubtedly|without doubt|there is no doubt|obviously|it follows that|this proves|this shows that|this demonstrates)\b/i,
   /\b(the best|the only way|the right way|the wrong way|is better than|is worse than|is superior|is inferior)\b/i,
