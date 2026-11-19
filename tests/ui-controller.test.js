@@ -569,3 +569,46 @@ describe('moving, pinning and restoring cards', () => {
     expect(ui.openPopups.size).toBe(1);
   });
 });
+
+describe('where a card goes', () => {
+  const make = () => createUIController({ getSettings: () => ({ highlightEnabled: true, pinDefault: false, autohideEnabled: false }), fetchSummary: async () => '', pinnedStore: { load: async () => [], save: async () => {}, remove: async () => {} } });
+  const show = (ui, id, anchor) => {
+    const root = ui.reservePopup(id);
+    root.innerHTML = '<div class="sra-controls"></div><div class="sra-popup-body">x</div>';
+    ui.showPopup(root, anchor);
+    return { top: parseFloat(root.style.top), left: parseFloat(root.style.left) };
+  };
+  const vw = () => window.innerWidth, vh = () => window.innerHeight;
+
+  it('a paragraph in the lower half puts the card near the top, at the far right', () => {
+    const p = show(make(), 'a', { left: 100, right: 500, top: vh() * 0.6, bottom: vh() * 0.7 });
+    expect(p.top).toBeLessThan(vh() * 0.3);
+    expect(p.left).toBeGreaterThan(vw() * 0.5);
+  });
+
+  it('a paragraph in the upper half puts the card near the bottom, at the far right', () => {
+    const p = show(make(), 'a', { left: 100, right: 500, top: vh() * 0.2, bottom: vh() * 0.3 });
+    expect(p.top).toBeGreaterThan(vh() * 0.5);
+    expect(p.left).toBeGreaterThan(vw() * 0.5);
+  });
+
+  it('a second card stacks above the first instead of covering it', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      const l = parseFloat(this.style.left), t = parseFloat(this.style.top);
+      return Number.isFinite(l) && Number.isFinite(t) ? { left: l, top: t, right: l + 360, bottom: t + 150, width: 360, height: 150 } : { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+    });
+    try {
+      const ui = make();
+      const first = show(ui, 'a', { left: 100, right: 500, top: vh() * 0.2, bottom: vh() * 0.3 });
+      const second = show(ui, 'b', { left: 100, right: 500, top: vh() * 0.2, bottom: vh() * 0.3 });
+      expect(second.top + 150).toBeLessThanOrEqual(first.top); // the bottom stack grows upward, no overlap
+    } finally { spy.mockRestore(); }
+  });
+
+  it('does not use the far-right position when it would sit on the paragraph: it falls back to the older rules', () => {
+    // a paragraph that reaches the right edge of the window and most of the height
+    const p = show(make(), 'a', { left: 0, right: vw(), top: vh() * 0.1, bottom: vh() * 0.9 });
+    expect(Number.isFinite(p.top) && Number.isFinite(p.left)).toBe(true);
+    expect(p.left).not.toBe(vw() - 360 - 28);
+  });
+});
