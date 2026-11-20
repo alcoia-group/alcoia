@@ -87,23 +87,20 @@ describe('reservePopup', () => {
   /* The behaviour the comprehension renderer was missing before the split:
    * it deduped but never enforced the cap, so a page full of pinned cards
    * could still have another stacked on top of it. */
-  it('evicts the oldest unpinned popup at the cap', () => {
+  it('never closes a card to make room: at the cap the new card waits and everything on screen stays', () => {
     const ui = build();
-    for (let i = 0; i < 5; i++) ui.reservePopup(`p${i}`);
-    expect(ui.openPopups.size).toBe(5);
-
-    const sixth = ui.reservePopup('p5');
-    expect(sixth).toBeTruthy();
-    expect(ui.openPopups.size).toBe(5);
-    expect(ui.openPopups.has('p0')).toBe(false);   // oldest went
-    expect(ui.openPopups.has('p5')).toBe(true);
+    for (let i = 0; i < 8; i++) ui.reservePopup(`p${i}`);
+    expect(ui.openPopups.size).toBe(8);
+    expect(ui.reservePopup('p8')).toBeNull();
+    expect(ui.openPopups.size).toBe(8);
+    expect(ui.openPopups.has('p0')).toBe(true);
   });
 
   it('refuses to add anything when every slot is pinned', () => {
     const ui = build();
-    for (let i = 0; i < 5; i++) ui.reservePopup(`p${i}`).dataset.pinned = 'true';
-    expect(ui.reservePopup('p5')).toBeNull();
-    expect(ui.openPopups.size).toBe(5);
+    for (let i = 0; i < 8; i++) ui.reservePopup(`p${i}`).dataset.pinned = 'true';
+    expect(ui.reservePopup('p8')).toBeNull();
+    expect(ui.openPopups.size).toBe(8);
   });
 });
 
@@ -179,37 +176,31 @@ describe('hasVisibleQuestionCard (step 9A)', () => {
    * evictable, the 6th reservation is refused outright (the same "every
    * slot is pinned" shape the test right above this one already asserts),
    * and every original question card survives untouched. */
-  it('refuses to evict a question card at the MAX_POPUPS cap — a live, unanswered question is never silently closed', () => {
+  it('refuses to evict a question card at the cap: a live, unanswered question is never silently closed', () => {
     const ui = build();
-    for (let i = 0; i < 5; i++) ui.reservePopup(`q-p${i}`, 'question');
+    for (let i = 0; i < 8; i++) ui.reservePopup(`q-p${i}`, 'question');
     expect(ui.hasVisibleQuestionCard()).toBe(true);
-
-    const sixth = ui.reservePopup('q-p5', 'question');
-    expect(sixth).toBeNull();
-    expect(ui.openPopups.has('q-p0')).toBe(true); // nothing evicted
-    expect(ui.openPopups.size).toBe(5);
-    expect(ui.hasVisibleQuestionCard()).toBe(true);
+    expect(ui.reservePopup('q-p8', 'question')).toBeNull();
+    expect(ui.openPopups.has('q-p0')).toBe(true);
+    expect(ui.openPopups.size).toBe(8);
   });
 
-  it('evicts a non-question popup to make room even while question cards occupy other slots — only question-kind entries are protected', () => {
+  it('does not evict a plain popup either: a card stays until it is closed', () => {
     const ui = build();
-    ui.reservePopup('non-question'); // oldest — no kind
-    for (let i = 0; i < 4; i++) ui.reservePopup(`q-p${i}`, 'question');
-    expect(ui.openPopups.size).toBe(5);
-
-    const sixth = ui.reservePopup('q-p4', 'question');
-    expect(sixth).toBeTruthy();
-    expect(ui.openPopups.has('non-question')).toBe(false); // the evictable one went
-    expect(ui.openPopups.has('q-p0')).toBe(true); // every question card survived
-    expect(ui.openPopups.size).toBe(5);
+    ui.reservePopup('non-question');
+    for (let i = 0; i < 7; i++) ui.reservePopup(`q-p${i}`, 'question');
+    expect(ui.reservePopup('q-p7', 'question')).toBeNull();
+    expect(ui.openPopups.has('non-question')).toBe(true);
+    expect(ui.openPopups.size).toBe(8);
   });
 
-  it('a pinned question card keeps counting as visible after hidePopup() (Escape) — only an unpinned one is closed by it', () => {
+  it('a pinned question card stays open after hidePopup() (Escape) but no longer blocks the next question', () => {
     const ui = build();
     const root = ui.reservePopup('q-abc', 'question');
     root.dataset.pinned = 'true';
     ui.hidePopup();
-    expect(ui.hasVisibleQuestionCard()).toBe(true);
+    expect(ui.openPopups.has('q-abc')).toBe(true);
+    expect(ui.hasVisibleQuestionCard()).toBe(false);
   });
 
   it('an unpinned question card no longer counts as visible after hidePopup() (Escape)', () => {
@@ -479,5 +470,145 @@ describe('showSelectionTooltip', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/* Cards can be moved and pinned, and a pinned card comes back at the next read of the same document. */
+describe('moving, pinning and restoring cards', () => {
+  const fakeStore = (initial = []) => {
+    const saved = new Map(initial.map((e) => [e.id, e]));
+    return { saved, load: async () => [...saved.values()], save: async (e) => { saved.set(e.id, e); }, remove: async (id) => { saved.delete(id); } };
+  };
+  const make = (store) => createUIController({ getSettings: () => ({ highlightEnabled: true, pinDefault: false, autohideEnabled: false }), fetchSummary: async () => '', pinnedStore: store });
+  const card = (ui, id, kind) => {
+    const root = ui.reservePopup(id, kind);
+    root.innerHTML = '<div class="sra-controls"><button class="sra-close-btn">x</button></div><div class="sra-popup-body">Body of ' + id + '</div>';
+    root.querySelector('.sra-close-btn').onclick = () => ui.closePopup(root, id);
+    ui.showPopup(root, null);
+    return root;
+  };
+
+  it('every card gets a move strip and a pin button', () => {
+    const ui = make(fakeStore());
+    const root = card(ui, 'a');
+    expect(root.querySelector('.sra-drag-handle')).toBeTruthy();
+    expect(root.querySelector('.sra-pin-btn')).toBeTruthy();
+    expect(root.querySelectorAll('.sra-drag-handle').length).toBe(1);
+  });
+
+  it('pinning keeps the card (not closed by Escape), saves it, and unpinning forgets it', async () => {
+    const store = fakeStore();
+    const ui = make(store);
+    const root = card(ui, 'a', 'explain');
+    root.querySelector('.sra-pin-btn').click();
+    expect(root.dataset.pinned).toBe('true');
+    await Promise.resolve();
+    expect(store.saved.has('a')).toBe(true);
+    ui.hidePopup();
+    expect(ui.openPopups.has('a')).toBe(true);
+    root.querySelector('.sra-pin-btn').click();
+    expect(root.dataset.pinned).toBe('false');
+    expect(store.saved.has('a')).toBe(false);
+  });
+
+  it('closing a pinned card removes it from what comes back next time', () => {
+    const store = fakeStore();
+    const ui = make(store);
+    const root = card(ui, 'a');
+    root.querySelector('.sra-pin-btn').click();
+    expect(store.saved.has('a')).toBe(true);
+    root.querySelector('.sra-close-btn').click();
+    expect(store.saved.has('a')).toBe(false);
+  });
+
+  it('dragging the strip moves the card and a pinned card is saved at its new place', () => {
+    const store = fakeStore();
+    const ui = make(store);
+    const root = card(ui, 'a');
+    root.style.left = '100px'; root.style.top = '100px';
+    root.querySelector('.sra-pin-btn').click();
+    const h = root.querySelector('.sra-drag-handle');
+    const ev = (type, x, y) => Object.assign(new Event(type, { bubbles: true, cancelable: true }), { clientX: x, clientY: y, button: 0, pointerId: 1 });
+    h.dispatchEvent(ev('pointerdown', 10, 10));
+    h.dispatchEvent(ev('pointermove', 60, 40));
+    expect(root.dataset.moved).toBe('1');
+    expect(parseFloat(root.style.left)).not.toBe(100);
+    h.dispatchEvent(ev('pointerup', 60, 40));
+    expect(root.classList.contains('sra-dragging')).toBe(false);
+  });
+
+  it('restorePinned draws a saved card as a pinned plain copy, with scripts removed, and does not count it as shown', async () => {
+    const shown = vi.fn();
+    const store = fakeStore([{ id: 'x', kind: 'explain', x: 0.5, y: 0.2, w: 300, html: '<div>Saved <b>words</b><script>alert(1)</script><img src=x onerror=alert(2)></div>' }]);
+    const ui = createUIController({ getSettings: () => ({ highlightEnabled: true, pinDefault: false, autohideEnabled: false }), fetchSummary: async () => '', pinnedStore: store, onPopupShown: shown });
+    const n = await ui.restorePinned();
+    expect(n).toBe(1);
+    const root = ui.openPopups.get('x').el;
+    expect(root.dataset.pinned).toBe('true');
+    expect(root.textContent).toContain('Saved words');
+    expect(root.querySelector('script')).toBeNull();
+    expect(root.innerHTML).not.toMatch(/onerror/i);
+    expect(shown).not.toHaveBeenCalled();
+  });
+
+  it('restorePinned hands an unanswered saved question to the host to show again', async () => {
+    const store = fakeStore([{ id: 'q-1', kind: 'question', x: 0.1, y: 0.1, restore: { type: 'question', question: { q: 'What?' }, context: {} } }]);
+    const ui = make(store);
+    const restoreQuestion = vi.fn((restore, entry) => { const root = ui.reservePopup(entry.id, 'question'); root.innerHTML = '<div class="sra-controls"></div><div class="sra-popup-body">' + restore.question.q + '</div>'; ui.showPopup(root, null); return true; });
+    const n = await ui.restorePinned({ restoreQuestion });
+    expect(restoreQuestion).toHaveBeenCalledTimes(1);
+    expect(n).toBe(1);
+    expect(ui.openPopups.get('q-1').el.dataset.pinned).toBe('true');
+  });
+
+  it('a card already on screen is not drawn a second time', async () => {
+    const store = fakeStore([{ id: 'a', kind: 'explain', x: 0.1, y: 0.1, html: 'again' }]);
+    const ui = make(store);
+    card(ui, 'a');
+    expect(await ui.restorePinned()).toBe(0);
+    expect(ui.openPopups.size).toBe(1);
+  });
+});
+
+describe('where a card goes', () => {
+  const make = () => createUIController({ getSettings: () => ({ highlightEnabled: true, pinDefault: false, autohideEnabled: false }), fetchSummary: async () => '', pinnedStore: { load: async () => [], save: async () => {}, remove: async () => {} } });
+  const show = (ui, id, anchor) => {
+    const root = ui.reservePopup(id);
+    root.innerHTML = '<div class="sra-controls"></div><div class="sra-popup-body">x</div>';
+    ui.showPopup(root, anchor);
+    return { top: parseFloat(root.style.top), left: parseFloat(root.style.left) };
+  };
+  const vw = () => window.innerWidth, vh = () => window.innerHeight;
+
+  it('a paragraph in the lower half puts the card near the top, at the far right', () => {
+    const p = show(make(), 'a', { left: 100, right: 500, top: vh() * 0.6, bottom: vh() * 0.7 });
+    expect(p.top).toBeLessThan(vh() * 0.3);
+    expect(p.left).toBeGreaterThan(vw() * 0.5);
+  });
+
+  it('a paragraph in the upper half puts the card near the bottom, at the far right', () => {
+    const p = show(make(), 'a', { left: 100, right: 500, top: vh() * 0.2, bottom: vh() * 0.3 });
+    expect(p.top).toBeGreaterThan(vh() * 0.5);
+    expect(p.left).toBeGreaterThan(vw() * 0.5);
+  });
+
+  it('a second card stacks above the first instead of covering it', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      const l = parseFloat(this.style.left), t = parseFloat(this.style.top);
+      return Number.isFinite(l) && Number.isFinite(t) ? { left: l, top: t, right: l + 360, bottom: t + 150, width: 360, height: 150 } : { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+    });
+    try {
+      const ui = make();
+      const first = show(ui, 'a', { left: 100, right: 500, top: vh() * 0.2, bottom: vh() * 0.3 });
+      const second = show(ui, 'b', { left: 100, right: 500, top: vh() * 0.2, bottom: vh() * 0.3 });
+      expect(second.top + 150).toBeLessThanOrEqual(first.top); // the bottom stack grows upward, no overlap
+    } finally { spy.mockRestore(); }
+  });
+
+  it('does not use the far-right position when it would sit on the paragraph: it falls back to the older rules', () => {
+    // a paragraph that reaches the right edge of the window and most of the height
+    const p = show(make(), 'a', { left: 0, right: vw(), top: vh() * 0.1, bottom: vh() * 0.9 });
+    expect(Number.isFinite(p.top) && Number.isFinite(p.left)).toBe(true);
+    expect(p.left).not.toBe(vw() - 360 - 28);
   });
 });
