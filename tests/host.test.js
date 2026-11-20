@@ -2320,6 +2320,28 @@ describe('automatic-intervention concurrency guard (Step 12A)', () => {
     expect(deferred.pendingCount()).toBe(0);
   });
 
+  it('a question that took too long is dropped, not shown late, and nothing is spent on it', async () => {
+    const deferred = deferredQuestions();
+    installSendMessage(deferred);
+    mockProxyFetch(proxyFetchImpl([], []));
+    const { host, setOrchestrator } = await createHost(assignmentDeps());
+    const engineModule = await import('../alcoia/src/content/intervention-policy.js');
+    setOrchestrator({ interventionPolicy: engineModule.createInterventionPolicy({}) });
+
+    document.body.innerHTML = `<p id="t">${ASK_TEXT}</p>`;
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+    try {
+      const askPromise = host.onIntervention({ action: 'ask', evidence: ['because'], interventionId: 'iv_late' }, {}, document.getElementById('t'), 0);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(deferred.pendingCount()).toBe(1);
+      offset = 16000; // the answer arrives 16 seconds after it was asked for: past the 15 second limit
+      deferred.resolveNext();
+      expect(await askPromise).toBe(false);
+    } finally { spy.mockRestore(); }
+  });
+
   it('retention starts first: an ask arriving mid-generation never reaches fetchQuestions', async () => {
     const knowledgeUnitId = await realKnowledgeUnitId(DUE_TEXT);
     const deferred = deferredQuestions();
