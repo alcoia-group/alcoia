@@ -171,10 +171,17 @@ describe('the AI-call budget interacts correctly with the cache', () => {
     chrome.runtime.sendMessage = sendMessage;
     const { fetchSummary } = await createHost(baseDeps());
 
-    // 8 genuinely distinct passages — burst limit is 6.
+    // 8 genuinely distinct passages — burst limit is 6. The limiter counts a rolling window by Date.now(), so a loaded
+    // machine could let early calls age out mid-test (run 6: "expected 7 to be 6"); pin the clock for this loop.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-19T12:00:00Z'));
     const results = [];
-    for (let i = 0; i < 8; i++) {
-      results.push(await fetchSummary(`distinct passage number ${i} of eight`, 'tldr'));
+    try {
+      for (let i = 0; i < 8; i++) {
+        results.push(await fetchSummary(`distinct passage number ${i} of eight`, 'tldr'));
+      }
+    } finally {
+      vi.useRealTimers();
     }
     const succeeded = results.filter((r) => r === 'a canned summary').length;
     expect(succeeded).toBe(6);
