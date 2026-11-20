@@ -18,3 +18,10 @@
 
 ## 20 November 2026: scrolling boxes (orchestrator `scrollRoot`)
 `createOrchestrator` takes an optional `scrollRoot`, a function returning the element that scrolls instead of the window (or null). The scroll listener is now a capture listener on the document that accepts the window or that one element and ignores every other scrolling element, so pages without the option behave as before. Why: the workspace's full-screen Word and PDF view makes the reading area a fixed scrolling box, so the window never scrolls and never fires `scroll`; the active paragraph then only moved on the 5 s idle tick and scroll speed read 0. The workspace must pass `scrollRoot: () => (document.documentElement.classList.contains('is-fullscreen') ? document.querySelector('.annotator') : null)` in `detection/boot.js` (not done in this repo). The reading line itself (40% of `window.innerHeight`) is unchanged: it is measured against the whole window, not the visible document area. Verified by unit tests (a scroll in the named box moves the active paragraph; another box and the no-option case are ignored; the box test fails without the capture phase). Not verified in a browser.
+
+## 20 November 2026: PowerPoint closed for the beta
+Owner decision: slide decks already explain a lot, so how Alcoia should help on them is worked out during the beta. A
+local `.pptx` is no longer opened in alcoia's viewer (`background.js`: `isLocalPptx = false`, the old test kept in a
+comment); the browser handles it. The settings toggle reads "Open local PDF files in alcoia" and the upgrade page lists
+"PDF files". The PowerPoint viewer, handler and assigned decks already uploaded are untouched (the server refuses new
+deck uploads). Copy tests updated.

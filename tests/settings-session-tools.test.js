@@ -93,8 +93,8 @@ describe('settings page: new switches and wording', () => {
     expect(html).not.toMatch(/Uses one assist/);
   });
 
-  it('names the PDF and PowerPoint setting in full and keeps one name for keeping cards open', () => {
-    expect(html).toContain('Open local PDF and PowerPoint files in alcoia');
+  it('names the local PDF setting in full (PowerPoint closed for the beta) and keeps one name for keeping cards open', () => {
+    expect(html).toContain('<span class="toggle-name">Open local PDF files in alcoia</span>');
     expect(html).not.toMatch(/PDF\/PPTX/);
     expect(html).toContain('Keep cards until I close them');
     expect(html).not.toMatch(/Pin by default/);
