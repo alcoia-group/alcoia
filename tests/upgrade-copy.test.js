@@ -30,9 +30,10 @@ describe('plans page', () => {
     expect(html).not.toMatch(/Cross-device sync/);
   });
 
-  it('puts what is free on the Free list, with PDF and PowerPoint named in full', () => {
+  it('puts what is free on the Free list (PowerPoint closed for the beta)', () => {
     const free = list('Free');
-    for (const item of ['Retrieval questions', 'Session recall', 'Reading receipts', 'PDF and PowerPoint files', 'Dyslexia mode']) expect(free).toContain(item);
+    for (const item of ['Retrieval questions', 'Session recall', 'Reading receipts', 'PDF files', 'Dyslexia mode']) expect(free).toContain(item);
+    expect(free).not.toContain('PowerPoint');
     expect(html).not.toMatch(/PDF and PPTX/);
   });
 

@@ -114,7 +114,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (url.includes('#alcoia-open-native')) return;
 
   const isLocalPdf  = /^file:\/\/.+\.pdf(\?.*)?(#.*)?$/i.test(url);
-  const isLocalPptx = /^file:\/\/.+\.pptx(\?.*)?(#.*)?$/i.test(url);
+  // PowerPoint is closed for the beta (owner decision, 20 November 2026): slide decks already explain a lot, and how
+  // alcoia should help on them is worked out during the beta. A local .pptx is left to the browser. To open it again:
+  // const isLocalPptx = /^file:\/\/.+\.pptx(\?.*)?(#.*)?$/i.test(url);
+  const isLocalPptx = false;
   const isWebPdf    = /^https?:\/\/.+\.pdf(\?.*)?(#.*)?$/i.test(url);
   if (!isLocalPdf && !isLocalPptx && !isWebPdf) return;
 

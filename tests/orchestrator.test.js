@@ -274,3 +274,55 @@ describe('createOrchestrator(): host.learnerEstimateFor() reaches the policy (St
     await vi.waitFor(() => expect(host.onIntervention).toHaveBeenCalled());
   });
 });
+
+describe('createOrchestrator(): scrollRoot (a scrolling box instead of the window)', () => {
+  // Two paragraphs, 400 px apart. `offset` is how far the box has scrolled.
+  async function setup(scrollRoot) {
+    vi.stubGlobal('chrome', { storage: { local: { set: (_o, cb) => cb?.(), get: (_k, cb) => cb({}) } } });
+    let offset = 0;
+    const mk = (top) => ({
+      el: { getBoundingClientRect: () => ({ top: top - offset, bottom: top - offset + 200, height: 200 }) },
+      words: 60, media: false,
+    });
+    const blocks = [mk(0), mk(400)];
+    const orch = await createOrchestrator({
+      loadModule,
+      comprehensionMonitor: stubComprehensionMonitor(),
+      settings: () => ({ assistantEnabled: true, comprehensionCheckEnabled: true, debugEnabled: false }),
+      host: stubHost(),
+      paragraphTrackerOpts: { blockSource: () => blocks, viewportHeight: () => 800, readingLine: 0.3 },
+      scrollRoot,
+    });
+    const ac = new AbortController();
+    orch.installListeners(ac.signal);
+    orch.primeParagraph();
+    return { orch, ac, scrollTo: (y) => { offset = y; } };
+  }
+
+  it('follows a scroll in the named box, which never reaches the window', async () => {
+    const box = document.createElement('div');
+    document.body.appendChild(box);
+    const { orch, ac, scrollTo } = await setup(() => box);
+    expect(orch.paragraphTracker.getActive().index).toBe(0);
+    scrollTo(300);
+    box.dispatchEvent(new Event('scroll')); // scroll does not bubble: only a capture listener hears it
+    expect(orch.paragraphTracker.getActive().index).toBe(1);
+    ac.abort(); box.remove();
+  });
+
+  it('ignores a scroll in any other box, and in the named box when no scrollRoot is given', async () => {
+    const box = document.createElement('div');
+    const other = document.createElement('div');
+    document.body.append(box, other);
+    const named = await setup(() => box);
+    named.scrollTo(300);
+    other.dispatchEvent(new Event('scroll'));
+    expect(named.orch.paragraphTracker.getActive().index).toBe(0);
+    named.ac.abort();
+    const plain = await setup(undefined);
+    plain.scrollTo(300);
+    box.dispatchEvent(new Event('scroll'));
+    expect(plain.orch.paragraphTracker.getActive().index).toBe(0);
+    plain.ac.abort(); box.remove(); other.remove();
+  });
+});
