@@ -70,7 +70,11 @@ export function createParagraphTracker(opts = {}) {
   const doc          = opts.document || (typeof document !== 'undefined' ? document : null);
   const viewportH    = opts.viewportHeight || (() => window.innerHeight);
   const viewportW    = opts.viewportWidth || (() => window.innerWidth);
-  const readingLine  = opts.readingLine ?? READING_LINE;
+  // A number, or a function returning one so the line can follow what is learned about this reader (reading-line.js).
+  const readingLineOpt = opts.readingLine ?? READING_LINE;
+  const getReadingLine = typeof readingLineOpt === 'function' ? readingLineOpt : () => readingLineOpt;
+  // True when the page cannot scroll any further down. A function so a scrolling box other than the window can say so.
+  const atEndOpt = opts.atEnd || null;
   /* Read live: an SPA can change the page language without a reload, and a
      captured copy would keep counting words with the wrong segmenter. */
   const getLang      = opts.lang || (() => detectLanguage(doc));
@@ -141,12 +145,33 @@ export function createParagraphTracker(opts = {}) {
      and read down columns, so the reading line is a vertical band and the
      relevant extent of a paragraph is its horizontal one. Everything else
      about the heuristic is unchanged; only the axis moves. */
+  function pageIsAtEnd() {
+    try {
+      const a = atEndOpt ? atEndOpt() : undefined;
+      if (a !== undefined) return !!a;
+      const el = doc && (doc.scrollingElement || doc.documentElement);
+      if (!el) return false;
+      return el.scrollHeight > el.clientHeight + 8 && el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+    } catch (e) { return false; }
+  }
+
   function elementAtReadingLine(overrideY) {
     if (!paragraphs.length) return null;
     const axis = getAxis();
     const span = axis.vertical ? viewportW() : viewportH();
-    const frac = axis.vertical && axis.rtl ? 1 - readingLine : readingLine;
-    const line = Number.isFinite(overrideY) && !axis.vertical ? overrideY : span * frac;
+    const rl = Math.min(0.9, Math.max(0.1, Number(getReadingLine()) || READING_LINE));
+    const frac = axis.vertical && axis.rtl ? 1 - rl : rl;
+    let line = Number.isFinite(overrideY) && !axis.vertical ? overrideY : span * frac;
+
+    // At the very end of the page the last paragraph can never be scrolled up to the line, so a reader finishing it was
+    // judged on the one before. When the page cannot scroll further and the last paragraph starts below the line, the
+    // line moves to its first lines.
+    if (!axis.vertical && !Number.isFinite(overrideY) && pageIsAtEnd()) {
+      try {
+        const lr = paragraphs[paragraphs.length - 1].el.getBoundingClientRect();
+        if (lr.height > 0 && lr.top > line && lr.top < span) line = Math.min(span - 1, lr.top + 4);
+      } catch (e) { /* keep the line where it was */ }
+    }
 
     let best = null;
     let bestDist = Infinity;

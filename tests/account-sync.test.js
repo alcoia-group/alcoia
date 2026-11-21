@@ -109,8 +109,34 @@ describe('account-sync', () => {
     expect(storage.data.sra_baseline_wpm).toBe(240);
     await runTimers();
     const put = server.calls.find((c) => c.method === 'PUT' && c.path === '/api/account/reading-baseline');
-    expect(put.body).toEqual({ globalWpm: 240, byLanguage: { fr: 200, en: 250 } });
+    expect(put.body).toEqual({ globalWpm: 240, byLanguage: { fr: 200, en: 250 }, readingLine: null });
     expect(JSON.stringify(put.body)).not.toMatch(/http|text|url/i);
+  });
+
+  it('a new device takes the reading line from the account, and a device that learned one sends it up', async () => {
+    const server = fakeServer({ settings: {}, baseline: { status: 'enabled', globalWpm: null, byLanguage: {}, readingLine: 0.52 } });
+    const fresh = memoryStorage({ ...SESSION });
+    const syncA = Sync.create({ storage: fresh, fetchImpl: server.fetchImpl, backendOrigin: 'https://s', ...fakeTimers() });
+    await syncA.pull({ force: true });
+    expect(fresh.data.sra_reading_line).toBe(0.52);
+
+    const server2 = fakeServer({ settings: {}, baseline: { status: 'enabled', globalWpm: null, byLanguage: {}, readingLine: null } });
+    const learned = memoryStorage({ ...SESSION, sra_reading_line: 0.46 });
+    const syncB = Sync.create({ storage: learned, fetchImpl: server2.fetchImpl, backendOrigin: 'https://s', ...fakeTimers() });
+    await syncB.pull({ force: true });
+    await runTimers();
+    const put = server2.calls.find((c) => c.method === 'PUT' && c.path === '/api/account/reading-baseline');
+    expect(put.body).toEqual({ globalWpm: null, byLanguage: {}, readingLine: 0.46 });
+    expect(learned.data.sra_reading_line).toBe(0.46); // this device's own value is not overwritten by the account
+  });
+
+  it('a reading line the server would refuse is never sent', async () => {
+    const server = fakeServer({ settings: {}, baseline: { status: 'enabled', globalWpm: null, byLanguage: {}, readingLine: null } });
+    const storage = memoryStorage({ ...SESSION, sra_reading_line: 0.95 });
+    const sync = Sync.create({ storage, fetchImpl: server.fetchImpl, backendOrigin: 'https://s', ...fakeTimers() });
+    await sync.pull({ force: true });
+    await runTimers();
+    expect(server.calls.some((c) => c.method === 'PUT' && c.path === '/api/account/reading-baseline')).toBe(false);
   });
 
   it('with account-based learning off, the baseline is neither read nor sent', async () => {

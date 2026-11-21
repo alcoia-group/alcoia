@@ -88,11 +88,59 @@ export async function createOrchestrator(deps) {
     loadModule('src/content/signals/struggle-evidence-rule.js'),
   ]);
 
-  const paragraphTracker   = paraTrackModule.createParagraphTracker({ minWords: 20, ...(paragraphTrackerOpts || {}) });
+  // Where this reader reads on the screen (signals/reading-line.js). The paragraph tracker asks for the line each time,
+  // so what is learned takes effect at once; it starts where it always was (40% of the window height).
+  const lineModule = await loadModule('src/content/signals/reading-line.js');
+  const readingLineLearner = lineModule.createReadingLineLearner();
+  const scrollBox = () => { try { return scrollRoot ? scrollRoot() : null; } catch (err) { return null; } };
+  const paragraphTracker   = paraTrackModule.createParagraphTracker({
+    minWords: 20,
+    readingLine: () => readingLineLearner.value(),
+    // undefined (no scrolling box) lets the tracker look at the window itself
+    atEnd: () => { const box = scrollBox(); return box ? (box.scrollHeight > box.clientHeight + 8 && box.scrollTop + box.clientHeight >= box.scrollHeight - 4) : undefined; },
+    ...(paragraphTrackerOpts || {}),
+  });
   const scrollRegression   = regressionModule.createScrollRegressionDetector();
   const interactionSignals = interactionModule.createInteractionSignals();
   const scrollDynamics     = dynamicsModule.createScrollDynamics();
   const cursorTracker      = cursorModule.createCursorTracker();
+
+  // The learned line is kept on the device (sra_reading_line_state, a 20-bin histogram) and the current number
+  // (sra_reading_line) is what follows the account (shared/account-sync.js). A value that arrives from the account
+  // is used only while this device has learned nothing of its own.
+  const LINE_KEY = 'sra_reading_line';
+  const LINE_STATE_KEY = 'sra_reading_line_state';
+  const lineStore = () => (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) || null;
+  let lineSaved = null;
+  let lineSaveTimer = null;
+  let lastLineSampleAt = 0;
+  (async () => {
+    try {
+      const st = lineStore();
+      if (!st) return;
+      const got = await new Promise((resolve) => st.get({ [LINE_KEY]: null, [LINE_STATE_KEY]: null }, resolve));
+      if (!readingLineLearner.load(got[LINE_STATE_KEY])) readingLineLearner.seed(got[LINE_KEY]);
+      lineSaved = readingLineLearner.value();
+    } catch (err) { /* the line just stays where it started */ }
+  })();
+  function saveReadingLine() {
+    clearTimeout(lineSaveTimer);
+    lineSaveTimer = setTimeout(() => {
+      try {
+        const st = lineStore();
+        if (!st) return;
+        const v = readingLineLearner.value();
+        // the number is written (and so synced) only when it moved by a visible amount
+        if (lineSaved !== null && Math.abs(v - lineSaved) < 0.01) { st.set({ [LINE_STATE_KEY]: readingLineLearner.state() }); return; }
+        lineSaved = v;
+        st.set({ [LINE_KEY]: v, [LINE_STATE_KEY]: readingLineLearner.state() });
+      } catch (err) { /* never breaks reading */ }
+    }, 8000);
+  }
+  function noteReadingPosition(y, weight) {
+    const vh = window.innerHeight;
+    if (vh > 0 && readingLineLearner.note(y / vh, weight)) saveReadingLine();
+  }
   const progressionEntropy = entropyModule.createProgressionEntropy();
   const scrollKinematicsTracker = kinematicsTrackerModule.createScrollKinematicsTracker();
   const awayDetector       = awayModule.createAwayDetector(awayOpts || {});
@@ -347,6 +395,12 @@ export async function createOrchestrator(deps) {
     for (const type of ['mousemove', 'keydown', 'pointerdown', 'wheel', 'touchstart', 'scroll']) {
       window.addEventListener(type, () => noteAway('input'), { passive: true, signal });
     }
+    // A value pulled from the account after startup (a new device) seeds the line while nothing is learned here yet.
+    try {
+      const onLine = (changes, area) => { if (area === 'local' && changes[LINE_KEY] && readingLineLearner.samples() === 0) readingLineLearner.seed(changes[LINE_KEY].newValue); };
+      chrome.storage.onChanged.addListener(onLine);
+      signal.addEventListener('abort', () => { try { chrome.storage.onChanged.removeListener(onLine); } catch (err) { /* gone */ } });
+    } catch (err) { /* no storage events here */ }
     if (document.visibilityState === 'hidden') noteAway('hidden');
 
     // Cursor as a reading pointer. Most mouse movement is not reading, so the
@@ -373,6 +427,12 @@ export async function createOrchestrator(deps) {
         // any kind, not just no detection (item DC-1a).
         scrollKinematicsTracker.update(y);
         syncParagraph();
+        // The pointer resting on text during a scroll is the one position that is the reader's own choice.
+        const stamp = Date.now();
+        if (stamp - lastLineSampleAt > 2500) {
+          const py = cursorTracker.getPointerY();
+          if (Number.isFinite(py)) { lastLineSampleAt = stamp; noteReadingPosition(py, 1); }
+        }
         const signal = comprehensionMonitor.onScroll();
         if (signal) pumpSignals(signal);
       } catch (e) {}
@@ -388,7 +448,13 @@ export async function createOrchestrator(deps) {
       selectionDebounce = setTimeout(() => {
         try {
           const text = String(window.getSelection?.() || '');
-          if (text.trim()) interactionSignals.update({ kind: 'selection', text });
+          if (text.trim()) {
+            interactionSignals.update({ kind: 'selection', text });
+            // where the reader selects is where they are reading
+            const sel = window.getSelection();
+            const box = sel && sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : null;
+            if (box && box.height > 0 && box.bottom > 0 && box.top < window.innerHeight) noteReadingPosition((box.top + box.bottom) / 2, 2);
+          }
         } catch (e) {}
       }, 400);
     }, { signal });
