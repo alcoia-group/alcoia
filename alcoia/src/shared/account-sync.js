@@ -34,7 +34,8 @@
     beta_questions: 'sra_beta_questions', // BETA-FEEDBACK
   });
   const STORAGE_TO_SETTING = Object.fromEntries(Object.entries(SETTING_KEYS).map(([a, b]) => [b, a]));
-  const BASELINE_KEYS = ['sra_baseline_wpm', 'sra_baseline_wpm_by_lang'];
+  // The reading speed, and where on the screen this reader reads (sra_reading_line, a fraction of the window height).
+  const BASELINE_KEYS = ['sra_baseline_wpm', 'sra_baseline_wpm_by_lang', 'sra_reading_line'];
   const SNAPSHOT_KEY = 'sra_account_sync_snapshot';
   const COLOR = /^(rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(,\s*(0|1|0?\.\d{1,3})\s*)?\)|#[0-9a-f]{3,8})$/i;
 
@@ -45,6 +46,7 @@
     return typeof v === 'boolean';
   }
   const wpmOk = (v) => Number.isInteger(v) && v > 30 && v < 900;
+  const lineOk = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0.2 && v <= 0.7;
 
   function create(opts) {
     const storage = opts.storage;
@@ -133,13 +135,15 @@
         const write = {};
         if (changed) write.sra_baseline_wpm_by_lang = byLang;
         if (!wpmOk(local.sra_baseline_wpm) && wpmOk(b.data.globalWpm)) write.sra_baseline_wpm = b.data.globalWpm;
+        if (!lineOk(local.sra_reading_line) && lineOk(b.data.readingLine)) write.sra_reading_line = b.data.readingLine;
+        snap.sra_reading_line = write.sra_reading_line ?? local.sra_reading_line ?? null;
         snap.sra_baseline_wpm = write.sra_baseline_wpm ?? local.sra_baseline_wpm ?? null;
         snap.sra_baseline_wpm_by_lang = byLang;
         await set({ [SNAPSHOT_KEY]: snap });
         if (Object.keys(write).length) await set(write);
         // this device knew languages the account did not: send them up
         const missing = Object.keys(byLang).some((l) => !(l in (b.data.byLanguage || {})));
-        if (missing || (wpmOk(local.sra_baseline_wpm) && !wpmOk(b.data.globalWpm))) scheduleBaseline(0);
+        if (missing || (wpmOk(local.sra_baseline_wpm) && !wpmOk(b.data.globalWpm)) || (lineOk(local.sra_reading_line) && !lineOk(b.data.readingLine))) scheduleBaseline(0);
       } else {
         if (b.status === 200 || b.status === 403) baselineAllowed = false;
         await set({ [SNAPSHOT_KEY]: snap });
@@ -178,8 +182,9 @@
         if (/^[a-z]{2}$/.test(lang) && wpmOk(wpm)) byLanguage[lang] = wpm;
       }
       const globalWpm = wpmOk(local.sra_baseline_wpm) ? local.sra_baseline_wpm : null;
-      if (globalWpm === null && !Object.keys(byLanguage).length) return;
-      const res = await call('PUT', '/api/account/reading-baseline', token, { globalWpm, byLanguage });
+      const readingLine = lineOk(local.sra_reading_line) ? local.sra_reading_line : null;
+      if (globalWpm === null && !Object.keys(byLanguage).length && readingLine === null) return;
+      const res = await call('PUT', '/api/account/reading-baseline', token, { globalWpm, byLanguage, readingLine });
       if (res.status === 403) baselineAllowed = false;
     }
 
