@@ -697,13 +697,26 @@ export async function createHost(deps) {
   // help?") and what happens next (a later question on the same passage, answered correctly or not). Counts go to their
   // account profile and, anonymously, to the pool. Nothing is stored about the passage.
   const styleFollow = new Map(); // paragraphKey -> 'mode:style' awaiting the next answered question on that passage
-  function pickExplanationStyle(mode, unitId) {
+  // What help each paragraph has already had this session, so a reader who still needs help there gets a DIFFERENT kind
+  // (a style they have not seen, or a connection note instead of a plain explanation). Bounded; never sent anywhere.
+  const paragraphHelp = new Map(); // paragraphKey -> Set of 'relate' | '_default' | a style name
+  function helpUsedOn(paragraphKey) { return paragraphKey ? (paragraphHelp.get(paragraphKey) || new Set()) : new Set(); }
+  function noteHelpUsed(paragraphKey, token) {
+    if (!paragraphKey || !token) return;
+    const set = paragraphHelp.get(paragraphKey) || new Set();
+    set.add(token);
+    paragraphHelp.set(paragraphKey, set);
+    if (paragraphHelp.size > 60) paragraphHelp.delete(paragraphHelp.keys().next().value);
+  }
+  function pickExplanationStyle(mode, unitId, paragraphKey) {
     try {
       const list = policyProfileManager?.getProfile?.().styles?.[mode];
       // After a failed transfer check with no tap of the reader's own, the next explanation of this paragraph tries a
-      // different style (the next best; under-tested ones still come up sometimes).
-      const avoid = unitId ? transferTracker?.avoidStyleFor(unitId) : null;
-      return styleModule ? styleModule.chooseStyle(list, Math.random, avoid ? { avoid } : {}) : null;
+      // different style (the next best; under-tested ones still come up sometimes). So does any later card on a
+      // paragraph that has already had help: never the same layout again while another is left.
+      const failed = unitId ? transferTracker?.avoidStyleFor(unitId) : null;
+      const avoid = [failed, ...helpUsedOn(paragraphKey)].filter(Boolean);
+      return styleModule ? styleModule.chooseStyle(list, Math.random, avoid.length ? { avoid } : {}) : null;
     } catch (e) { return null; }
   }
   function noteStyleShown(mode, style, paragraphKey) {
@@ -1848,11 +1861,13 @@ export async function createHost(deps) {
       const identity = computeIdentity(text);
       // An explanation for a paragraph built on a relationship (cause, dependence, contrast...) points the reader
       // at how the ideas connect; any other explanation, and every repair, is unchanged.
-      const relate = kind !== 'repair' && hasRelationCues(text);
+      // (A connection note already shown on this paragraph is not repeated: the next card is a plain explanation.)
+      const usedHere = helpUsedOn(identity.paragraphKey);
+      const relate = kind !== 'repair' && hasRelationCues(text) && !usedHere.has('relate');
       const mode = kind === 'repair' ? 'repair' : decision?.summaryMode === 'simplify' ? 'simplify' : relate ? 'relate' : 'explain_more';
       // The way of explaining is chosen from THIS learner's own results (their account profile), mostly the best so far and
       // sometimes another so the order can change. Only explain and repair have styles; with no profile there is none.
-      const style = mode === 'relate' ? null : pickExplanationStyle(mode, identity.knowledgeUnitId);
+      const style = mode === 'relate' ? null : pickExplanationStyle(mode, identity.knowledgeUnitId, identity.paragraphKey);
       // Sometimes one sentence carries the paragraph; then the explanation is about that sentence, which is marked on
       // the page, and the card marks no words (key-terms.js says when). Only for a plain explanation of a paragraph on
       // the page, and only while "Mark key words when explaining" is on.
@@ -1888,6 +1903,7 @@ export async function createHost(deps) {
         ...(style ? { onFeedback: (helped) => { noteStyleFeedback(mode, style, helped); try { transferTracker?.noteTap(identity.knowledgeUnitId); } catch (e) {} } } : {}),
       });
       if (shown && style) noteStyleShown(mode, style, identity.paragraphKey);
+      if (shown) noteHelpUsed(identity.paragraphKey, mode === 'relate' ? 'relate' : style || '_default');
       // The passage's key words stay marked on the page while the reader works through it (Settings can turn this off;
       // hover shows an x and a click removes a mark). Only when the card is about a paragraph element on the page.
       if (shown && el && s().autoKeyTerms !== false) {

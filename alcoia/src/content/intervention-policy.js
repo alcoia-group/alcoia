@@ -169,7 +169,10 @@ export const STATE_ACTIONS = Object.freeze({
  *                      question -- it only ever fires for a NEW paragraph
  *                      (seenParagraphs' own per-paragraph dedup, unchanged,
  *                      already guarantees this function is never re-evaluated
- *                      for an already-asked passage).
+ *                      for an already-asked passage). SUPERSEDED: a paragraph
+ *                      can now get up to MAX_CARDS_PER_PARAGRAPH cards, a later
+ *                      one a different style of help; the question asked is
+ *                      still never the literal same one (host.js).
  *                      Renders as: `action: 'ask'`.
  *
  *   apply             Defined for vocabulary completeness; NOT REACHABLE
@@ -295,6 +298,10 @@ export const SESSION_CAP_ENABLED = false;
  * Detection and the reading signals the class view uses do not depend on this: the orchestrator reports a struggle
  * before the policy is asked, and smooth-reading rows are sent from paragraph reads. Placeholders, unvalidated. */
 export const READING_DISMISSALS_TO_REDUCE = 3;
+/* How many automatic cards one paragraph can get in a session. A reader can need help on the same passage more than once;
+ * a second card there is a different style of help (host.js), preceded by a question to check the level, and the cap
+ * keeps it from becoming a loop. A card the reader asked for (a self-report) is not counted against the cap. */
+export const MAX_CARDS_PER_PARAGRAPH = 3;
 export const REDUCED_GAP_FACTOR = 2;
 
 export const DEFAULT_BUDGET = Object.freeze({
@@ -416,7 +423,7 @@ export function createInterventionPolicy(config = {}) {
 
   let lastAt = 0;
   let count  = 0;
-  const seenParagraphs = new Set();
+  const seenParagraphs = new Map(); // paragraphKey -> automatic cards shown on it this session
 
   // Content-read accounting. Fed by recordCoverage(), which the orchestrator
   // calls once per paragraph the reader actually leaves (paragraph-tracker's
@@ -491,7 +498,12 @@ export function createInterventionPolicy(config = {}) {
     const deny = (reason) =>
       ({ allow: false, action: 'none', policyAction: POLICY_ACTIONS.NONE, reason, evidence: [], paragraphKey: null, interventionId: null });
 
-    if (quietStage >= 2) return deny(STOPPED_REASON);
+    // A self-report is the reader asking for help. It overrides the limits that exist to keep automatic cards from
+    // being a nuisance (the gap, the "fewer cards / no more cards" stages, the dismissal and wrong-answer back-offs, a
+    // card kind the learner usually turns away, the per-paragraph cap, a learner estimate that says no question is
+    // needed). One card on screen at a time still applies, and the server's rate limits cap cost.
+    const selfReported = !!(state && state.isSelfReported === true);
+    if (quietStage >= 2 && !selfReported) return deny(STOPPED_REASON);
     if (!state || !state.label) return deny('no state');
     if (state.label === STATES.UNKNOWN) return deny('state is unknown');
     // The reader is not at the page: nothing is shown, and nothing is spent.
@@ -542,10 +554,11 @@ export function createInterventionPolicy(config = {}) {
      * not refusing to be told they slowed down. */
     if (action === 'ask') {
       const { raiseConfidenceAfter, raisedMinConfidence, stopAskingAfter } = effectiveBackoff();
-      if (consecutiveDismissals >= stopAskingAfter) {
+      // (A self-report skips the three back-offs below; what kind of help it gets is still decided like any other.)
+      if (!selfReported && consecutiveDismissals >= stopAskingAfter) {
         return deny(`declined ${consecutiveDismissals} questions in a row — holding off until answered`);
       }
-      if ((consecutiveDismissals >= raiseConfidenceAfter || quietStage === 1) && conf < raisedMinConfidence) {
+      if (!selfReported && (consecutiveDismissals >= raiseConfidenceAfter || quietStage === 1) && conf < raisedMinConfidence) {
         return deny(`confidence ${conf.toFixed(2)} below the raised bar of ${raisedMinConfidence} after ${consecutiveDismissals} consecutive dismissals`);
       }
 
@@ -556,7 +569,7 @@ export function createInterventionPolicy(config = {}) {
       // than another question stacked immediately on top of it. See
       // recordAnswered()'s own header for how the counter moves.
       const { raiseConfidenceAfter: failRaiseAfter, raisedMinConfidence: failRaisedMin } = budget.failureBackoff;
-      if (consecutiveIncorrectAnswers >= failRaiseAfter && conf < failRaisedMin) {
+      if (!selfReported && consecutiveIncorrectAnswers >= failRaiseAfter && conf < failRaisedMin) {
         return deny(`confidence ${conf.toFixed(2)} below the raised bar of ${failRaisedMin} after ${consecutiveIncorrectAnswers} consecutive wrong answers`);
       }
 
@@ -609,7 +622,7 @@ export function createInterventionPolicy(config = {}) {
       // Budget, cooldown, paragraph dedup, dismissal and failure back-off below all still apply.
       const est = ctx.learnerEstimate;
       if (est && typeof est === 'object') {
-        if (est.action === 'abstain') {
+        if (est.action === 'abstain' && !selfReported) {
           return deny(`learner estimate: ${est.reason || 'no question needed'} - a question would add no information`);
         }
         if (est.action === 'intervene' && est.kind === 'explain' && policyAction === POLICY_ACTIONS.RETRIEVE) {
@@ -672,25 +685,26 @@ export function createInterventionPolicy(config = {}) {
       : policyAction === POLICY_ACTIONS.REPAIR ? 'repair'
       : 'ask';
     // A kind the learner reliably turns away is shown only when their own evidence says help is needed.
-    if (action === 'ask' && cardWithheld(cardType) && !(ctx.learnerEstimate && ctx.learnerEstimate.action === 'intervene')) {
+    if (action === 'ask' && !selfReported && cardWithheld(cardType) && !(ctx.learnerEstimate && ctx.learnerEstimate.action === 'intervene')) {
       return deny(`this learner turns ${cardType} cards away more often than not; held back unless their own evidence calls for help`);
     }
 
     const cap = sessionCap();
-    if (count >= cap) {
+    if (count >= cap && !selfReported) {
       return deny(`session budget spent (${count}/${cap}, ceiling ${budget.absoluteCeiling})`);
     }
 
     const gap = budget.minGapMs * cardFactor(cardType) * quietGap();
     const since = now() - lastAt;
-    if (lastAt !== 0 && since < gap) {
+    if (!selfReported && lastAt !== 0 && since < gap) {
       return deny(`only ${Math.round(since / 1000)}s since the last interruption`);
     }
 
     const key = paragraphKey(state, ctx.currentEl);
-    // A transfer check is about a paragraph that WAS explained here, so the per-paragraph "already interrupted" rule
-    // cannot apply to it. Every other gate above and the budget still do.
-    if (key && seenParagraphs.has(key) && ctx.kind !== 'transfer') {
+    // A paragraph can get up to MAX_CARDS_PER_PARAGRAPH automatic cards (host.js makes each later one a different style
+    // of help). A transfer check is about a paragraph that WAS explained here, so the cap cannot apply to it, and a card
+    // the reader asked for is not counted. Every other gate above and the budget still do.
+    if (key && !selfReported && ctx.kind !== 'transfer' && (seenParagraphs.get(key) || 0) >= MAX_CARDS_PER_PARAGRAPH) {
       return deny('already interrupted on this paragraph');
     }
 
@@ -703,6 +717,8 @@ export function createInterventionPolicy(config = {}) {
       // shape of addition `interventionId` already
       // were before this item.
       policyAction,
+      // True when the reader asked for this card (a self-report): record() then leaves the gap clock alone.
+      ...(selfReported ? { selfReported: true } : {}),
       reason: `${state.label} at ${state.confidence.toFixed(2)}`,
       // Evidence goes in front of the reader. An interruption that cannot say
       // what it noticed should not be shown.
@@ -931,9 +947,11 @@ export function createInterventionPolicy(config = {}) {
    * doesn't silently consume the budget. */
   function record(decision) {
     if (!decision || !decision.allow) return;
-    lastAt = now();
+    // A card the reader asked for does not start the gap before the next automatic card: asking for help should not make
+    // the tool quieter afterwards.
+    if (!decision.selfReported) lastAt = now();
     count += 1;
-    if (decision.paragraphKey) seenParagraphs.add(decision.paragraphKey);
+    if (decision.paragraphKey) seenParagraphs.set(decision.paragraphKey, (seenParagraphs.get(decision.paragraphKey) || 0) + 1);
   }
 
   /* Called once per paragraph the reader actually leaves — see

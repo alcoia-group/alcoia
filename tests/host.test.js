@@ -4236,6 +4236,26 @@ describe('ways of explaining adapt to this learner', () => {
     stopAdaptationSync();
   });
 
+  it('a second card on the same paragraph is a different style, even for a learner with no profile', async () => {
+    const { summarize } = setup(null);
+    vi.spyOn(Math, 'random').mockReturnValue(0.1);
+    const { host, stopAdaptationSync } = await createHost(deps());
+    const el = document.getElementById('t');
+    await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_r1' }, {}, el, 2);
+    expect(summarize.at(-1).style).toBeUndefined(); // first card: the ordinary prompt
+    // close the first card so the second can show
+    document.querySelectorAll('.sra-close-btn').forEach((b) => b.click());
+    await host.onIntervention({ action: 'ask', policyAction: 'repair', evidence: ['again'], interventionId: 'iv_r2' }, {}, el, 2);
+    const second = summarize.at(-1).style;
+    expect(second).toBeTruthy();
+    document.querySelectorAll('.sra-close-btn').forEach((b) => b.click());
+    await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['again'], interventionId: 'iv_r3' }, {}, el, 2);
+    const third = summarize.at(-1).style;
+    expect(third).toBeTruthy();
+    expect(third).not.toBe(second);
+    stopAdaptationSync();
+  });
+
   it('sends no style when there is no profile, so the ordinary prompt is used', async () => {
     const { summarize } = setup(null);
     const { host, stopAdaptationSync } = await createHost(deps());

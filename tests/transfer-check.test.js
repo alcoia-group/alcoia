@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createTransferTracker, SPACING_MS, SPACING_OTHER_PARAGRAPHS } from '../alcoia/src/shared/transfer-check.js';
-import { chooseStyle } from '../alcoia/src/shared/explanation-style.js';
+import { chooseStyle, STYLE_NAMES } from '../alcoia/src/shared/explanation-style.js';
 import { createOutcomesManager } from '../alcoia/src/shared/outcomes.js';
 import { createInterventionPolicy, POLICY_ACTIONS } from '../alcoia/src/content/intervention-policy.js';
 import { createPolicyProfileManager } from '../alcoia/src/shared/policy-profile.js';
@@ -74,8 +74,19 @@ describe('chooseStyle with a style to avoid', () => {
     expect(chooseStyle(list, () => 0.99, { avoid: 'scenario' })).toBe('analogy');
     expect(chooseStyle(list, () => 0.0, { avoid: 'scenario' })).toBe('contrast');
   });
-  it('with only one style it is still returned', () => {
-    expect(chooseStyle([{ style: 'scenario', n: 1 }], () => 0.9, { avoid: 'scenario' })).toBe('scenario');
+  it('with only one style with results, another style they have not tried is chosen', () => {
+    const got = chooseStyle([{ style: 'scenario', n: 1 }], () => 0.9, { avoid: 'scenario' });
+    expect(got).not.toBe('scenario');
+    expect(STYLE_NAMES).toContain(got);
+  });
+  it('with no profile, a paragraph that already had help gets a different layout; with none it stays the ordinary prompt', () => {
+    expect(chooseStyle(null, () => 0.5)).toBeNull();
+    expect(chooseStyle([], () => 0.5, { avoid: ['_default'] })).not.toBeNull();
+    const got = chooseStyle(null, () => 0.1, { avoid: ['example_first', 'analogy'] });
+    expect(['example_first', 'analogy']).not.toContain(got);
+  });
+  it('accepts a list of styles to avoid', () => {
+    expect(chooseStyle(list, () => 0.99, { avoid: ['scenario', 'analogy'] })).toBe('contrast');
   });
   it('is unchanged without the option', () => {
     expect(chooseStyle(list, () => 0.99)).toBe('scenario');
