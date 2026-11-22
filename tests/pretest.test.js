@@ -178,7 +178,7 @@ describe('createPretestOcclusion — respects the interruption budget (real inte
     expect(after.remaining).toBe(before.remaining - 1);
   });
 
-  it('never fires twice on the same paragraph — shares seenParagraphs with evaluate(), not a second budget', () => {
+  it('shares one per-paragraph count with evaluate(), not a second budget', () => {
     const text = 'The result was a big jump. It changed everything that followed.';
     setPlainParagraph(text);
     // minGapMs: 0 isolates the paragraph-dedup check from the (separately
@@ -189,14 +189,22 @@ describe('createPretestOcclusion — respects the interruption budget (real inte
     pretest.scan();
 
     // The exact same paragraph text, evaluated the ordinary state-driven
-    // way, is refused too — proof the two paths share one paragraph-dedup
-    // set, not two independent "one interruption per paragraph" pools.
+    // way, counts the pretest's card: proof the two paths share one
+    // per-paragraph count, not two independent pools.
     const decision = policy.evaluate(
       { label: STATES.STRUGGLING, confidence: 0.9, evidence: [] },
       { currentEl: { innerText: text } },
     );
-    expect(decision.allow).toBe(false);
-    expect(decision.reason).toBe('already interrupted on this paragraph');
+    // One card on the paragraph so far (the pretest's); another is allowed, up to the per-paragraph cap, all from one pool.
+    expect(decision.allow).toBe(true);
+    policy.record(decision);
+    policy.record(decision);
+    const capped = policy.evaluate(
+      { label: STATES.STRUGGLING, confidence: 0.9, evidence: [] },
+      { currentEl: { innerText: text } },
+    );
+    expect(capped.allow).toBe(false);
+    expect(capped.reason).toBe('already interrupted on this paragraph');
   });
 
   it('a state-driven interruption already recorded blocks a pretest trigger on a NEW paragraph via the shared minimum gap', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInterventionPolicy, STATE_ACTIONS, SESSION_CAP_ENABLED } from '../alcoia/src/content/intervention-policy.js';
+import { createInterventionPolicy, STATE_ACTIONS, SESSION_CAP_ENABLED, MAX_CARDS_PER_PARAGRAPH } from '../alcoia/src/content/intervention-policy.js';
 import { STATES } from '../alcoia/src/content/state-engine.js';
 
 function fixedClock(start = 1_000_000) {
@@ -158,16 +158,26 @@ describe('budget', () => {
     expect(p.stats().count).toBe(40);
   });
 
-  it('never interrupts twice on the same paragraph', () => {
+  it('gives one paragraph at most MAX_CARDS_PER_PARAGRAPH automatic cards, each after the gap', () => {
     const clock = fixedClock();
     const p = createInterventionPolicy({ now: clock.now });
+    const para = () => struggling({ signal: { text: 'the same paragraph' } });
 
-    expect(take(p, struggling({ signal: { text: 'the same paragraph' } })).allow).toBe(true);
-    clock.advance(600_000);
-
-    const again = p.evaluate(struggling({ signal: { text: 'the same paragraph' } }));
+    for (let i = 0; i < MAX_CARDS_PER_PARAGRAPH; i += 1) {
+      expect(take(p, para()).allow).toBe(true);
+      clock.advance(600_000);
+    }
+    const again = p.evaluate(para());
     expect(again.allow).toBe(false);
     expect(again.reason).toMatch(/already interrupted/);
+  });
+
+  it('the gap still separates two cards on the same paragraph', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    expect(take(p, struggling({ signal: { text: 'same' } })).allow).toBe(true);
+    clock.advance(60_000);
+    expect(p.evaluate(struggling({ signal: { text: 'same' } })).reason).toMatch(/since the last interruption/);
   });
 
   it('falls back to the current element for the paragraph key', () => {
@@ -176,8 +186,10 @@ describe('budget', () => {
     const el = { innerText: 'element-derived paragraph text' };
     const state = { label: STATES.STRUGGLING, confidence: 0.7, evidence: [], signal: null };
 
-    expect(take(p, state, { currentEl: el }).allow).toBe(true);
-    clock.advance(600_000);
+    for (let i = 0; i < MAX_CARDS_PER_PARAGRAPH; i += 1) {
+      expect(take(p, state, { currentEl: el }).allow).toBe(true);
+      clock.advance(600_000);
+    }
     expect(p.evaluate(state, { currentEl: el }).allow).toBe(false);
   });
 
@@ -431,7 +443,10 @@ describe('self-reported disengagement is distinguishable from inferred states (i
     const without = createInterventionPolicy({ now: fixedClock().now }).evaluate({
       label: STATES.DRIFTING, confidence: 0.9, evidence: [], signal: { text: 'drifting' },
     });
-    expect(withFlag).toEqual(without);
+    // The decision says the reader asked for it; everything else is identical.
+    const { selfReported, ...rest } = withFlag;
+    expect(selfReported).toBe(true);
+    expect(rest).toEqual(without);
   });
 
   it('an inferred struggling state has isSelfReported unset, unlike a self-reported one', () => {
@@ -1237,8 +1252,12 @@ describe('learner estimate in the policy (Stage B)', () => {
     const tooSoon = p.evaluate(struggling({ signal: { text: 'second paragraph' } }), { learnerEstimate: explain });
     expect(tooSoon.allow).toBe(false);
     expect(tooSoon.reason).toMatch(/since the last interruption/);
+    // the same paragraph gets at most MAX_CARDS_PER_PARAGRAPH cards, estimate or not
+    for (let i = 1; i < MAX_CARDS_PER_PARAGRAPH; i += 1) {
+      clock.advance(10 * 60_000);
+      expect(take(p, struggling(), { learnerEstimate: explain }).allow).toBe(true);
+    }
     clock.advance(10 * 60_000);
-    // the same paragraph is never interrupted twice, estimate or not
     const again = p.evaluate(struggling(), { learnerEstimate: explain });
     expect(again.allow).toBe(false);
     expect(again.reason).toMatch(/already interrupted on this paragraph/);
@@ -1350,5 +1369,72 @@ describe('turning cards away within one reading: fewer cards, then none', () => 
     p.reset();
     expect(p.stats().quietStage).toBe(0);
     expect(p.evaluate(dense()).allow).toBe(true);
+  });
+});
+
+
+/* A self-report is the reader asking for help: it overrides the limits that keep AUTOMATIC cards from being a nuisance. */
+describe('a self-report overrides the limits on automatic cards', () => {
+  const selfReport = (over = {}) => ({ label: STATES.STRUGGLING, confidence: 1, evidence: [], signal: { text: 'asked for help', type: 'self_report' }, isSelfReported: true, ...over });
+
+  it('is answered inside the gap, and does not start a new gap for the next automatic card', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    expect(take(p, struggling({ signal: { text: 'auto one' } })).allow).toBe(true);
+    clock.advance(30_000);
+    const asked = p.evaluate(selfReport({ signal: { text: 'asked one' } }));
+    expect(asked.allow).toBe(true);
+    expect(asked.selfReported).toBe(true);
+    p.record(asked);
+    // the clock for the next automatic card still counts from the automatic one: 3 minutes after it, not after the request
+    clock.advance(151_000);
+    expect(p.evaluate(struggling({ signal: { text: 'auto two' } })).allow).toBe(true);
+  });
+
+  it('is answered after "no more cards", and an automatic card is still refused', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    for (let i = 0; i < 6; i += 1) p.recordDismissal();
+    expect(p.stats().quietStage).toBe(2);
+    clock.advance(10 * 60_000);
+    expect(p.evaluate(struggling({ signal: { text: 'auto' } })).allow).toBe(false);
+    expect(p.evaluate(selfReport()).allow).toBe(true);
+  });
+
+  it('is answered after three declined questions and after repeated wrong answers', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    p.recordDismissal(); p.recordDismissal();
+    expect(p.evaluate(selfReport()).allow).toBe(true);
+    for (let i = 0; i < 4; i += 1) p.recordAnswered(false);
+    expect(p.evaluate(selfReport({ signal: { text: 'again' } })).allow).toBe(true);
+  });
+
+  it('is not blocked by the per-paragraph cap, and does not count toward it', () => {
+    const clock = fixedClock();
+    const p = createInterventionPolicy({ now: clock.now });
+    for (let i = 0; i < MAX_CARDS_PER_PARAGRAPH; i += 1) {
+      expect(take(p, struggling({ signal: { text: 'same para' } })).allow).toBe(true);
+      clock.advance(600_000);
+    }
+    const asked = p.evaluate(selfReport({ signal: { text: 'same para' } }));
+    expect(asked.allow).toBe(true);
+    p.record(asked);
+    // it did not use up a slot: the cap is simply already reached for automatic cards
+    expect(p.evaluate(struggling({ signal: { text: 'same para' } })).reason).toMatch(/already interrupted/);
+  });
+
+  it('still waits for a question card that is on screen', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const d = p.evaluate(selfReport(), { questionCardVisible: true });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/already visible/);
+  });
+
+  it('is answered even when the learner estimate says a question would add nothing', () => {
+    const p = createInterventionPolicy({ now: fixedClock().now });
+    const abstain = { action: 'abstain', reason: 'recently established' };
+    expect(p.evaluate(struggling(), { learnerEstimate: abstain }).allow).toBe(false);
+    expect(p.evaluate(selfReport(), { learnerEstimate: abstain }).allow).toBe(true);
   });
 });
