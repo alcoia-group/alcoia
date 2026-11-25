@@ -85,6 +85,13 @@ describe('chooseStyle with a style to avoid', () => {
     const got = chooseStyle(null, () => 0.1, { avoid: ['example_first', 'analogy'] });
     expect(['example_first', 'analogy']).not.toContain(got);
   });
+  it('a preferred layout beats the learned order, unless this paragraph has already had it', () => {
+    expect(chooseStyle(list, () => 0.99, { prefer: ['example_first', 'step_by_step'] })).toBe('example_first');
+    expect(chooseStyle(list, () => 0.99, { prefer: ['example_first', 'step_by_step'], avoid: ['example_first'] })).toBe('step_by_step');
+    expect(chooseStyle(list, () => 0.99, { prefer: ['example_first'], avoid: ['example_first'] })).toBe('scenario'); // falls back to the learned order
+    expect(chooseStyle(null, () => 0.5, { prefer: ['step_by_step'] })).toBe('step_by_step'); // even with no profile
+    expect(chooseStyle(list, () => 0.99, { prefer: ['not_a_style'] })).toBe('scenario'); // only names from the closed list
+  });
   it('accepts a list of styles to avoid', () => {
     expect(chooseStyle(list, () => 0.99, { avoid: ['scenario', 'analogy'] })).toBe('contrast');
   });

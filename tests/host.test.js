@@ -4201,7 +4201,7 @@ describe('ways of explaining adapt to this learner', () => {
   const deps = () => baseDeps({ assignmentId: 'assign-s', random: () => 0, getSession: async () => ({ token: 'tok-1', email: 'r@example.com', expiresAt: Date.now() + 999_999 }) });
   const styles = (first) => ({ explain_more: [{ style: first, n: 20, trials: 9, rate: 0.8 }, { style: 'analogy', n: 20, trials: 9, rate: 0.3 }], repair: [{ style: 'contrast', n: 20, trials: 9, rate: 0.7 }] });
 
-  function setup(profile) {
+  function setup(profile, estimates = []) {
     document.body.innerHTML = `<p id="t">${PARA}</p>`;
     vi.stubGlobal('ALCOIA_CONFIG', { SUMMARIZE_URL: 'https://api.test.invalid/api/summarize', TOKEN_URL: 'https://api.test.invalid/api/token', ASSIGNMENTS_URL, LEARNER_POLICY_PROFILE_URL: PROFILE_URL, LEARNER_POLICY_EVENTS_URL: EVENTS_URL, QUESTION_LEVELS_SUPPORTED: ['recognition'] });
     const summarize = [];
@@ -4211,6 +4211,7 @@ describe('ways of explaining adapt to this learner', () => {
       if (msg.action === 'proxyFetch') {
         calls.push({ url: msg.url, options: msg.options });
         if (msg.url === PROFILE_URL) return cb({ ok: true, status: 200, data: profile });
+        if (msg.url === `${ASSIGNMENTS_URL}/assign-s/knowledge-state/estimates`) return cb({ ok: true, status: 200, data: { estimates } });
         return cb({ ok: true, status: 200, data: { recorded: true, candidates: [], estimates: [] } });
       }
       if (msg.url?.includes('/api/questions')) return cb({ ok: true, data: { questions: [{ q: 'Q?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
@@ -4253,6 +4254,20 @@ describe('ways of explaining adapt to this learner', () => {
     const third = summarize.at(-1).style;
     expect(third).toBeTruthy();
     expect(third).not.toBe(second);
+    stopAdaptationSync();
+  });
+
+  it('a reader who said "I don\'t know" gets a worked-example layout, not the learned favourite', async () => {
+    const { computeKnowledgeUnitId } = await import('../alcoia/src/content/signals/knowledge-unit.js');
+    const unit = computeKnowledgeUnitId(PARA);
+    const { calls, summarize } = setup({ cards: {}, detectors: {}, sensitivity: 1, styles: styles('scenario') },
+      [{ knowledgeUnitId: unit, level: 'needs_help', confidence: 'low', action: 'intervene', kind: 'explain', reason: 'said_dont_know' }]);
+    vi.spyOn(Math, 'random').mockReturnValue(0.99); // no exploring: the learned favourite would be 'scenario'
+    const { host, stopAdaptationSync } = await createHost(deps());
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/knowledge-state/estimates'))).toBe(true));
+    await new Promise((r) => setTimeout(r, 20));
+    await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_dk' }, {}, document.getElementById('t'), 2);
+    expect(summarize.at(-1)).toMatchObject({ mode: 'explain_more', style: 'example_first' });
     stopAdaptationSync();
   });
 
