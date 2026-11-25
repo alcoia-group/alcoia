@@ -705,6 +705,7 @@ export async function createHost(deps) {
     if (!paragraphKey || !token) return;
     const set = paragraphHelp.get(paragraphKey) || new Set();
     set.add(token);
+    if (token !== 'relate') set.add(`#${[...set].filter((t) => t.startsWith('#')).length + 1}`); // counts cards even when two share a layout
     paragraphHelp.set(paragraphKey, set);
     if (paragraphHelp.size > 60) paragraphHelp.delete(paragraphHelp.keys().next().value);
   }
@@ -985,7 +986,8 @@ export async function createHost(deps) {
     const misconception = typeof opts.misconception === 'string' && opts.misconception.trim() ? opts.misconception.trim().slice(0, 200) : null;
     const held = typeof opts.held === 'string' && opts.held.trim() ? opts.held.trim().slice(0, 400) : null;
     const prerequisite = typeof opts.prerequisite === 'string' && opts.prerequisite.trim() ? opts.prerequisite.trim().slice(0, 400) : null;
-    const cacheKey = `${mode}${style ? ':' + style : ''}${focus ? ':f:' + focus.slice(0, 60) : ''}${misconception ? ':m=' + misconception : ''}${held ? ':h=' + held.slice(0, 40) : ''}${prerequisite ? ':p=' + prerequisite.slice(0, 40) : ''}:${text.slice(0, 80).trim()}`;
+    const plainness = opts.plainness === 'plain' || opts.plainness === 'basic' ? opts.plainness : null;
+    const cacheKey = `${mode}${style ? ':' + style : ''}${plainness ? ':pl=' + plainness : ''}${focus ? ':f:' + focus.slice(0, 60) : ''}${misconception ? ':m=' + misconception : ''}${held ? ':h=' + held.slice(0, 40) : ''}${prerequisite ? ':p=' + prerequisite.slice(0, 40) : ''}:${text.slice(0, 80).trim()}`;
     if (_summaryCache.has(cacheKey)) {
       log(`Cache hit: ${mode}`);
       const cached = pickSummaryVersion(cacheKey, _summaryCache.get(cacheKey));
@@ -1000,6 +1002,7 @@ export async function createHost(deps) {
       if (context) body.context = context.slice(0, 800);
       if (style) body.style = style;
       if (focus) body.focus = focus;
+      if (plainness) body.plainness = plainness;
       if (misconception) body.misconception = misconception;
       if (held) body.held = held;
       if (prerequisite) body.prerequisite = prerequisite;
@@ -1871,6 +1874,10 @@ export async function createHost(deps) {
       // an example, step by step, not a different wording; everything else keeps the learner's own learned order.
       const kindEst = learnerEstimates.get(identity.knowledgeUnitId);
       const preferStyles = kindEst?.reason === 'said_dont_know' ? ['example_first', 'step_by_step'] : null;
+      // Plainer on each later card for the same paragraph: the first card keeps the ordinary everyday-words wording, a
+      // second asks for no jargon, a third for the smallest steps. Only the words change, never the facts.
+      const helpsSoFar = [...usedHere].filter((t) => t.startsWith('#')).length;
+      const plainness = mode === 'relate' ? null : helpsSoFar >= 2 ? 'basic' : helpsSoFar === 1 ? 'plain' : null;
       const style = mode === 'relate' ? null : pickExplanationStyle(mode, identity.knowledgeUnitId, identity.paragraphKey, preferStyles);
       // Sometimes one sentence carries the paragraph; then the explanation is about that sentence, which is marked on
       // the page, and the card marks no words (key-terms.js says when). Only for a plain explanation of a paragraph on
@@ -1884,7 +1891,7 @@ export async function createHost(deps) {
       const est = learnerEstimates.get(identity.knowledgeUnitId);
       const ideaOpts = mode === 'relate' ? {} : est?.prerequisiteIdea ? { prerequisite: est.prerequisiteIdea } : est?.heldIdea ? { held: est.heldIdea } : {};
       const startedAt = Date.now();
-      const generated = await withDeadline(fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey, style, focus: focusSentence, ...ideaOpts }), null);
+      const generated = await withDeadline(fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey, style, focus: focusSentence, ...(plainness ? { plainness } : {}), ...ideaOpts }), null);
       if (!generated) return false;
       if (generationIsStale(el, startedAt)) return false;
 
