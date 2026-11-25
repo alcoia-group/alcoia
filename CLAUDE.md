@@ -35,3 +35,6 @@ deck uploads). Copy tests updated.
 
 ## 25 November 2026: repair by kind of difficulty
 - A later card on the same paragraph prefers a layout that fits why the reader needs help: after "I don't know" (`said_dont_know` estimate) the explanation uses a worked-example layout (`example_first`, then `step_by_step`) unless already used on that paragraph (`chooseStyle` `prefer`). Misconception labels already steer the wording through the server. Verified by unit and host tests only.
+
+## 25 November 2026: plainer wording on later cards
+The second explanation or repair card on a paragraph asks the server for `plainness: 'plain'` (everyday words, short sentences, jargon explained) and the third for `'basic'` (no jargon, smallest steps, one daily-life example). The first card is unchanged. Counted per paragraph in `host.js` (`#n` entries in `paragraphHelp`). Verified by host tests only; not against a real model.

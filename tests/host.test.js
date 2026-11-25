@@ -4244,15 +4244,18 @@ describe('ways of explaining adapt to this learner', () => {
     const el = document.getElementById('t');
     await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['because'], interventionId: 'iv_r1' }, {}, el, 2);
     expect(summarize.at(-1).style).toBeUndefined(); // first card: the ordinary prompt
+    expect(summarize.at(-1).plainness).toBeUndefined(); // and the ordinary everyday wording
     // close the first card so the second can show
     document.querySelectorAll('.sra-close-btn').forEach((b) => b.click());
     await host.onIntervention({ action: 'ask', policyAction: 'repair', evidence: ['again'], interventionId: 'iv_r2' }, {}, el, 2);
     const second = summarize.at(-1).style;
     expect(second).toBeTruthy();
+    expect(summarize.at(-1).plainness).toBe('plain'); // second card: no jargon
     document.querySelectorAll('.sra-close-btn').forEach((b) => b.click());
     await host.onIntervention({ action: 'ask', policyAction: 'explain', evidence: ['again'], interventionId: 'iv_r3' }, {}, el, 2);
     const third = summarize.at(-1).style;
     expect(third).toBeTruthy();
+    expect(summarize.at(-1).plainness).toBe('basic'); // third card: smallest steps
     expect(third).not.toBe(second);
     stopAdaptationSync();
   });
