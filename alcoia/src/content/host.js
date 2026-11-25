@@ -708,7 +708,7 @@ export async function createHost(deps) {
     paragraphHelp.set(paragraphKey, set);
     if (paragraphHelp.size > 60) paragraphHelp.delete(paragraphHelp.keys().next().value);
   }
-  function pickExplanationStyle(mode, unitId, paragraphKey) {
+  function pickExplanationStyle(mode, unitId, paragraphKey, prefer = null) {
     try {
       const list = policyProfileManager?.getProfile?.().styles?.[mode];
       // After a failed transfer check with no tap of the reader's own, the next explanation of this paragraph tries a
@@ -716,7 +716,7 @@ export async function createHost(deps) {
       // paragraph that has already had help: never the same layout again while another is left.
       const failed = unitId ? transferTracker?.avoidStyleFor(unitId) : null;
       const avoid = [failed, ...helpUsedOn(paragraphKey)].filter(Boolean);
-      return styleModule ? styleModule.chooseStyle(list, Math.random, avoid.length ? { avoid } : {}) : null;
+      return styleModule ? styleModule.chooseStyle(list, Math.random, { ...(avoid.length ? { avoid } : {}), ...(prefer ? { prefer } : {}) }) : null;
     } catch (e) { return null; }
   }
   function noteStyleShown(mode, style, paragraphKey) {
@@ -1867,7 +1867,11 @@ export async function createHost(deps) {
       const mode = kind === 'repair' ? 'repair' : decision?.summaryMode === 'simplify' ? 'simplify' : relate ? 'relate' : 'explain_more';
       // The way of explaining is chosen from THIS learner's own results (their account profile), mostly the best so far and
       // sometimes another so the order can change. Only explain and repair have styles; with no profile there is none.
-      const style = mode === 'relate' ? null : pickExplanationStyle(mode, identity.knowledgeUnitId, identity.paragraphKey);
+      // The KIND of difficulty picks the layout when it is clear. Someone who said "I don't know" needs the idea built from
+      // an example, step by step, not a different wording; everything else keeps the learner's own learned order.
+      const kindEst = learnerEstimates.get(identity.knowledgeUnitId);
+      const preferStyles = kindEst?.reason === 'said_dont_know' ? ['example_first', 'step_by_step'] : null;
+      const style = mode === 'relate' ? null : pickExplanationStyle(mode, identity.knowledgeUnitId, identity.paragraphKey, preferStyles);
       // Sometimes one sentence carries the paragraph; then the explanation is about that sentence, which is marked on
       // the page, and the card marks no words (key-terms.js says when). Only for a plain explanation of a paragraph on
       // the page, and only while "Mark key words when explaining" is on.
