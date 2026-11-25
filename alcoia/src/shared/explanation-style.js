@@ -13,6 +13,10 @@ export const STYLE_NAMES = Object.freeze(['example_first', 'analogy', 'step_by_s
  * had). The marker '_default' means "the ordinary prompt with no layout was used". */
 export function chooseStyle(list, rng = Math.random, opts = {}) {
   const avoid = new Set([].concat(opts.avoid || []).filter(Boolean));
+  // opts.prefer: layouts that suit the KIND of difficulty (for example a worked example for someone who said "I don't
+  // know"). A clear difficulty beats the learned order; one already used on this paragraph is skipped.
+  const preferred = [].concat(opts.prefer || []).find((x) => STYLE_NAMES.includes(x) && !avoid.has(x));
+  if (preferred) return preferred;
   if (!Array.isArray(list) || list.length === 0) {
     // No profile. Normally the ordinary prompt; but a paragraph that already had help gets a different layout.
     if (avoid.size === 0) return null;
