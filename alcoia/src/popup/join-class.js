@@ -229,7 +229,7 @@ async function completeJoin() {
 
   const result = pendingLtiAckCode
     ? await invites.acknowledgeLtiDisclosure(pendingLtiAckCode, { acknowledgedCompletion: pendingCompletionVisible })
-    : await invites.acceptInvite(pendingInviteText, { acknowledgedCompletion: pendingCompletionVisible });
+    : await invites.acceptInvite(pendingInviteText, { acknowledgedCompletion: pendingCompletionVisible, displayName: pendingCompletionVisible ? $('displayNameInput').value : '' });
 
   confirmBtn.disabled = false;
   confirmBtn.textContent = 'Join this class';
