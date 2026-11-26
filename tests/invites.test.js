@@ -238,3 +238,28 @@ describe('acknowledgeLtiDisclosure', () => {
     await expect(m.acknowledgeLtiDisclosure('a')).resolves.toEqual({ ok: false, error: 'network_error' });
   });
 });
+
+/* Classes that let the instructor see completion: the notice's
+ * acknowledgement is sent only when the join screen showed it. */
+describe('completion notice', () => {
+  it('previewInvite reports completionVisible (false when absent)', async () => {
+    const mk = (extra) => vi.fn(async () => ({ ok: true, json: async () => ({ className: 'C', reportingMode: 'anonymous', ...extra }) }));
+    const a = createInvitesManager({ fetchImpl: mk({ completionVisible: true }), previewUrl: 'https://x.invalid/preview' });
+    expect((await a.previewInvite('tok')).completionVisible).toBe(true);
+    const b = createInvitesManager({ fetchImpl: mk({}), previewUrl: 'https://x.invalid/preview' });
+    expect((await b.previewInvite('tok')).completionVisible).toBe(false);
+  });
+
+  it('acceptInvite and the LTI ack send acknowledgedCompletion only when asked', async () => {
+    const bodies = [];
+    const fetchImpl = vi.fn(async (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({ classId: 'c', seatId: 's', role: 'student', sessionToken: 't' }) };
+    });
+    const m = createInvitesManager({ fetchImpl, acceptUrl: ACCEPT_URL, ltiAckUrl: LTI_ACK_URL, getSession: sessionOf('tok-1') });
+    await m.acceptInvite('abc', { acknowledgedCompletion: true });
+    await m.acknowledgeLtiDisclosure('code', { acknowledgedCompletion: true });
+    expect(bodies[0]).toEqual({ token: 'abc', acknowledged: true, acknowledgedCompletion: true });
+    expect(bodies[1]).toEqual({ acknowledged: true, ackCode: 'code', acknowledgedCompletion: true });
+  });
+});

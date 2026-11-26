@@ -38,3 +38,6 @@ deck uploads). Copy tests updated.
 
 ## 25 November 2026: plainer wording on later cards
 The second explanation or repair card on a paragraph asks the server for `plainness: 'plain'` (everyday words, short sentences, jargon explained) and the third for `'basic'` (no jargon, smallest steps, one daily-life example). The first card is unchanged. Counted per paragraph in `host.js` (`#n` entries in `paragraphHelp`). Verified by host tests only; not against a real model.
+
+## 26 November 2026: completion notice on the join screen
+When a class lets the instructor see completion (`completionVisible` from the invite preview or the LTI launch), the join screen shows an extra paragraph (`#disclosureCompletion`) and joins with `acknowledgedCompletion: true` (`acceptInvite`, `acknowledgeLtiDisclosure` take `{ acknowledgedCompletion }`; the field is sent only then). The server refuses a join or LTI ack without it (`completion_notice_required`). background.js keeps `completionVisible` in the pending LTI launch. Tests in `tests/invites.test.js`; not checked in a browser or with a real Canvas/Moodle launch.
