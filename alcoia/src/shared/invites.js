@@ -135,7 +135,9 @@ export function createInvitesManager(opts = {}) {
         // Sent only when the class lets the instructor see completion and the
         // join screen showed that notice (join-class.js); the server refuses a
         // join to such a class without it.
-        body: JSON.stringify(opts2.acknowledgedCompletion ? { token, acknowledged: true, acknowledgedCompletion: true } : { token, acknowledged: true }),
+        body: JSON.stringify(opts2.acknowledgedCompletion
+          ? { token, acknowledged: true, acknowledgedCompletion: true, ...(String(opts2.displayName || '').trim() ? { displayName: String(opts2.displayName).trim() } : {}) }
+          : { token, acknowledged: true }),
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok) {

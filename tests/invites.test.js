@@ -262,4 +262,14 @@ describe('completion notice', () => {
     expect(bodies[0]).toEqual({ token: 'abc', acknowledged: true, acknowledgedCompletion: true });
     expect(bodies[1]).toEqual({ acknowledged: true, ackCode: 'code', acknowledgedCompletion: true });
   });
+
+  it('sends the optional name only when typed', async () => {
+    const bodies = [];
+    const fetchImpl = vi.fn(async (url, init) => { bodies.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ classId: 'c', seatId: 's' }) }; });
+    const m = createInvitesManager({ fetchImpl, acceptUrl: ACCEPT_URL, getSession: sessionOf('tok-1') });
+    await m.acceptInvite('abc', { acknowledgedCompletion: true, displayName: '  Ada  ' });
+    await m.acceptInvite('abc', { acknowledgedCompletion: true, displayName: '   ' });
+    expect(bodies[0].displayName).toBe('Ada');
+    expect(bodies[1].displayName).toBeUndefined();
+  });
 });
