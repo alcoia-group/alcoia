@@ -209,6 +209,7 @@ async function handleLtiLaunchMessage(payload, sendResponse) {
         ackCode,
         classId,
         reportingMode: typeof payload.reportingMode === 'string' ? payload.reportingMode : null,
+        completionVisible: payload.completionVisible === true,
         at: Date.now(),
       },
     }, () => {

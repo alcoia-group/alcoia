@@ -246,7 +246,7 @@ export function createResponseSignals(opts = {}) {
     return record;
   }
 
-  /* "I don't know": the reader says they do not hold it. A gap, never a wrong answer and
+  /* "I don't know" (LearnHarness's dontKnow): the reader says they do not hold it. A gap, never a wrong answer and
    * never a refusal: correct stays null, it carries no confidence, and it is reported as an answered question so the
    * next decision explains first instead of asking again. */
   function dontKnow(interventionId) {

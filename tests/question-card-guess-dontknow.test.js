@@ -5,7 +5,7 @@ import { createResponseSignals } from '../alcoia/src/content/signals/response-si
 import { esc } from '../alcoia/src/content/ui-controller.js';
 import { createOutcomesManager } from '../alcoia/src/shared/outcomes.js';
 
-// "Guessing", "I don't know", and the misunderstanding label behind a wrong pick.
+// Phase 1 of the LearnHarness analysis: "Guessing", "I don't know", and the misunderstanding label behind a wrong pick.
 function fakeUI() {
   const root = document.createElement('div');
   document.body.appendChild(root);

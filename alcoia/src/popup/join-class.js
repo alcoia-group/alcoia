@@ -89,6 +89,9 @@ const disclosureError = $('disclosureError');
 const leaveError = $('leaveError');
 
 let disclosureRendered = false;
+// Whether this class lets the instructor see completion. The notice for it is
+// shown with the disclosure and its acknowledgement is sent with the join.
+let pendingCompletionVisible = false;
 let pendingInviteText = '';
 // Set instead of pendingInviteText for the LTI entry path (item S6/E4
 // follow-up) — mutually exclusive with it; completeJoin() below branches
@@ -120,7 +123,7 @@ function showInput(prefill) {
 // cannot-complete-without-disclosure guard — see this file's own header —
 // is this same disclosureRendered flag either path sets, right after the
 // disclosure block is actually in the visible DOM.
-function showDisclosure(mode, className) {
+function showDisclosure(mode, className, completionVisible = false) {
   // Only the notice for this class's actual reporting mode is ever shown.
   // An unknown mode must never fall back to the anonymous wording.
   if (mode !== 'anonymous' && mode !== 'identified') {
@@ -131,6 +134,8 @@ function showDisclosure(mode, className) {
   const nameEl = $('disclosureClassName');
   nameEl.textContent = className || '';
   nameEl.hidden = !className;
+  pendingCompletionVisible = completionVisible === true;
+  $('disclosureCompletion').hidden = !pendingCompletionVisible;
   inputState.hidden = true;
   disclosureState.hidden = false;
   memberState.hidden = true;
@@ -201,6 +206,7 @@ function joinErrorMessage(code) {
     case 'invalid_code':            return 'This launch link has expired. Go back to Canvas and open the reading again.';
     case 'code_already_used':       return 'This launch was already confirmed. Go back to Canvas and open the reading again.';
     case 'code_expired':            return 'This launch link has expired. Go back to Canvas and open the reading again.';
+    case 'completion_notice_required': return 'Something went wrong confirming this. Close this tab and try again.';
     case 'acknowledgement_required':
     case 'no_ack_code':             return 'Something went wrong confirming this. Go back to Canvas and try again.';
     case 'no_seat_id':              return "This class membership came from your school's system and can't be left here.";
@@ -222,8 +228,8 @@ async function completeJoin() {
   confirmBtn.textContent = 'Joining…';
 
   const result = pendingLtiAckCode
-    ? await invites.acknowledgeLtiDisclosure(pendingLtiAckCode)
-    : await invites.acceptInvite(pendingInviteText);
+    ? await invites.acknowledgeLtiDisclosure(pendingLtiAckCode, { acknowledgedCompletion: pendingCompletionVisible })
+    : await invites.acceptInvite(pendingInviteText, { acknowledgedCompletion: pendingCompletionVisible });
 
   confirmBtn.disabled = false;
   confirmBtn.textContent = 'Join this class';
@@ -296,7 +302,7 @@ $('inputFormEl').addEventListener('submit', async (e) => {
     return;
   }
   pendingInviteText = raw;
-  showDisclosure(preview.reportingMode, preview.className);
+  showDisclosure(preview.reportingMode, preview.className, preview.completionVisible);
 });
 
 $('confirmJoinBtn').addEventListener('click', () => { completeJoin(); });
@@ -355,7 +361,7 @@ async function boot() {
     if (fresh && typeof ltiPending.ackCode === 'string' && ltiPending.ackCode) {
       if (ltiPending.reportingMode === 'anonymous' || ltiPending.reportingMode === 'identified') {
         pendingLtiAckCode = ltiPending.ackCode;
-        showDisclosure(ltiPending.reportingMode, '');
+        showDisclosure(ltiPending.reportingMode, '', ltiPending.completionVisible === true);
         return;
       }
     }
@@ -383,7 +389,7 @@ async function boot() {
       const preview = await invites.previewInvite(pending.invite);
       if (preview.ok) {
         pendingInviteText = pending.invite;
-        showDisclosure(preview.reportingMode, preview.className);
+        showDisclosure(preview.reportingMode, preview.className, preview.completionVisible);
         return;
       }
       showInput(pending.invite);
