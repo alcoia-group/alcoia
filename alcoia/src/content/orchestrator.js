@@ -208,7 +208,9 @@ export async function createOrchestrator(deps) {
 
   /* Viewport-driven paragraph tracking. Feeds the comprehension monitor's
    * reading-rate maths and the regression detector's paragraph indices. */
-  function syncParagraph() {
+  // overrideY: a measured vertical position to treat as the reading position instead of the pointer or the reading line
+  // (the reader selected text there and asked for help on it).
+  function syncParagraph(overrideY) {
     if (!s().comprehensionCheckEnabled) return;
     // Dwell is not measured while the reader is away.
     if (awayActive) return;
@@ -219,7 +221,7 @@ export async function createOrchestrator(deps) {
     try {
       // A reader tracking text with the mouse gives a measured reading
       // position; fall back to the viewport heuristic when they aren't.
-      transition = paragraphTracker.update(cursorTracker.getPointerY());
+      transition = paragraphTracker.update(Number.isFinite(overrideY) ? overrideY : cursorTracker.getPointerY());
     } catch (e) { return; }
     if (!transition) return;
 
@@ -275,6 +277,22 @@ export async function createOrchestrator(deps) {
     try { scrollRegression.update(transition); } catch (e) {}
     try { progressionEntropy.update(transition); } catch (e) {}
     pumpSignals(speedSignal);
+  }
+
+  // The reader selected text and asked for help on it: make the paragraph that holds the selection the one being read,
+  // through the same paragraph-change path as scrolling (so dwell, coverage and the policy see an ordinary move), and
+  // return true when one was found. The selection can sit inside a span, so walk up to a tracked block.
+  function activateParagraphOf(node) {
+    let el = node && node.nodeType === 1 ? node : (node && (node.parentElement || node.parentNode)) || null;
+    while (el && paragraphTracker.getIndex(el) == null) el = el.parentElement || null;
+    if (!el) return false;
+    let y = null;
+    try { const r = el.getBoundingClientRect(); y = r.top + Math.min(Math.max(r.height / 2, 1), 40); } catch (e) { return false; }
+    if (!Number.isFinite(y)) return false;
+    // A tracked paragraph that is already the active one needs no move.
+    if (paragraphTracker.getActive()?.el === el) return true;
+    syncParagraph(y);
+    return paragraphTracker.getActive()?.el === el;
   }
 
   // ── The one path to the reader ───────────────────────────────────────────
@@ -556,6 +574,7 @@ export async function createOrchestrator(deps) {
     handleAway,
     isAway: () => awayActive,
     syncParagraph,
+    activateParagraphOf,
     pumpSignals,
     stop,
     getState: () => stateEngine.getState(),

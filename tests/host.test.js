@@ -3306,6 +3306,31 @@ describe('self-report (item 13a)', () => {
     expect(pumpSignals).toHaveBeenCalledWith({ type: 'self_report', subtype: 'overload' });
   });
 
+  it('reportSelfStateAt() moves the active paragraph to the selection first, then reports the same signal', async () => {
+    const { reportSelfStateAt, setOrchestrator } = await createHost(baseDeps());
+    const order = [];
+    const node = { nodeType: 1 };
+    setOrchestrator({ activateParagraphOf: vi.fn((n) => { order.push('activate'); return n === node; }), pumpSignals: vi.fn(() => order.push('pump')) });
+    expect(reportSelfStateAt(node, 'confusion')).toBe(true);
+    expect(order).toEqual(['activate', 'pump']);
+  });
+
+  it('reportSelfStateAt() still reports when no tracked paragraph holds the selection, and says so', async () => {
+    const { reportSelfStateAt, setOrchestrator } = await createHost(baseDeps());
+    const pumpSignals = vi.fn();
+    setOrchestrator({ activateParagraphOf: vi.fn(() => false), pumpSignals });
+    expect(reportSelfStateAt({ nodeType: 1 }, 'overload')).toBe(false);
+    expect(pumpSignals).toHaveBeenCalledWith({ type: 'self_report', subtype: 'overload' });
+  });
+
+  it('reportSelfStateAt() ignores an answer that is not one of the three', async () => {
+    const { reportSelfStateAt, setOrchestrator } = await createHost(baseDeps());
+    const pumpSignals = vi.fn();
+    setOrchestrator({ activateParagraphOf: vi.fn(() => true), pumpSignals });
+    expect(reportSelfStateAt({ nodeType: 1 }, 'bogus')).toBe(false);
+    expect(pumpSignals).not.toHaveBeenCalled();
+  });
+
   it('self-report never touches interventionPolicy — it is reader-initiated and spends no budget', async () => {
     document.body.innerHTML = ''; // see the earlier standalone-card test's own comment
     const { showSelfReportCard, setOrchestrator } = await createHost(baseDeps());

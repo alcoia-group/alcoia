@@ -1170,6 +1170,18 @@ export async function createHost(deps) {
     try { orchestratorRef?.pumpSignals({ type: 'self_report', subtype }); } catch (e) {}
   }
 
+  // Self-report made from a text selection (the workspace's selection toolbar): the same three answers as the card, but the
+  // reader pointed at the exact words, so the paragraph is known instead of guessed from the pointer or the reading line.
+  // Moves the active paragraph there first, then reports; returns false when no tracked paragraph holds the selection.
+  function reportSelfStateAt(node, subtype) {
+    const valid = [SELF_REPORT.OVERLOAD, SELF_REPORT.CONFUSION, SELF_REPORT.DISENGAGED];
+    if (!valid.includes(subtype)) return false;
+    let found = false;
+    try { found = orchestratorRef?.activateParagraphOf?.(node) === true; } catch (e) { found = false; }
+    reportSelfState(subtype);
+    return found;
+  }
+
   const SELF_REPORT_FINGERPRINT = 'sra-self-report';
   /* Affordances 1 (Alt+C, content.js) and 2 (the persistent trigger,
    * ui-controller.js) both open this same standalone card — it exists
@@ -2536,6 +2548,7 @@ export async function createHost(deps) {
     // reportSelfState() is exposed separately in case a caller ever needs
     // to submit one without the standalone card (none does today).
     showSelfReportCard,
+    reportSelfStateAt,
     setShowSelfReportButton,
     reportSelfState,
     // startSnooze/SNOOZE_OPTIONS used to also be exposed here for the

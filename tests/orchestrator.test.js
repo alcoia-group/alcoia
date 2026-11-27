@@ -326,3 +326,54 @@ describe('createOrchestrator(): scrollRoot (a scrolling box instead of the windo
     plain.ac.abort(); box.remove(); other.remove();
   });
 });
+
+describe('createOrchestrator(): activateParagraphOf (help asked on a text selection)', () => {
+  const block = (top, text) => ({ el: { nodeType: 1, getBoundingClientRect: () => ({ top, bottom: top + 100, height: 100 }), innerText: text, textContent: text }, words: 50, media: false });
+
+  async function make(blocks, hostOverrides = {}) {
+    const host = stubHost(hostOverrides);
+    const orch = await createOrchestrator({
+      loadModule,
+      comprehensionMonitor: stubComprehensionMonitor(),
+      settings: () => ({ assistantEnabled: true, comprehensionCheckEnabled: true, focusRulerEnabled: false, debugEnabled: false }),
+      host,
+      paragraphTrackerOpts: { blockSource: () => blocks },
+    });
+    orch.primeParagraph();
+    return { orch, host };
+  }
+
+  it('makes the paragraph that holds the selection the current one and tells the host', async () => {
+    const a = block(0, 'first paragraph'); const b = block(600, 'second paragraph');
+    const { orch, host } = await make([a, b]);
+    // jsdom has no layout, so the reading line lands on the first block
+    expect(orch.getActiveParagraphEl()).toBe(a.el);
+    expect(orch.activateParagraphOf(b.el)).toBe(true);
+    expect(orch.getActiveParagraphEl()).toBe(b.el);
+    expect(host.setCurrentParagraph).toHaveBeenLastCalledWith({ type: 'dom', data: b.el });
+  });
+
+  it('walks up from a selection inside a span to the tracked block', async () => {
+    const a = block(0, 'first'); const b = block(600, 'second');
+    const span = { nodeType: 1, parentElement: b.el };
+    const { orch } = await make([a, b]);
+    expect(orch.activateParagraphOf(span)).toBe(true);
+    expect(orch.getActiveParagraphEl()).toBe(b.el);
+  });
+
+  it('returns false for something that is not inside any tracked paragraph, and changes nothing', async () => {
+    const a = block(0, 'first'); const b = block(600, 'second');
+    const { orch } = await make([a, b]);
+    expect(orch.activateParagraphOf({ nodeType: 1, parentElement: null })).toBe(false);
+    expect(orch.activateParagraphOf(null)).toBe(false);
+    expect(orch.getActiveParagraphEl()).toBe(a.el);
+  });
+
+  it('is a no-op that returns true when that paragraph is already the active one', async () => {
+    const a = block(0, 'first'); const b = block(600, 'second');
+    const { orch, host } = await make([a, b]);
+    const calls = host.setCurrentParagraph.mock.calls.length;
+    expect(orch.activateParagraphOf(a.el)).toBe(true);
+    expect(host.setCurrentParagraph.mock.calls.length).toBe(calls);
+  });
+});
