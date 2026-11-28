@@ -1195,9 +1195,24 @@ export async function createHost(deps) {
    * option, rather than replacing it with this card — see handleAsk's own
    * comment for why replacing the primary intervention outright would be a
    * much bigger behavioural change than this item's own scope. */
+  // Words the reader has selected right now (not inside our own cards): where they ARE stuck, so the report is about that
+  // paragraph and not about a guess from the pointer or the reading line. Taken when the card opens, because a click on the
+  // card may clear the selection.
+  function selectedTextNode() {
+    try {
+      const sel = window.getSelection?.();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0 || String(sel).trim().length < 3) return null;
+      const node = sel.getRangeAt(0).startContainer;
+      const el = node?.nodeType === 1 ? node : node?.parentElement;
+      if (el?.closest?.('.sra-popup') || el?.closest?.('[data-alcoia-ui]')) return null;
+      return node;
+    } catch (e) { return null; }
+  }
+
   function showSelfReportCard() {
     const root = reservePopup(SELF_REPORT_FINGERPRINT);
     if (!root) return false;
+    const selectedNode = selectedTextNode();
     const lang = uiLang();
     if (isRtl(lang)) root.setAttribute('dir', 'rtl');
 
@@ -1207,6 +1222,7 @@ export async function createHost(deps) {
       </div>
       <div class="sra-popup-body">
         <div class="sra-state-badge sra-self-report-badge">${esc(t('sr.title', lang))}</div>
+        ${selectedNode ? `<div class="sra-q-context">${esc(t('sr.aboutSelection', lang))}</div>` : ''}
         <div class="sra-self-report-options">
           <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.OVERLOAD}">${esc(t('sr.overload', lang))}</button>
           <button type="button" class="sra-btn sra-btn-secondary" data-self-report="${SELF_REPORT.CONFUSION}">${esc(t('sr.confusion', lang))}</button>
@@ -1217,7 +1233,8 @@ export async function createHost(deps) {
     root.querySelector('.sra-close-btn').onclick = () => closePopup(root, SELF_REPORT_FINGERPRINT);
     for (const btn of root.querySelectorAll('[data-self-report]')) {
       btn.onclick = () => {
-        reportSelfState(btn.dataset.selfReport);
+        // With words selected the report is about their paragraph; if no tracked paragraph holds them, it falls back to the guess.
+        if (!(selectedNode && reportSelfStateAt(selectedNode, btn.dataset.selfReport))) reportSelfState(btn.dataset.selfReport);
         for (const b of root.querySelectorAll('[data-self-report]')) b.disabled = true;
         btn.textContent = t('sr.thanks', lang);
         // Bug found verifying this in real Chromium (tests/browser/smoke.mjs):

@@ -68,11 +68,16 @@ export function createCoverageGate(opts = {}) {
   const now = opts.now || (() => Date.now());
   const thresholds = { ...DEFAULT_THRESHOLDS, ...(opts.thresholds || {}) };
 
+  // A storage that cannot be read or written (a missing or partial stand-in, a closing page) means no stored coverage, never an error.
   function storageGet(keys) {
-    return new Promise((resolve) => storage.get(keys, resolve));
+    return new Promise((resolve) => {
+      try { if (typeof storage?.get !== 'function') { resolve({}); return; } storage.get(keys, (v) => resolve(v || {})); } catch { resolve({}); }
+    });
   }
   function storageSet(obj) {
-    return new Promise((resolve) => storage.set(obj, () => resolve()));
+    return new Promise((resolve) => {
+      try { if (typeof storage?.set !== 'function') { resolve(); return; } storage.set(obj, () => resolve()); } catch { resolve(); }
+    });
   }
 
   async function allDocs() {

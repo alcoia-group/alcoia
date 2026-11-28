@@ -3297,6 +3297,37 @@ describe('self-report (item 13a)', () => {
     expect(pumpSignals).toHaveBeenCalledWith({ type: 'self_report', subtype: 'confusion' });
   });
 
+  it('the standalone card, opened with words selected, reports about the paragraph that holds them', async () => {
+    document.body.innerHTML = '<p id="para">Some selected words in a paragraph that is being read right now.</p>';
+    const { showSelfReportCard, setOrchestrator } = await createHost(baseDeps());
+    const pumpSignals = vi.fn();
+    const activateParagraphOf = vi.fn(() => true);
+    setOrchestrator({ pumpSignals, activateParagraphOf });
+    const text = document.getElementById('para').firstChild;
+    const range = document.createRange(); range.setStart(text, 5); range.setEnd(text, 28);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+
+    showSelfReportCard();
+    expect(queryAlcoia('.sra-q-context').textContent).toMatch(/words you selected/);
+    sel.removeAllRanges(); // a click on the card may clear it: the card remembers where it was
+    queryAlcoia('[data-self-report="confusion"]').click();
+
+    expect(activateParagraphOf).toHaveBeenCalledWith(text);
+    expect(pumpSignals).toHaveBeenCalledWith({ type: 'self_report', subtype: 'confusion' });
+  });
+
+  it('with nothing selected the standalone card shows no selection line and does not move the paragraph', async () => {
+    document.body.innerHTML = '';
+    window.getSelection().removeAllRanges();
+    const { showSelfReportCard, setOrchestrator } = await createHost(baseDeps());
+    const activateParagraphOf = vi.fn(() => true);
+    setOrchestrator({ pumpSignals: vi.fn(), activateParagraphOf });
+    showSelfReportCard();
+    expect(queryAlcoia('.sra-q-context')).toBeNull();
+    queryAlcoia('[data-self-report="overload"]').click();
+    expect(activateParagraphOf).not.toHaveBeenCalled();
+  });
+
   it('reportSelfState() (the underlying function both affordances call) feeds the same signal shape directly', async () => {
     const { reportSelfState, setOrchestrator } = await createHost(baseDeps());
     const pumpSignals = vi.fn();
