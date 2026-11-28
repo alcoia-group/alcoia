@@ -655,7 +655,9 @@ export function createInterventionPolicy(config = {}) {
       // dismissal/failure counters, never calls record(), never mints an
       // interventionId) — it is simply not promoted this time, and remains
       // exactly as re-evaluable on the next signal as it always was.
-      if (ctx.questionCardVisible) {
+      // A reader who asked for help on purpose (the self-report, or words they selected) is never held back by an open
+      // question card: dropping an explicit request while the page says help is on its way is worse than two cards.
+      if (ctx.questionCardVisible && !selfReported) {
         return deny('a question card is already visible — holding off on a redundant interruption');
       }
 

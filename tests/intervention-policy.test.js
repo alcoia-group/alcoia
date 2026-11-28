@@ -1424,11 +1424,10 @@ describe('a self-report overrides the limits on automatic cards', () => {
     expect(p.evaluate(struggling({ signal: { text: 'same para' } })).reason).toMatch(/already interrupted/);
   });
 
-  it('still waits for a question card that is on screen', () => {
+  it('is answered even while a question card is on screen (help asked for on purpose is never dropped silently)', () => {
     const p = createInterventionPolicy({ now: fixedClock().now });
     const d = p.evaluate(selfReport(), { questionCardVisible: true });
-    expect(d.allow).toBe(false);
-    expect(d.reason).toMatch(/already visible/);
+    expect(d.allow).toBe(true);
   });
 
   it('is answered even when the learner estimate says a question would add nothing', () => {
