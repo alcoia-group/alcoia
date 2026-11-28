@@ -3993,12 +3993,14 @@ describe('scheduled quick checks (probes)', () => {
     document.body.innerHTML = '';
   });
 
-  function setup() {
+  function setup({ bank = false } = {}) {
     const asked = [];
     chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
     globalThis.__sendMessageImpl = (msg, cb) => {
       if (msg.url?.includes('/api/questions')) {
-        asked.push(msg.body.kind);
+        // A stored (bank_only) question exists only when the test says so; otherwise the single model-made check runs.
+        if (msg.body.bank_only && !bank) { cb({ ok: false, status: 404, error: 'no_bank_question' }); return; }
+        if (!msg.body.bank_only) asked.push(msg.body.kind);
         cb({ ok: true, data: { questions: [{ q: 'Which idea?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
       } else cb({ ok: true, data: {} });
     };
@@ -4021,9 +4023,71 @@ describe('scheduled quick checks (probes)', () => {
     expect(asked).toHaveLength(0); // roughly 400 words so far: nothing yet
     host.onParagraphRead(para(4), 5000, 4);
     await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
-    expect(asked).toEqual(['recall']);
+    expect(asked[0]).toBe('recall');
     await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith('/interventions'))).toBe(true));
     expect(JSON.parse(calls.find((c) => c.url.endsWith('/interventions')).options.body).type).toBe('probe');
+  });
+
+  it('the quick check is a carousel of stored questions: bank_only requests, a progress label, no confidence step, Next to continue', async () => {
+    const bodies = [];
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        bodies.push(msg.body);
+        const n = bodies.length;
+        cb({ ok: true, data: { questions: [{ q: 'Which idea ' + n + '?', options: ['a', 'b', 'c'], answerIndex: 0, explanation: 'Because e' + n, span: 'a real span ' + n }] } });
+      } else cb({ ok: true, data: {} });
+    };
+    const calls = [];
+    mockProxyFetch(vi.fn((url, options) => { calls.push({ url, options }); return { ok: true, status: 200, data: { candidates: [], estimates: [], recorded: true } }; }));
+    const host = await build();
+    for (let i = 0; i < 5; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    expect(bodies.length).toBeGreaterThanOrEqual(2);
+    expect(bodies.length).toBeLessThanOrEqual(3);
+    expect(bodies.every((b) => b.bank_only === true)).toBe(true);
+    expect(queryAlcoia('.sra-popup-body').textContent).toMatch(/1 of [0-9]/);
+    queryAllAlcoia('.sra-q-option')[0].click();
+    // answered straight away: no "how sure" step, the stored explanation shown, Next offered
+    expect(queryAlcoia('.sra-q-confidence')).toBeNull();
+    expect(queryAlcoia('.sra-q-skip').textContent).toBe('Next');
+    queryAlcoia('.sra-q-skip').click();
+    await vi.waitFor(() => expect(queryAlcoia('.sra-popup-body').textContent).toMatch(/2 of [0-9]/));
+    await vi.waitFor(() => expect(calls.filter((c) => c.url.endsWith('/interventions')).length).toBe(2));
+    const types = calls.filter((c) => c.url.endsWith('/interventions')).map((c) => JSON.parse(c.options.body).type);
+    expect(types).toEqual(['probe', 'probe']);
+    const ids = calls.filter((c) => c.url.endsWith('/interventions')).map((c) => JSON.parse(c.options.body).intervention_id);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('closing a carousel card early ends the run: no further question appears', async () => {
+    const { calls } = setup({ bank: true });
+    const host = await build();
+    for (let i = 0; i < 5; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    queryAlcoia('.sra-close-btn').click();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(queryAlcoia('.sra-q-text')).toBeNull();
+    expect(calls.filter((c) => c.url.endsWith('/interventions'))).toHaveLength(1);
+  });
+
+  it('with no stored question for any paragraph the single quick check runs as before', async () => {
+    const asked = [];
+    chrome.runtime.sendMessage = vi.fn((msg, cb) => globalThis.__sendMessageImpl(msg, cb));
+    globalThis.__sendMessageImpl = (msg, cb) => {
+      if (msg.url?.includes('/api/questions')) {
+        asked.push(msg.body);
+        if (msg.body.bank_only) cb({ ok: false, status: 404, error: 'no_bank_question' });
+        else cb({ ok: true, data: { questions: [{ q: 'Which idea?', options: ['a', 'b', 'c', 'd'], answerIndex: 0, explanation: 'e', span: 'a real span' }] } });
+      } else cb({ ok: true, data: {} });
+    };
+    mockProxyFetch(vi.fn(() => ({ ok: true, status: 200, data: { candidates: [], estimates: [], recorded: true } })));
+    const host = await build();
+    for (let i = 0; i < 5; i += 1) { host.onParagraphRead(para(i), 5000, i); await flush(); }
+    await vi.waitFor(() => expect(queryAlcoia('.sra-q-text')).not.toBeNull());
+    expect(asked.some((b) => b.bank_only)).toBe(true);
+    expect(asked.some((b) => !b.bank_only)).toBe(true);
+    expect(queryAlcoia('.sra-popup-body').textContent).not.toMatch(/1 of [0-9]/);
   });
 
   // BETA-FEEDBACK: remove this test with the beta.

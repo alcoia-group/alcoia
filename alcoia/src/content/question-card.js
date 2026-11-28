@@ -217,6 +217,9 @@ export function createQuestionCard(deps = {}) {
         </div>`
       : '';
 
+    // The smooth-reading carousel (host.js runProbeCarousel): { index, total, onNext, onStop }. No confidence step, no model
+    // explanation (the stored one is shown with the answer), a Next/Done button, and closing early stops the carousel.
+    const carousel = context.carousel && typeof context.carousel.onNext === 'function' ? context.carousel : null;
     const why = whyBlock(context, L, esc);
     root.innerHTML = `
       <div class="sra-controls">
@@ -224,6 +227,7 @@ export function createQuestionCard(deps = {}) {
       </div>
       <div class="sra-popup-body">
         ${contextLine}
+        ${carousel && carousel.total > 1 ? `<div class="sra-q-context">${esc(L('card.ofTotal', { n: carousel.index + 1, total: carousel.total }))}</div>` : ''}
         <div class="sra-q-text">${esc(question.q)}</div>
         ${bodyInner}
         ${selfReport}
@@ -260,6 +264,7 @@ export function createQuestionCard(deps = {}) {
         if (record && onDismissed) onDismissed(record);
       }
       ui.closePopup(root, fingerprint);
+      if (carousel) { try { carousel.onStop?.(); } catch { /* never blocks closing */ } }
     };
 
     root.querySelector('.sra-close-btn').onclick = dismiss;
@@ -332,7 +337,13 @@ export function createQuestionCard(deps = {}) {
     function finish() {
       root.querySelector('.sra-q-dontknow')?.remove(); // answered: "I don't know" no longer applies
       const skip = root.querySelector('.sra-q-skip');
-      if (skip) { skip.textContent = L('card.close'); skip.onclick = () => ui.closePopup(root, fingerprint); }
+      if (skip) {
+        if (carousel) {
+          const last = carousel.index + 1 >= carousel.total;
+          skip.textContent = L(last ? 'card.done' : 'card.next');
+          skip.onclick = () => { ui.closePopup(root, fingerprint); try { carousel.onNext(); } catch { /* never blocks closing */ } };
+        } else { skip.textContent = L('card.close'); skip.onclick = () => ui.closePopup(root, fingerprint); }
+      }
     }
 
     /* "I don't know": a gap, not a refusal (dismiss) and not a wrong answer. The card shows what the reading says
@@ -380,7 +391,7 @@ export function createQuestionCard(deps = {}) {
 
         revealAnswer(root, question, selected, confidence, esc, lang);
 
-        if (record && !record.correct) {
+        if (record && !record.correct && !carousel) {
           offerExplanation(root, question, fetchExplanation, esc, lang, record.misconception);
         }
 
@@ -397,6 +408,7 @@ export function createQuestionCard(deps = {}) {
           for (const b of root.querySelectorAll('.sra-q-option')) {
             b.classList.toggle('sra-q-selected', Number(b.dataset.index) === i);
           }
+          if (carousel) { commit(null); return; }
           showConfidenceStep(commit);
         };
       }

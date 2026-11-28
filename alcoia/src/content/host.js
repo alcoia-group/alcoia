@@ -1042,7 +1042,8 @@ export async function createHost(deps) {
 
   async function fetchQuestions(text, opts = {}) {
     if (!text || text.trim().length < 120) return [];
-    if (!checkAiCallBudget('questions', opts.kind || 'recall')) return [];
+    // bankOnly (the carousel): a stored, instructor-reviewed question or nothing. No model call, so no AI budget spent.
+    if (!opts.bankOnly && !checkAiCallBudget('questions', opts.kind || 'recall')) return [];
     const body = {
       text: text.slice(0, 3500),
       language: (document.documentElement.lang || '').slice(0, 5),
@@ -1055,8 +1056,10 @@ export async function createHost(deps) {
     // of levels sees exactly the request shape it always has.
     if (opts.level && supportedQuestionLevels().includes(opts.level)) body.level = opts.level;
     if (assignmentId) body.assignment_id = assignmentId; // class cache, see fetchSummary
+    if (opts.bankOnly) body.bank_only = true;
     const resp = await callBackend('apiPost', questionsUrl(), body);
     if (!resp.ok) {
+      if (opts.bankOnly) return []; // no stored question for this paragraph: not a failure, the carousel just skips it
       log(`Questions unavailable (${resp.status || resp.error || 'error'})`);
       if (resp.status !== 429) noteGenerationFailure('questions');
       return [];
@@ -1365,6 +1368,7 @@ export async function createHost(deps) {
     onAnswered: (record) => {
       let answeredCard = null;
       try { answeredCard = noteCardAnswered(record); } catch (e) {}
+      try { if (record?.type !== 'dismissed') carouselAnswered?.(record); } catch (e) {}
       // A transfer check answered: it settles the explanation's inferred feedback below, so it must not ALSO count as the
       // ordinary "next answered question" for that style (that would count the same answer twice).
       const transferPending = record?.interventionId ? pendingTransfer.get(record.interventionId) : null;
@@ -2211,6 +2215,76 @@ export async function createHost(deps) {
     if (shown) orchestratorRef.interventionPolicy.record(decision);
   }
 
+  /* Smooth-reading carousel (docs/TODO-NOW.md). Instead of one question about one random paragraph, a reader who has read
+   * smoothly gets a short run of stored questions, one per paragraph, each answered in the same card with the stored
+   * explanation shown straight away. Up to PROBE_CAROUSEL_CAP (3, provisional) questions, taken from the paragraphs read since
+   * the last card of any kind (probe.read is reset by every card), never one the learner already knows (estimate says
+   * abstain), never one already asked. No confidence step, no model call. One policy decision pays for the whole run; the
+   * next card waits while anything else is on screen or the reader is struggling, and a reader who closes a card early ends
+   * the run (one dismissal for the back-off, none for the rest). Each answer sends its own outcome (type 'probe').
+   * Returns true when a carousel was started (it then owns the rest), false when no stored question exists. */
+  const PROBE_CAROUSEL_CAP = 3;
+  async function runProbeCarousel(choices, first, decision) {
+    if (!assignmentId) return false;
+    const order = [first, ...choices.filter((c) => c !== first)];
+    const queue = [];
+    for (const c of order) {
+      if (queue.length >= PROBE_CAROUSEL_CAP) break;
+      const qs = await fetchQuestions(c.text, { bankOnly: true });
+      if (qs.length) queue.push({ ...c, question: pickVariant(qs) });
+    }
+    if (!queue.length) return false;
+    if (probeBlocked()) return true; // a normal card appeared while fetching; it has priority, the check is dropped
+    let index = 0;
+    let missed = 0;
+    let stopped = false;
+    const finishRun = () => {
+      probe.busy = false;
+      carouselAnswered = null;
+      if (missed > 0 && !stopped) {
+        try { questionCard.showExplanation('explain', t(missed === 1 ? 'carousel.lookAgainOne' : 'carousel.lookAgainMany', uiLang(), { n: missed }), { paragraphKey: 'carousel-end' }); } catch (e) { /* never blocks */ }
+      }
+    };
+    const showAt = async (i) => {
+      const item = queue[i];
+      const identity = item.identity;
+      const interventionId = i === 0 ? decision.interventionId : interventionIdModule.generateInterventionId();
+      // Between cards: wait while another card is open or the reader is struggling, drifting or away; give up after a while.
+      for (let waited = 0; i > 0 && probeBlocked(); waited += 500) {
+        if (waited >= 20000 || stopped) { stopped = true; finishRun(); return; }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      const idx = Number.isInteger(item.paragraphIndex) ? item.paragraphIndex : null;
+      const shown = questionCard.show(item.question, {
+        evidence: decision.evidence,
+        paragraphKey: identity.paragraphKey,
+        knowledgeUnitId: identity.knowledgeUnitId,
+        paragraphIndex: idx,
+        interventionId,
+        passage: item.text,
+        why: whyFor('probe'),
+        contextLine: contextLineFor(item.text),
+        carousel: {
+          index: i,
+          total: queue.length,
+          onNext: () => { if (i + 1 < queue.length) showAt(i + 1).catch(() => { stopped = true; finishRun(); }); else finishRun(); },
+          onStop: () => { stopped = true; finishRun(); },
+        },
+      });
+      if (!shown) { stopped = true; finishRun(); return; }
+      if (i === 0) orchestratorRef.interventionPolicy.record(decision);
+      probe.asked += 1;
+      probe.askedKeys.add(item.key);
+      reportIntervention(interventionId, identity.knowledgeUnitId, idx, 'probe', item.text, 'retrieve');
+    };
+    // Count a wrong answer toward the closing line: the card's answer record says whether it was right.
+    carouselAnswered = (record) => { if (record && record.correct === false) missed += 1; };
+    probe.busy = true;
+    try { await showAt(0); } catch (e) { stopped = true; finishRun(); }
+    return true;
+  }
+  let carouselAnswered = null;
+
   async function checkProbe(text, paragraphIndex) {
     if (!assignmentId || !getSession || !text) return;
     const key = text.slice(0, 80).trim();
@@ -2257,6 +2331,9 @@ export async function createHost(deps) {
     if (!automaticInterventionGuard.tryAcquire()) return;
     probe.busy = true;
     try {
+      // The smooth-reading carousel: one stored question per paragraph read smoothly since the last card, up to a few.
+      // Needs stored questions; a paragraph with none is skipped, and with none at all the single check below runs as before.
+      if (await runProbeCarousel(choices, chosen, decision)) return;
       let questions = await fetchQuestions(text, { kind: probe.asked % 2 === 1 ? 'cloze' : 'recall' });
       if (!questions.length && probe.asked % 2 === 1) questions = await fetchQuestions(text, { kind: 'recall' });
       if (!questions.length) return;
