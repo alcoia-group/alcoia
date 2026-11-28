@@ -1746,6 +1746,13 @@ export async function createHost(deps) {
     } catch (e) { return false; }
   }
 
+  // A reader who asked for help (a self-report) must never be left with nothing when generation fails; an automatic
+  // card that cannot be made stays silent, as before.
+  function helpUnavailable(decision) {
+    if (decision?.selfReported !== true) return;
+    try { ui.showStatusToast(t('help.unavailable', uiLang())); } catch (e) {}
+  }
+
   async function handleAsk(decision, state, target, paragraphIndex) {
     const el = target || (currentParagraph?.type === 'dom' ? currentParagraph.data : null);
     const text = el ? (el.innerText || el.textContent || '').trim() : (state.signal?.text || '');
@@ -1776,7 +1783,7 @@ export async function createHost(deps) {
 
       const startedAt = Date.now();
       const questions = await withDeadline(fetchQuestions(text, opts), []);
-      if (!questions.length) return false;
+      if (!questions.length) { helpUnavailable(decision); return false; }
       if (generationIsStale(el, startedAt)) return false;
 
       let anchorRect = null;
@@ -1892,7 +1899,7 @@ export async function createHost(deps) {
       const ideaOpts = mode === 'relate' ? {} : est?.prerequisiteIdea ? { prerequisite: est.prerequisiteIdea } : est?.heldIdea ? { held: est.heldIdea } : {};
       const startedAt = Date.now();
       const generated = await withDeadline(fetchSummary(text, mode, '', { paragraphKey: identity.paragraphKey, style, focus: focusSentence, ...(plainness ? { plainness } : {}), ...ideaOpts }), null);
-      if (!generated) return false;
+      if (!generated) { helpUnavailable(decision); return false; }
       if (generationIsStale(el, startedAt)) return false;
 
       let anchorRect = null;
