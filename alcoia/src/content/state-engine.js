@@ -497,7 +497,10 @@ export function createReadingStateEngine(config = {}) {
   function emit(next) {
     const changed = next.label !== current.label ||
                     next.substate !== current.substate ||
-                    Math.abs(next.confidence - current.confidence) > 0.001;
+                    Math.abs(next.confidence - current.confidence) > 0.001 ||
+                    // A self-report is something the reader just did on purpose. Pressing the same answer again while the
+                    // state has not moved (still "overload" from the last press) is a new request for help, not a repeat.
+                    (next.isSelfReported && next.signal !== current.signal);
     current = next;
     if (!changed) return current;
     for (const fn of subscribers) {

@@ -386,6 +386,15 @@ describe('self-report (item 13a) — the highest-confidence evidence, overrides 
     expect(s.substate).toBeNull();
   });
 
+  it('pressing the same self-report again, with the state unchanged, still notifies subscribers (a new request for help)', () => {
+    const e = createReadingStateEngine();
+    const seen = [];
+    e.subscribe((st) => seen.push(st.label));
+    e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.OVERLOAD } });
+    e.update({ reading: { type: 'self_report', subtype: SELF_REPORT.OVERLOAD } });
+    expect(seen).toHaveLength(2);
+  });
+
   it('an unrecognised self_report subtype asserts nothing, same as any other unregistered signal', () => {
     const e = engineAt(fixedClock());
     const s = e.update({ reading: { type: 'self_report', subtype: 'bogus' } });
